@@ -105,3 +105,29 @@ describe("layout API", () => {
     expect(localStorage.getItem("swl-dock-visible")).toBe("false");
   });
 });
+
+describe("metadata and analytics API", () => {
+  it("calls the typed inspection and event summary commands with exact payloads", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const metadata = [{ resourceId: "r1", targetId: "t1", inspectedUtc: "2025-01-01T00:00:00Z", availability: "available", provenance: "local-filesystem", cacheStatus: "cached" }];
+    const summary = { totalLaunches: 2, bySource: { dashboard: 1, dock: 1 }, byStatus: { handed_off: 2 } };
+    const events = [{ resourceId: "r1", source: "dock", status: "handed_off", requestId: "q1", launchedAtUtc: "2025-01-01T00:00:00Z" }];
+    invokeTyped.mockResolvedValueOnce(metadata).mockResolvedValueOnce(summary).mockResolvedValueOnce(events);
+    expect(await api.inspect("r1", true)).toEqual(metadata);
+    expect(await api.analyticsSummary("p1", "2025-01-01T00:00:00Z")).toEqual(summary);
+    expect(await api.analyticsEvents("p1", 42)).toEqual(events);
+    expect(invokeTyped.mock.calls).toEqual([
+      ["resource_inspect", { resourceId: "r1", forceRefresh: true }],
+      ["analytics_summary", { profileId: "p1", sinceUtc: "2025-01-01T00:00:00Z" }],
+      ["analytics_query", { profileId: "p1", limit: 42 }],
+    ]);
+  });
+
+  it("keeps browser preview clearly separate from native records", async () => {
+    expect(api.isNativeApp()).toBe(false);
+    expect(await api.inspect("r1")).toEqual([]);
+    expect(await api.analyticsSummary("p1")).toEqual({ totalLaunches: 0, bySource: {}, byStatus: {} });
+    expect(await api.analyticsEvents("p1")).toEqual([]);
+    expect(invokeTyped).not.toHaveBeenCalled();
+  });
+});

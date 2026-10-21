@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 19:28 UTC. Coordinator: `feature/sw-001-bootstrap`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-001 #1](https://github.com/treborygan/smart-workspace-launcher/issues/1). Draft integration PR: [#26](https://github.com/treborygan/smart-workspace-launcher/pull/26); review and additional implementation are pending.
+Updated 2026-10-21 19:30 UTC. Coordinator: `feature/sw-001-bootstrap`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-001 #1](https://github.com/treborygan/smart-workspace-launcher/issues/1). Draft integration PR: [#26](https://github.com/treborygan/smart-workspace-launcher/pull/26); review and additional implementation are pending.
 
 | Work item | State | Evidence / remaining work |
 |---|---|---|
@@ -19,7 +19,7 @@ Updated 2026-10-21 19:28 UTC. Coordinator: `feature/sw-001-bootstrap`. Repositor
 Environment: Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable. No PowerShell or Windows runner is available.
 
 - `python scripts/verify_handoff.py` — PASS (handoff/schema fixture consistency only).
-- `python -m unittest discover -s tests -v` — PASS, 7 tests (Python ZIP/schema QA helper only; not production importer tests).
+- `python -m unittest discover -s tests -v` — PASS, 11 tests (Python ZIP/schema QA helper only; not production importer tests).
 - `npm ci` — PASS (88 packages installed from checked-in lockfile).
 - `npm run lint` / `npm run typecheck` — PASS.
 - `npm test` — PASS, 2 UI tests.

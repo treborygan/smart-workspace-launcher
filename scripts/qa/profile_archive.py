@@ -7,9 +7,10 @@ must enforce the same limits itself; this module is not the application importer
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import stat
-import hashlib
+import zlib
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -46,10 +47,17 @@ def _safe_member_name(name: str) -> bool:
     return not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
 
 
+def _read_member(archive: zipfile.ZipFile, name: str) -> bytes:
+    try:
+        return archive.read(name)
+    except (KeyError, OSError, RuntimeError, EOFError, zlib.error, NotImplementedError, zipfile.BadZipFile) as exc:
+        raise ProfileArchiveError(f"could not read ZIP member: {name}") from exc
+
+
 def _read_json(archive: zipfile.ZipFile, name: str) -> Any:
     try:
-        return json.loads(archive.read(name).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        return json.loads(_read_member(archive, name).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProfileArchiveError(f"{name} is not valid UTF-8 JSON") from exc
 
 
@@ -140,7 +148,7 @@ def validate_profile_archive(path: str | Path) -> dict[str, Any]:
         if archive_assets != set(manifest_assets):
             raise ProfileArchiveError("manifest asset list does not match archive contents")
         for name, expected_hash in manifest_assets.items():
-            if hashlib.sha256(archive.read(name)).hexdigest() != expected_hash:
+            if hashlib.sha256(_read_member(archive, name)).hexdigest() != expected_hash:
                 raise ProfileArchiveError(f"asset checksum mismatch: {name}")
 
         return docs

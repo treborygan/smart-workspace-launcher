@@ -796,13 +796,13 @@ fn layout_save_to_conn(
     conn: &mut Connection,
     layout: &DashboardLayout,
 ) -> Result<DashboardLayout, AppError> {
-    validate_layout(layout)?;
     // Tauri's IPC transport has a host-controlled payload limit. This command independently
-    // rejects oversized serialized layouts before opening a transaction or touching stored state.
+    // rejects oversized serialized layouts before validation, opening a transaction, or touching state.
     let json = serde_json::to_string(layout)?;
     if json.len() > MAX_LAYOUT_BYTES {
         return Err(AppError::Invalid("layout exceeds 1 MiB".into()));
     }
+    validate_layout(layout)?;
     let tx = conn.transaction()?;
     let profile_exists: i64 = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
@@ -1440,6 +1440,163 @@ mod tests {
             .query_row(
                 "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
                 [&pid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, serde_json::to_string(&prior).unwrap());
+    }
+
+    #[test]
+    fn layout_records_are_isolated_by_surface_and_profile() {
+        let mut conn = database();
+        let profile_a = profile(&conn);
+        let profile_b = profile(&conn);
+        let resource = resource("Shared resource");
+        persist_resource(&mut conn, &resource, true, Some(&profile_a)).unwrap();
+        conn.execute(
+            "INSERT INTO profile_resources(profile_id,resource_id) VALUES (?1,?2)",
+            params![profile_b, resource.id],
+        )
+        .unwrap();
+        let card = LayoutCard {
+            resource_id: resource.id.clone(),
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+            card_type: "icon".into(),
+        };
+        let a_dashboard = DashboardLayout {
+            profile_id: profile_a.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![card.clone()],
+        };
+        let a_dock = DashboardLayout {
+            profile_id: profile_a.clone(),
+            surface: "dock".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                y: 7,
+                ..card.clone()
+            }],
+        };
+        let b_dashboard = DashboardLayout {
+            profile_id: profile_b.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard { y: 9, ..card }],
+        };
+        layout_save_to_conn(&mut conn, &a_dashboard).unwrap();
+        layout_save_to_conn(&mut conn, &a_dock).unwrap();
+        layout_save_to_conn(&mut conn, &b_dashboard).unwrap();
+        assert_eq!(
+            layout_get_from_conn(&conn, &profile_a, "dashboard")
+                .unwrap()
+                .cards[0]
+                .y,
+            0
+        );
+        assert_eq!(
+            layout_get_from_conn(&conn, &profile_a, "dock")
+                .unwrap()
+                .cards[0]
+                .y,
+            7
+        );
+        assert_eq!(
+            layout_get_from_conn(&conn, &profile_b, "dashboard")
+                .unwrap()
+                .cards[0]
+                .y,
+            9
+        );
+    }
+
+    #[test]
+    fn layout_rejects_valid_resource_owned_only_by_another_profile() {
+        let mut conn = database();
+        let owner = profile(&conn);
+        let other = profile(&conn);
+        let owned = resource("Owned elsewhere");
+        persist_resource(&mut conn, &owned, true, Some(&owner)).unwrap();
+        let prior = DashboardLayout {
+            profile_id: other.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![],
+        };
+        layout_save_to_conn(&mut conn, &prior).unwrap();
+        let invalid = DashboardLayout {
+            cards: vec![LayoutCard {
+                resource_id: owned.id.clone(),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                card_type: "icon".into(),
+            }],
+            ..prior.clone()
+        };
+        assert!(layout_save_to_conn(&mut conn, &invalid).is_err());
+        let stored: String = conn
+            .query_row(
+                "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
+                [&other],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, serde_json::to_string(&prior).unwrap());
+    }
+
+    #[test]
+    fn layout_rejects_card_count_and_serialized_byte_limits() {
+        let pid = Uuid::new_v4().to_string();
+        let too_many = DashboardLayout {
+            profile_id: pid.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: (0..=10_000)
+                .map(|_| LayoutCard {
+                    resource_id: Uuid::new_v4().to_string(),
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                    card_type: "icon".into(),
+                })
+                .collect(),
+        };
+        assert!(validate_layout(&too_many).is_err());
+
+        let mut conn = database();
+        let real_profile = profile(&conn);
+        let prior = DashboardLayout {
+            profile_id: real_profile.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![],
+        };
+        layout_save_to_conn(&mut conn, &prior).unwrap();
+        let oversized = DashboardLayout {
+            profile_id: real_profile.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: Uuid::new_v4().to_string(),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                card_type: "x".repeat(MAX_LAYOUT_BYTES),
+            }],
+        };
+        assert!(serde_json::to_vec(&oversized).unwrap().len() > MAX_LAYOUT_BYTES);
+        assert!(layout_save_to_conn(&mut conn, &oversized).is_err());
+        let stored: String = conn
+            .query_row(
+                "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
+                [&real_profile],
                 |r| r.get(0),
             )
             .unwrap();

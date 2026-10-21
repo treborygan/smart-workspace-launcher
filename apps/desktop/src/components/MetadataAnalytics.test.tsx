@@ -1,14 +1,15 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { api } = vi.hoisted(() => ({ api: { inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() } }));
+const { api, chooseUsageExportPath } = vi.hoisted(() => ({ api: { inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), usageSettings: vi.fn(), saveUsageSettings: vi.fn(), resources: vi.fn(), isNativeApp: vi.fn(), purgeUsageHistory: vi.fn(), exportUsageCsv: vi.fn() }, chooseUsageExportPath: vi.fn() }));
 vi.mock("../lib/api", () => ({ api }));
+vi.mock("../lib/usageDialogs", () => ({ chooseUsageExportPath }));
 import { ResourceMetadataPanel } from "./ResourceMetadataPanel";
 import { AnalyticsView } from "./AnalyticsView";
 import type { Resource } from "../lib/contracts";
 const resource = (id: string): Resource => ({ id, resourceType: "file", displayName: id, defaultAction: "open", createdUtc: "2026-01-01T00:00:00Z", updatedUtc: "2026-01-01T00:00:00Z", targets: [{ id: `t-${id}`, kind: "file", canonicalUri: `C:\\Work\\${id}`, priority: 0, arguments: [], active: true }], tags: [], aliases: [], favorite: false, launchCount: 0 });
 let host: HTMLDivElement; let root: Root;
-beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); api.isNativeApp.mockReturnValue(true); });
+beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); api.isNativeApp.mockReturnValue(true); api.usageSettings.mockResolvedValue({ profileId: "p1", recordingEnabled: true, retentionDays: null, excludedResourceIds: [] }); api.resources.mockResolvedValue([resource("r1")]); });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.resetAllMocks(); });
 
 describe("ResourceMetadataPanel", () => {
@@ -59,7 +60,7 @@ describe("ResourceMetadataPanel", () => {
 });
 
 describe("AnalyticsView", () => {
-  it("shows source/status/day counts from app-recorded launches", async () => {
+  it("shows filtered summary and paged event data with local provenance language", async () => {
     api.analyticsSummary.mockResolvedValue({ totalLaunches: 3, bySource: { dashboard: 2, dock: 1 }, byStatus: { handed_off: 2, failed: 1 }, firstEventUtc: "2026-01-01T00:00:00Z", lastEventUtc: "2026-01-02T00:00:00Z" });
     api.analyticsEvents.mockResolvedValue([
       { requestId: "1", resourceId: "r1", source: "dashboard", status: "handed_off", launchedAtUtc: "2026-01-01T10:00:00Z" },
@@ -67,7 +68,42 @@ describe("AnalyticsView", () => {
       { requestId: "3", resourceId: "r1", source: "dashboard", status: "handed_off", launchedAtUtc: "2026-01-02T11:00:00Z" },
     ]);
     await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
-    expect(host.textContent).toContain("App-recorded launch history"); expect(host.textContent).toContain("3"); expect(host.textContent).toContain("Dashboard"); expect(host.textContent).toContain("Handed Off"); expect(host.textContent).toContain("2026-01-01"); expect(host.textContent).toContain("does not observe files opened in other apps");
-    expect(api.analyticsSummary).toHaveBeenCalledWith("p1"); expect(api.analyticsEvents).toHaveBeenCalledWith("p1", 500);
+    expect(host.textContent).toContain("Recorded launch requests"); expect(host.textContent).toContain("3"); expect(host.textContent).toContain("Dashboard"); expect(host.textContent).toContain("Handed Off"); expect(host.textContent).toContain("2026-01-01"); expect(host.textContent).toContain("does not observe files opened in other apps"); expect(host.textContent).toContain("does not confirm the target opened");
+    expect(api.analyticsSummary).toHaveBeenCalledWith("p1", {}); expect(api.analyticsEvents).toHaveBeenCalledWith({ profileId: "p1", limit: 50, offset: 0 });
+  });
+
+  it("keeps recording disabled as a preference and requires explicit confirmation to purge", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]);
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    const recording = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    await act(async () => { recording.click(); });
+    expect(host.textContent).toContain("Turning this off keeps existing history");
+    api.saveUsageSettings.mockImplementation(async (settings) => settings);
+    const saveButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Save settings")!;
+    await act(async () => { saveButton.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(api.saveUsageSettings).toHaveBeenCalledWith({ profileId: "p1", recordingEnabled: false, retentionDays: null, excludedResourceIds: [] });
+    const deleteButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("Delete recorded history"))!;
+    await act(async () => { deleteButton.click(); });
+    expect(api.purgeUsageHistory).not.toHaveBeenCalled(); expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies UTC date filters to both the summary and event page", async () => {
+    api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]);
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    const from = host.querySelector<HTMLInputElement>('input[type="date"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(from, "2026-02-03"); from.dispatchEvent(new Event("input", { bubbles: true })); from.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(api.analyticsSummary).toHaveBeenLastCalledWith("p1", { fromUtc: "2026-02-03T00:00:00.000Z" });
+    expect(api.analyticsEvents).toHaveBeenLastCalledWith({ profileId: "p1", fromUtc: "2026-02-03T00:00:00.000Z", limit: 50, offset: 0 });
+  });
+
+  it("exports the active filters through a chosen CSV destination", async () => {
+    api.analyticsSummary.mockResolvedValue({ totalLaunches: 1, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([{ requestId: "1", resourceId: "r1", source: "dock", status: "handed_off", launchedAtUtc: "2026-01-01T10:00:00Z" }]);
+    chooseUsageExportPath.mockResolvedValue("C:\\Exports\\usage.csv"); api.exportUsageCsv.mockResolvedValue({ path: "C:\\Exports\\usage.csv", eventCount: 1 });
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    const exportButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Export CSV")!;
+    await act(async () => { exportButton.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(api.exportUsageCsv).toHaveBeenCalledWith({ profileId: "p1" }, "C:\\Exports\\usage.csv");
+    expect(host.textContent).toContain("Exported 1 recorded event");
   });
 });

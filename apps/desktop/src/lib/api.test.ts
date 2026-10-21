@@ -226,12 +226,13 @@ describe("metadata and analytics API", () => {
     const events = [{ resourceId: "r1", source: "dock", status: "handed_off", requestId: "q1", launchedAtUtc: "2025-01-01T00:00:00Z" }];
     invokeTyped.mockResolvedValueOnce(metadata).mockResolvedValueOnce(summary).mockResolvedValueOnce(events);
     expect(await api.inspect("r1", true)).toEqual(metadata);
-    expect(await api.analyticsSummary("p1", "2025-01-01T00:00:00Z")).toEqual(summary);
-    expect(await api.analyticsEvents("p1", 42)).toEqual(events);
+    const filter = { fromUtc: "2025-01-01T00:00:00Z", source: "dock" as const };
+    expect(await api.analyticsSummary("p1", filter)).toEqual(summary);
+    expect(await api.analyticsEvents({ profileId: "p1", ...filter, limit: 42, offset: 0 })).toEqual(events);
     expect(invokeTyped.mock.calls).toEqual([
       ["resource_inspect", { resourceId: "r1", forceRefresh: true }],
-      ["analytics_summary", { profileId: "p1", sinceUtc: "2025-01-01T00:00:00Z" }],
-      ["analytics_query", { profileId: "p1", limit: 42 }],
+      ["analytics_summary", { profileId: "p1", ...filter }],
+      ["analytics_query", { profileId: "p1", ...filter, limit: 42, offset: 0 }],
     ]);
   });
 
@@ -239,8 +240,25 @@ describe("metadata and analytics API", () => {
     expect(api.isNativeApp()).toBe(false);
     expect(await api.inspect("r1")).toEqual([]);
     expect(await api.analyticsSummary("p1")).toEqual({ totalLaunches: 0, bySource: {}, byStatus: {} });
-    expect(await api.analyticsEvents("p1")).toEqual([]);
+    expect(await api.analyticsEvents({ profileId: "p1", limit: 42, offset: 0 })).toEqual([]);
     expect(invokeTyped).not.toHaveBeenCalled();
+  });
+
+  it("uses typed history settings, purge, and CSV export commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const settings = { profileId: "p1", recordingEnabled: false, retentionDays: 90 as const, excludedResourceIds: ["r2"] };
+    const exported = { path: "C:\\Exports\\usage.csv", eventCount: 4 };
+    invokeTyped.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings).mockResolvedValueOnce(4).mockResolvedValueOnce(exported);
+    expect(await api.usageSettings("p1")).toEqual(settings);
+    expect(await api.saveUsageSettings(settings)).toEqual(settings);
+    expect(await api.purgeUsageHistory("p1")).toBe(4);
+    expect(await api.exportUsageCsv({ profileId: "p1", source: "dock", limit: 20, offset: 0 }, exported.path)).toEqual(exported);
+    expect(invokeTyped.mock.calls).toEqual([
+      ["usage_settings_get", { profileId: "p1" }],
+      ["usage_settings_set", { settings }],
+      ["usage_history_purge", { profileId: "p1" }],
+      ["usage_export_csv", { query: { profileId: "p1", source: "dock", limit: 20, offset: 0 }, outputPath: exported.path }],
+    ]);
   });
 });
 

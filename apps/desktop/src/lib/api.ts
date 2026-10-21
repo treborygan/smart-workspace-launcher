@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection, WorkspaceSequence, WorkspaceSequenceRunResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -64,13 +64,34 @@ export const api = {
     if (isNative()) return invokeTyped("resource_inspect", { resourceId, forceRefresh });
     return [];
   },
-  async analyticsSummary(profileId?: string, sinceUtc?: string): Promise<AnalyticsSummary> {
-    if (isNative()) return invokeTyped("analytics_summary", { profileId, sinceUtc });
+  async analyticsSummary(profileId: string, filter: UsageFilter = {}): Promise<AnalyticsSummary> {
+    if (isNative()) return invokeTyped("analytics_summary", { profileId, ...filter });
     return { totalLaunches: 0, bySource: {}, byStatus: {} };
   },
-  async analyticsEvents(profileId?: string, limit = 500): Promise<LaunchEvent[]> {
-    if (isNative()) return invokeTyped("analytics_query", { profileId, limit });
+  async analyticsEvents(query: UsageQuery): Promise<LaunchEvent[]> {
+    if (isNative()) return invokeTyped("analytics_query", query);
     return [];
+  },
+  async usageSettings(profileId: string): Promise<UsageSettings> {
+    if (isNative()) return invokeTyped("usage_settings_get", { profileId });
+    try {
+      const saved = localStorage.getItem(`swl-usage-settings-${profileId}`);
+      if (saved) return JSON.parse(saved) as UsageSettings;
+    } catch { /* use safe defaults for the browser preview */ }
+    return { profileId, recordingEnabled: true, retentionDays: null, excludedResourceIds: [] };
+  },
+  async saveUsageSettings(settings: UsageSettings): Promise<UsageSettings> {
+    if (isNative()) return invokeTyped("usage_settings_set", { settings });
+    localStorage.setItem(`swl-usage-settings-${settings.profileId}`, JSON.stringify(settings));
+    return settings;
+  },
+  async purgeUsageHistory(profileId: string): Promise<number> {
+    if (isNative()) return invokeTyped("usage_history_purge", { profileId });
+    return 0;
+  },
+  async exportUsageCsv(query: UsageQuery, outputPath: string): Promise<UsageExportResult> {
+    if (!isNative()) throw new Error("Usage export is available in the Windows desktop app.");
+    return invokeTyped("usage_export_csv", { query, outputPath });
   },
   async resources(profileId?: string): Promise<Resource[]> {
     if (isNative()) return invokeTyped("resource_list", { profileId });

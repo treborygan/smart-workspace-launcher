@@ -170,6 +170,34 @@ export interface AnalyticsSummary {
   lastEventUtc?: string;
 }
 
+/** Local, profile-scoped history controls. A null retention window keeps recorded events until purged. */
+export interface UsageSettings {
+  profileId: string;
+  recordingEnabled: boolean;
+  retentionDays: 30 | 90 | 365 | null;
+  excludedResourceIds: string[];
+}
+
+/** UTC bounds are inclusive; all populated filters are combined with AND. */
+export interface UsageFilter {
+  fromUtc?: string;
+  toUtc?: string;
+  source?: LaunchSource;
+  status?: LaunchStatus;
+  resourceId?: string;
+}
+
+export interface UsageQuery extends UsageFilter {
+  profileId: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface UsageExportResult {
+  path: string;
+  eventCount: number;
+}
+
 export interface QuickLaunchHotkeyStatus {
   /** Whether the requested shortcut is currently registered. */
   registered: boolean;
@@ -303,8 +331,12 @@ export interface CommandMap {
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
   quick_launch_hotkey_set: { args: { profileId: string; shortcut: string }; result: QuickLaunchHotkeyStatus };
-  analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
-  analytics_summary: { args: { profileId?: string; sinceUtc?: string }; result: AnalyticsSummary };
+  analytics_query: { args: UsageQuery; result: LaunchEvent[] };
+  analytics_summary: { args: UsageFilter & { profileId: string }; result: AnalyticsSummary };
+  usage_settings_get: { args: { profileId: string }; result: UsageSettings };
+  usage_settings_set: { args: { settings: UsageSettings }; result: UsageSettings };
+  usage_history_purge: { args: { profileId: string }; result: number };
+  usage_export_csv: { args: { query: UsageQuery; outputPath: string }; result: UsageExportResult };
 }
 
 export interface AppEventMap {

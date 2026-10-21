@@ -1,20 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:03:40Z",
+  "updated_at_utc": "2026-10-21T22:24:21Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-014-action-sequences"
+    "branch": "feature/sw-015-usage-retention"
   },
   "active_pull_request": {
-    "number": 38,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+    "number": 41,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
     "state": "OPEN",
-    "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c",
-    "review_status": "independent QA passed; GitHub review pending"
+    "head_sha": "1367caf",
+    "base": "feature/sw-014-action-sequences",
+    "review_status": "independent QA passed; GitHub review pending; stacked behind PR #38"
   },
   "subagent_limit": 3,
   "agents": [
@@ -68,6 +69,39 @@
       "issue": "SW-012",
       "branch": null,
       "pr": null
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-015 backend",
+      "branch": "feature/sw-015-core",
+      "commit": "8e797d2",
+      "pr": null,
+      "task": "Implemented usage settings/analytics/export/retention and path-free replay guards; compacted terminal sequence results on opt-out, purge and expiry. Integration commits include replay privacy and sequence compaction fixes."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-015 UI",
+      "branch": "feature/sw-015-ui",
+      "commit": "ac4794e",
+      "pr": null,
+      "task": "Activity filters, stable pagination, settings, explicit purge and native CSV export; profile-switch and exact-page regression fixes. UI tests passed (88)."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-015 contract/security review",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Independent UI and backend review passed after pagination/profile-switch and privacy corrections; no remaining implementation blockers. Rust execution remains blocked by missing GLib."
     }
   ],
   "milestones": {
@@ -79,45 +113,41 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T22:03:10Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no PowerShell or Windows 11 host",
+    "at_utc": "2026-10-21T22:24:00Z",
+    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; Linux and Windows GNU Rust targets installed; no PowerShell, Windows 11 host, or MinGW; GLib >=2.70 development files absent.",
     "results": [
       {
+        "command": "npm ci --cache /tmp/swl-npm-cache",
+        "result": "PASS on integration worktree."
+      },
+      {
         "command": "npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check",
-        "result": "PASS: typecheck; 12 frontend files/82 tests; production build; diff check. Existing non-fatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "python tests/test_profile_archive_contract.py -q",
-        "result": "PASS: 14 archive contract tests including inert sequences and member/target validation."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS: issue catalog/schema/fixtures/handoff checks; no runtime verification."
+        "result": "PASS after integrated SW-015 UI fixes: typecheck; 12 files/88 tests; production frontend build; diff check. Existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS after backend commit."
-      },
-      {
-        "command": "git diff --check",
         "result": "PASS."
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib workspace_sequence -- --nocapture",
-        "result": "BLOCKED before application compile because GLib/GObject >=2.70 development files and glib-2.0.pc are unavailable."
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS; handoff, catalog, schema and fixture checks only; no runtime verification."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib usage",
+        "result": "BLOCKED before application compilation because pkg-config cannot find glib-2.0 >=2.70 / glib-2.0.pc."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: real Windows 11 x64 verification unavailable."
+        "result": "BLOCKED: real Windows 11 x64 acceptance and portable package evidence unavailable."
       },
       {
-        "command": "Independent QA final SW-014 review",
-        "result": "PASS: final review found no implementation blocker. UI findings were fixed. Rust and Windows execution blockers remain accurately recorded."
+        "command": "Independent SW-015 frontend/backend QA",
+        "result": "PASS on integrated head b4288c2; no remaining blockers. In-progress sequence snapshots remain for crash-safe recovery. Rust tests remain NOT_RUN due GLib >=2.70 build dependency blocker."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Await GitHub review and merge SW-014 PR #38 after review. PR attachment connector returned connection closed; retry on resume. Continue SW-015..SW-025 cross-platform work; SW-012/V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "PAUSED per user request. One-time continuation is scheduled in 2.5 hours; resume from CODEX_RESUME.md/backlog/AGENT_STATUS.json. On resume, close superseded draft PR #39, track GitHub reviews for PR #38 and stacked SW-015 PR #41, then continue SW-016..SW-025 cross-platform. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -176,7 +206,25 @@
       "issue": "SW-014",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
-      "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c"
+      "head_sha": "fb22dff"
+    },
+    {
+      "number": 39,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/39",
+      "state": "OPEN_DRAFT_SUPERSEDED",
+      "head_sha": "8e797d2",
+      "base": "feature/sw-015-usage-retention",
+      "note": "Backend-only draft; superseded by integrated PR #41. Left open during user pause; close on resume."
+    },
+    {
+      "number": 41,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
+      "state": "OPEN",
+      "head_sha": "1367caf",
+      "base": "feature/sw-014-action-sequences",
+      "note": "Integrated frontend/backend implementation; independent QA passed. GitHub review pending and stacked on PR #38."
     }
   ]
 }

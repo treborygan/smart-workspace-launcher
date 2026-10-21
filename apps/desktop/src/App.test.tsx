@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
 }));
 vi.mock("./lib/api", () => ({ api }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: "quick-launch", onFocusChanged: async () => () => undefined }) }));
@@ -23,6 +23,7 @@ let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
+  api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false);
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
   api.onQuickLaunchToggle.mockResolvedValue(() => undefined); api.onQuickLaunchHotkeyStatus.mockResolvedValue(() => undefined);

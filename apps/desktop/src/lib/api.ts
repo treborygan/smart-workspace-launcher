@@ -1,5 +1,5 @@
 import { invokeTyped, listenTyped } from "@sw/contracts";
-import type { DashboardLayout, LaunchSource, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
+import type { AnalyticsSummary, DashboardLayout, LaunchEvent, LaunchSource, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -22,6 +22,19 @@ function readDemo(): Resource[] {
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
 
 export const api = {
+  isNativeApp(): boolean { return isNative(); },
+  async inspect(resourceId: string, forceRefresh = false): Promise<ResourceMetadata[]> {
+    if (isNative()) return invokeTyped("resource_inspect", { resourceId, forceRefresh });
+    return [];
+  },
+  async analyticsSummary(profileId?: string, sinceUtc?: string): Promise<AnalyticsSummary> {
+    if (isNative()) return invokeTyped("analytics_summary", { profileId, sinceUtc });
+    return { totalLaunches: 0, bySource: {}, byStatus: {} };
+  },
+  async analyticsEvents(profileId?: string, limit = 500): Promise<LaunchEvent[]> {
+    if (isNative()) return invokeTyped("analytics_query", { profileId, limit });
+    return [];
+  },
   async resources(profileId?: string): Promise<Resource[]> {
     if (isNative()) return invokeTyped("resource_list", { profileId });
     return readDemo();

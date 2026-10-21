@@ -233,6 +233,16 @@ struct ProfilePackageDocument {
     memberships: Vec<String>,
     #[serde(default)]
     membership_details: Vec<ProfilePackageMembership>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    smart_collections: Vec<ProfilePackageSmartCollection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageSmartCollection {
+    id: String,
+    name: String,
+    filters: SmartCollectionFilters,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -559,6 +569,7 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
     if package.resources.resources.len() > 10_000
         || package.profile.memberships.len() > 10_000
         || package.layouts.layouts.len() > 25
+        || package.profile.smart_collections.len() > MAX_SMART_COLLECTIONS_PER_PROFILE as usize
     {
         return Err(package_error("package exceeds item count limit"));
     }
@@ -634,6 +645,27 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
         return Err(package_error(
             "resource and target IDs must be globally unique",
         ));
+    }
+    let mut smart_collection_ids = std::collections::HashSet::new();
+    let mut smart_collection_names = std::collections::HashSet::new();
+    for collection in &package.profile.smart_collections {
+        valid_uuid(&collection.id, "smart collection id")?;
+        if !smart_collection_ids.insert(collection.id.as_str())
+            || collection.id == package.profile.id
+            || resource_ids.contains(&collection.id)
+            || target_ids.contains(&collection.id)
+        {
+            return Err(package_error(
+                "smart collection IDs must be unique across package entities",
+            ));
+        }
+        validate_smart_collection_fields(&collection.id, &collection.name, &collection.filters)
+            .map_err(|error| package_error(error.to_string()))?;
+        if !smart_collection_names.insert(collection.name.trim().to_lowercase()) {
+            return Err(package_error(
+                "smart collection names must be unique within the profile",
+            ));
+        }
     }
     let known_resources: std::collections::HashSet<String> = resource_ids.clone();
     let mut membership_ids = std::collections::HashSet::new();
@@ -1106,6 +1138,26 @@ fn profile_package_from_db(
     } else {
         None
     };
+    let mut smart_collection_stmt = conn.prepare(
+        "SELECT id,name,filters_json FROM smart_collections WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let smart_collections = smart_collection_stmt
+        .query_map([profile_id], |row| {
+            let filters_json: String = row.get(2)?;
+            let filters = serde_json::from_str(&filters_json).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    filters_json.len(),
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok(ProfilePackageSmartCollection {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                filters,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let manifest = ProfilePackageManifest {
         format: "swprofile".into(),
         schema_version: 1,
@@ -1129,6 +1181,7 @@ fn profile_package_from_db(
             settings,
             memberships: membership_ids,
             membership_details: memberships,
+            smart_collections,
         },
         resources: ProfileResourcesDocument {
             schema_version: 1,
@@ -1502,6 +1555,114 @@ fn safe_import_settings(value: serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(object)
 }
 
+fn unique_smart_collection_name(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    requested: &str,
+) -> Result<String, AppError> {
+    let requested = requested.trim();
+    for suffix in 1..=1000 {
+        let candidate = if suffix == 1 {
+            requested.to_string()
+        } else {
+            let ending = format!(" (imported {suffix})");
+            let base: String = requested
+                .chars()
+                .take(100usize.saturating_sub(ending.chars().count()))
+                .collect();
+            format!("{}{}", base.trim_end(), ending)
+        };
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+            params![profile_id, candidate],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique smart collection name",
+    ))
+}
+
+fn fresh_smart_collection_id(tx: &Transaction<'_>) -> Result<String, AppError> {
+    for _ in 0..100 {
+        let id = Uuid::new_v4().to_string();
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE id=?1)",
+            [&id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(id);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique smart collection ID",
+    ))
+}
+
+fn import_profile_smart_collections(
+    tx: &Transaction<'_>,
+    package: &ValidatedProfilePackage,
+    target_profile_id: &str,
+    strategy: &str,
+) -> Result<(), AppError> {
+    for collection in &package.profile.smart_collections {
+        let existing_by_name_or_id: Option<(String, String)> = tx
+            .query_row(
+                "SELECT name,filters_json FROM smart_collections WHERE profile_id=?1 AND (id=?2 OR name=?3 COLLATE NOCASE) LIMIT 1",
+                params![target_profile_id, collection.id, collection.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if strategy == "merge" {
+            if let Some((existing_name, existing_filters_json)) = &existing_by_name_or_id {
+                let existing_filters: SmartCollectionFilters =
+                    serde_json::from_str(existing_filters_json)?;
+                if existing_name.eq_ignore_ascii_case(&collection.name)
+                    && existing_filters == collection.filters
+                {
+                    continue;
+                }
+            }
+        }
+        let id_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE id=?1)",
+            [&collection.id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        let id = if strategy == "duplicate" || id_exists {
+            fresh_smart_collection_id(tx)?
+        } else {
+            collection.id.clone()
+        };
+        let name = if existing_by_name_or_id.is_some() {
+            unique_smart_collection_name(tx, target_profile_id, &collection.name)?
+        } else {
+            collection.name.clone()
+        };
+        let existing_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM smart_collections WHERE profile_id=?1",
+            [target_profile_id],
+            |row| row.get(0),
+        )?;
+        if existing_count >= MAX_SMART_COLLECTIONS_PER_PROFILE {
+            return Err(package_error(
+                "profile would exceed the smart collection limit",
+            ));
+        }
+        let filters_json = serde_json::to_string(&collection.filters)?;
+        let timestamp = now_utc();
+        tx.execute(
+            "INSERT INTO smart_collections(id,profile_id,name,filters_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?5)",
+            params![id, target_profile_id, name, filters_json, timestamp],
+        )?;
+    }
+    Ok(())
+}
+
 fn import_profile_package(
     conn: &mut Connection,
     package: &ValidatedProfilePackage,
@@ -1579,6 +1740,10 @@ fn import_profile_package(
             [&target_id],
         )?;
         tx.execute("DELETE FROM layouts WHERE profile_id=?1", [&target_id])?;
+        tx.execute(
+            "DELETE FROM smart_collections WHERE profile_id=?1",
+            [&target_id],
+        )?;
         tx.execute(
             "UPDATE profiles SET name=?2,theme_id=?3,settings_json=?4,updated_utc=?5 WHERE id=?1",
             params![target_id, profile_name, theme, settings_json, now],
@@ -1730,6 +1895,7 @@ fn import_profile_package(
         }
         imported_layouts += 1;
     }
+    import_profile_smart_collections(&tx, package, &target_id, strategy)?;
     let mut imported_history_events = 0;
     if let Some(history) = &package.history {
         for event in &history.events {
@@ -3272,17 +3438,19 @@ fn profile_theme_set(
     profile_theme_set_on_conn(&mut conn, &profile_id, &theme)
 }
 
-fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppError> {
-    valid_uuid(&collection.id, "smart collection id")?;
-    valid_uuid(&collection.profile_id, "profile id")?;
-    let name = collection.name.trim();
+fn validate_smart_collection_fields(
+    id: &str,
+    name: &str,
+    filters: &SmartCollectionFilters,
+) -> Result<(), AppError> {
+    valid_uuid(id, "smart collection id")?;
+    let name = name.trim();
     if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
         return Err(AppError::Invalid(
             "smart collection name must contain 1 to 100 printable characters".into(),
         ));
     }
-    if collection
-        .filters
+    if filters
         .resource_type
         .as_ref()
         .is_some_and(|kind| !["file", "folder", "app", "shortcut", "url"].contains(&kind.as_str()))
@@ -3292,9 +3460,9 @@ fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppErro
         ));
     }
     for (field, value, maximum) in [
-        ("category", collection.filters.category.as_ref(), 80usize),
-        ("tag", collection.filters.tag.as_ref(), 80usize),
-        ("text", collection.filters.text.as_ref(), 200usize),
+        ("category", filters.category.as_ref(), 80usize),
+        ("tag", filters.tag.as_ref(), 80usize),
+        ("text", filters.text.as_ref(), 200usize),
     ] {
         if value.is_some_and(|value| {
             value.trim().is_empty()
@@ -3306,13 +3474,18 @@ fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppErro
             )));
         }
     }
-    let encoded = serde_json::to_vec(&collection.filters)?;
+    let encoded = serde_json::to_vec(filters)?;
     if encoded.len() > 4096 {
         return Err(AppError::Invalid(
             "smart collection filters exceed size limit".into(),
         ));
     }
     Ok(())
+}
+
+fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppError> {
+    valid_uuid(&collection.profile_id, "profile id")?;
+    validate_smart_collection_fields(&collection.id, &collection.name, &collection.filters)
 }
 
 fn smart_collection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SmartCollection> {
@@ -4610,6 +4783,7 @@ mod tests {
                 category: Some("Work".into()),
                 sort_position: 0,
             }],
+            smart_collections: Vec::new(),
         };
         let package = ValidatedProfilePackage {
             manifest: ProfilePackageManifest {
@@ -4884,6 +5058,174 @@ mod tests {
             before, after,
             "failed import must roll back profile creation"
         );
+    }
+
+    #[test]
+    fn profile_export_import_roundtrip_preserves_smart_collections_and_old_packages_default_empty()
+    {
+        let mut conn = database();
+        let source_profile = profile(&conn);
+        let source_collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: source_profile.clone(),
+            name: "Quarterly files".into(),
+            filters: SmartCollectionFilters {
+                resource_type: Some("file".into()),
+                category: Some("Finance".into()),
+                tag: Some("reports".into()),
+                favorite_only: Some(true),
+                text: Some("quarterly".into()),
+            },
+        };
+        smart_collection_save_on_conn(&mut conn, source_collection.clone()).unwrap();
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &source_profile, &path, false).unwrap();
+        let package = read_profile_package(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(package.profile.smart_collections.len(), 1);
+        assert_eq!(
+            package.profile.smart_collections[0].filters,
+            source_collection.filters
+        );
+
+        let mut old_package = package.clone();
+        let mut old_profile_json = serde_json::to_value(&old_package.profile).unwrap();
+        old_profile_json
+            .as_object_mut()
+            .unwrap()
+            .remove("smart_collections");
+        old_package.profile = serde_json::from_value(old_profile_json).unwrap();
+        assert!(old_package.profile.smart_collections.is_empty());
+        validate_package_fields(&old_package).unwrap();
+
+        let imported = import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
+        let imported_collections =
+            smart_collection_list_on_conn(&conn, &imported.profile_id).unwrap();
+        assert_eq!(imported_collections.len(), 1);
+        assert_ne!(imported_collections[0].id, source_collection.id);
+        assert_eq!(imported_collections[0].name, source_collection.name);
+        assert_eq!(imported_collections[0].filters, source_collection.filters);
+    }
+
+    #[test]
+    fn profile_import_merge_remaps_smart_collection_id_and_name_collisions() {
+        let mut conn = database();
+        let mut package = package("url");
+        let imported_collection = ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Reports".into(),
+            filters: SmartCollectionFilters {
+                text: Some("quarterly".into()),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        package.profile.smart_collections = vec![imported_collection.clone()];
+        validate_package_fields(&package).unwrap();
+        let target_profile = profile(&conn);
+        smart_collection_save_on_conn(
+            &mut conn,
+            SmartCollection {
+                id: imported_collection.id.clone(),
+                profile_id: target_profile.clone(),
+                name: imported_collection.name.clone(),
+                filters: SmartCollectionFilters {
+                    text: Some("annual".into()),
+                    ..SmartCollectionFilters::default()
+                },
+            },
+        )
+        .unwrap();
+
+        import_profile_package(&mut conn, &package, "merge", Some(&target_profile)).unwrap();
+        let collections = smart_collection_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(collections.len(), 2);
+        let remapped = collections
+            .iter()
+            .find(|item| item.name.starts_with("Reports (imported"))
+            .unwrap();
+        assert_ne!(remapped.id, imported_collection.id);
+        assert_eq!(remapped.filters, imported_collection.filters);
+    }
+
+    #[test]
+    fn profile_import_replace_replaces_smart_collections() {
+        let mut conn = database();
+        let mut package = package("url");
+        let incoming = ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming".into(),
+            filters: SmartCollectionFilters {
+                favorite_only: Some(true),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        package.profile.smart_collections = vec![incoming.clone()];
+        let target_profile = profile(&conn);
+        smart_collection_save_on_conn(
+            &mut conn,
+            SmartCollection {
+                id: Uuid::new_v4().to_string(),
+                profile_id: target_profile.clone(),
+                name: "Old collection".into(),
+                filters: SmartCollectionFilters::default(),
+            },
+        )
+        .unwrap();
+
+        import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).unwrap();
+        let collections = smart_collection_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(collections.len(), 1);
+        assert_eq!(collections[0].id, incoming.id);
+        assert_eq!(collections[0].name, incoming.name);
+        assert_eq!(collections[0].filters, incoming.filters);
+    }
+
+    #[test]
+    fn profile_import_rolls_back_smart_collections_and_resources_on_collection_failure() {
+        let mut conn = database();
+        let mut package = package("url");
+        package.profile.smart_collections = vec![ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming".into(),
+            filters: SmartCollectionFilters::default(),
+        }];
+        let target_profile = profile(&conn);
+        let original_collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Original".into(),
+            filters: SmartCollectionFilters::default(),
+        };
+        smart_collection_save_on_conn(&mut conn, original_collection.clone()).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_smart_collection_import BEFORE INSERT ON smart_collections BEGIN SELECT RAISE(ABORT,'injected smart collection failure'); END;").unwrap();
+
+        assert!(
+            import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).is_err()
+        );
+        let profile_name: String = conn
+            .query_row(
+                "SELECT name FROM profiles WHERE id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_name, "Work");
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &target_profile).unwrap(),
+            vec![original_collection]
+        );
+        let resource_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(resource_count, 0);
+        let membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(membership_count, 0);
     }
 
     #[test]

@@ -74,12 +74,88 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["resource_id", "favorite", "sort_position"],
+        "required": [
+          "resource_id",
+          "favorite",
+          "sort_position"
+        ],
         "properties": {
-          "resource_id": { "type": "string", "format": "uuid" },
-          "favorite": { "type": "boolean" },
-          "category": { "type": ["string", "null"], "maxLength": 80 },
-          "sort_position": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "favorite": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80
+          },
+          "sort_position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        }
+      }
+    },
+    "smart_collections": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "filters"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "filters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "resourceType": {
+                "enum": [
+                  "file",
+                  "folder",
+                  "app",
+                  "shortcut",
+                  "url"
+                ]
+              },
+              "category": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "tag": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "favoriteOnly": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
         }
       }
     }

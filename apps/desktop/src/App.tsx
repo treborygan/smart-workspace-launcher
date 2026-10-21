@@ -8,6 +8,7 @@ import type { Profile, Resource } from "./lib/contracts";
 import "./styles.css";
 
 type Section = "Dashboard" | "Quick Launch" | "Explorer" | "Analytics";
+type ShortcutDraft = { value: string; dirty: boolean };
 const nav = [
   { label: "Dashboard" as const, icon: "grid" as const },
   { label: "Quick Launch" as const, icon: "search" as const },
@@ -69,14 +70,23 @@ export default function App() {
   const [nativeWindowLabel, setNativeWindowLabel] = useState<string | null>(null);
   const [quickLaunchSignal, setQuickLaunchSignal] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [shortcutDraft, setShortcutDraft] = useState("Alt+Space");
+  const [shortcutDrafts, setShortcutDrafts] = useState<Record<string, ShortcutDraft>>({});
   const [shortcutSaving, setShortcutSaving] = useState(false);
+  const selectedProfile = profiles.find((profile) => profile.id === activeProfileId);
+  let configuredShortcut = "Alt+Space";
+  try { configuredShortcut = JSON.parse(selectedProfile?.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
+  const shortcutDraft = shortcutDrafts[activeProfileId]?.value ?? configuredShortcut;
 
   const loadProfile = async (preferredProfileId?: string) => {
     const availableProfiles = await api.profiles();
     const rememberedProfile = preferredProfileId || localStorage.getItem("swl-active-profile");
     const profile = availableProfiles.find((item) => item.id === rememberedProfile) || availableProfiles[0];
     if (profile) await api.switchProfile(profile.id);
+    if (profile) {
+      let configured = "Alt+Space";
+      try { configured = JSON.parse(profile.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
+      setShortcutDrafts((current) => current[profile.id] ? current : { ...current, [profile.id]: { value: configured, dirty: false } });
+    }
     const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
     const restored = restoreLayout(items, layout);
     setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
@@ -121,13 +131,17 @@ export default function App() {
         void loadProfile().catch((e: unknown) => setNotice(e instanceof Error ? e.message : "Could not refresh the active profile."));
       })
       : Promise.resolve(() => undefined);
-    Promise.all([toggleListener, api.onQuickLaunchHotkeyStatus((status) => setHotkeyStatus(status))]).then(([toggle, status]) => {
+    const syncShortcutStatus = (statusValue: QuickLaunchHotkeyStatus) => {
+      setHotkeyStatus(statusValue);
+      if (activeProfileId) setShortcutDrafts((current) => current[activeProfileId]?.dirty ? current : { ...current, [activeProfileId]: { value: statusValue.shortcut, dirty: false } });
+    };
+    Promise.all([toggleListener, api.onQuickLaunchHotkeyStatus(syncShortcutStatus)]).then(([toggle, status]) => {
       if (disposed) { toggle(); status(); return; }
       unlistenToggle = toggle; unlistenStatus = status;
-      void api.quickLaunchHotkeyStatus().then(setHotkeyStatus).catch(() => undefined);
+      void api.quickLaunchHotkeyStatus().then(syncShortcutStatus).catch(() => undefined);
     }).catch((e: unknown) => setNotice(e instanceof Error ? `Quick Launch hotkey status unavailable: ${e.message}` : "Quick Launch hotkey status unavailable."));
     return () => { disposed = true; unlistenToggle(); unlistenStatus(); };
-  }, [nativeWindowLabel]);
+  }, [nativeWindowLabel, activeProfileId]);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   const filtered = useMemo(() => resources.filter((resource) => {
@@ -167,6 +181,7 @@ export default function App() {
     try {
       const status = await api.setQuickLaunchHotkey(activeProfileId, shortcutDraft.trim());
       setHotkeyStatus(status);
+      setShortcutDrafts((current) => ({ ...current, [activeProfileId]: { value: status.shortcut, dirty: false } }));
       if (!status.registered) setNotice(`${status.shortcut} could not be registered. ${status.activeShortcut ? `${status.activeShortcut} remains active.` : "The previous shortcut remains active."}`);
       else setNotice(`Quick Launch shortcut set to ${status.shortcut}.`);
     } catch (e) { setNotice(e instanceof Error ? e.message : "Could not update the Quick Launch shortcut."); }
@@ -216,7 +231,7 @@ export default function App() {
       <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => item.label === "Quick Launch" ? setQuickLaunchOpen(true) : setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
       <div className="nav-label collections-label">COLLECTIONS <button className="tiny-plus" onClick={() => setShowAdd(true)} aria-label="Add collection"><Icon name="plus" size={14} /></button></div>
       {["All resources", "Favorites", "Work", "Web", "Apps"].map((item, index) => <button key={item} className={`collection ${category === item ? "selected" : ""}`} onClick={() => { setCategory(item); setSection("Dashboard"); }}><span className={`collection-dot d${index}`} />{item}<span className="collection-count">{item === "Favorites" ? resources.filter((r) => r.favorite).length : item === "All resources" ? resources.length : resources.filter((r) => r.category === item).length}</span></button>)}
-      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item" aria-expanded={settingsOpen} onClick={() => { setShortcutDraft(hotkeyStatus?.activeShortcut || hotkeyStatus?.shortcut || "Alt+Space"); setSettingsOpen((open) => !open); }}><Icon name="settings" size={18} />Settings</button>{settingsOpen && <form className="shortcut-settings" onSubmit={(event) => void saveShortcut(event)}><label htmlFor="quick-launch-shortcut">Quick Launch shortcut</label><input id="quick-launch-shortcut" value={shortcutDraft} onChange={(event) => setShortcutDraft(event.target.value)} placeholder="Alt+Space" /><small>Use modifiers such as Ctrl, Alt, or Shift.</small><button className="button primary" disabled={shortcutSaving || !activeProfileId}>{shortcutSaving ? "Saving…" : "Save shortcut"}</button></form>}<div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
+      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Icon name="settings" size={18} />Settings</button>{settingsOpen && <form className="shortcut-settings" onSubmit={(event) => void saveShortcut(event)}><label htmlFor="quick-launch-shortcut">Quick Launch shortcut · {selectedProfile?.name || "Profile"}</label><input id="quick-launch-shortcut" value={shortcutDraft} onChange={(event) => setShortcutDrafts((current) => ({ ...current, [activeProfileId]: { value: event.target.value, dirty: true } }))} placeholder="Alt+Space" /><small>Use modifiers such as Ctrl, Alt, or Shift.</small><button className="button primary" disabled={shortcutSaving || !activeProfileId}>{shortcutSaving ? "Saving…" : "Save shortcut"}</button></form>}<div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
     </aside>
 
     <main className="main-area">

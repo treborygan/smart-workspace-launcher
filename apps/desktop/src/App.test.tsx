@@ -93,6 +93,25 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Quick Launch shortcut set to Ctrl+Shift+Space");
   });
 
+  it("shows each profile's requested shortcut after conflicts and preserves another profile's unsaved draft", async () => {
+    let selectedProfileId = "p1";
+    api.profiles.mockResolvedValue(profiles.map((profile) => profile.id === "p2" ? { ...profile, settingsJson: JSON.stringify({ quickLaunchShortcut: "Ctrl+Space" }) } : profile));
+    api.switchProfile.mockImplementation(async (profileId: string) => { selectedProfileId = profileId; return profiles.find((profile) => profile.id === profileId); });
+    api.quickLaunchHotkeyStatus.mockImplementation(async () => selectedProfileId === "p1"
+      ? { registered: false, shortcut: "Alt+Space", activeShortcut: "Ctrl+Alt+Space", errorCode: "hotkey_conflict" }
+      : { registered: true, shortcut: "Ctrl+Space" });
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Settings"))!.click(); });
+    const input = host.querySelector<HTMLInputElement>("#quick-launch-shortcut")!;
+    expect(input.value).toBe("Alt+Space");
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Ctrl+Shift+Space"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    const selector = host.querySelector<HTMLSelectElement>(".profile-switch")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p2"); selector.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(host.querySelector<HTMLInputElement>("#quick-launch-shortcut")?.value).toBe("Ctrl+Space");
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p1"); selector.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(host.querySelector<HTMLInputElement>("#quick-launch-shortcut")?.value).toBe("Ctrl+Shift+Space");
+  });
+
   it("renders only the standalone quick-launch window and resets it from the native event", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     let toggle: (() => void) | undefined;

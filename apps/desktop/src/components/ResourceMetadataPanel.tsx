@@ -4,7 +4,7 @@ import type { ResourceMetadata } from "@sw/contracts";
 import { api } from "../lib/api";
 
 export function ResourceMetadataPanel({ resource }: { resource: Resource }) {
-  const targetKey = JSON.stringify(resource.targets.map(({ id, canonicalUri, active }) => ({ id, canonicalUri, active })));
+  const targetKey = JSON.stringify(resource.targets.map(({ id, kind, canonicalUri, active }) => ({ id, kind, canonicalUri, active })));
   const [records, setRecords] = useState<ResourceMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

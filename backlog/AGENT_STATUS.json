@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:15:45Z",
+  "updated_at_utc": "2026-10-21T22:24:21Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -10,11 +10,12 @@
     "branch": "feature/sw-015-usage-retention"
   },
   "active_pull_request": {
-    "number": 38,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+    "number": 41,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
     "state": "OPEN",
-    "head_sha": "fb22dff",
-    "review_status": "independent QA passed; no GitHub reviews or threads yet"
+    "head_sha": "b4288c2c3c8d488c43b98536267ff0eddca3bb96",
+    "base": "feature/sw-014-action-sequences",
+    "review_status": "independent QA passed; GitHub review pending; stacked behind PR #38"
   },
   "subagent_limit": 3,
   "agents": [
@@ -73,12 +74,12 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-015 backend",
       "branch": "feature/sw-015-core",
-      "commit": "646b98c",
+      "commit": "8e797d2",
       "pr": null,
-      "task": "Core integrated through replay-guard path cleanup. Final QA requests CSV path-name leakage protection and compaction/purge semantics for sequence-run records; corrective work in progress."
+      "task": "Implemented usage settings/analytics/export/retention and path-free replay guards; compacted terminal sequence results on opt-out, purge and expiry. Integration commits include replay privacy and sequence compaction fixes."
     },
     {
       "role": "ui",
@@ -100,7 +101,7 @@
       "branch": null,
       "commit": null,
       "pr": null,
-      "task": "Reviewed UI and backend; UI blockers fixed. Final backend review identified CSV display-name path leakage and retained sequence-run result data; sent to Core for corrective work."
+      "task": "Independent UI and backend review passed after pagination/profile-switch and privacy corrections; no remaining implementation blockers. Rust execution remains blocked by missing GLib."
     }
   ],
   "milestones": {
@@ -112,7 +113,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T22:15:00Z",
+    "at_utc": "2026-10-21T22:24:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; Linux and Windows GNU Rust targets installed; no PowerShell, Windows 11 host, or MinGW; GLib >=2.70 development files absent.",
     "results": [
       {
@@ -140,13 +141,13 @@
         "result": "BLOCKED: real Windows 11 x64 acceptance and portable package evidence unavailable."
       },
       {
-        "command": "Independent SW-015 UI/backend review",
-        "result": "UI review cleared after exact-50 pagination/profile-switch fixes. Backend review remains blocked on CSV user-controlled display_name path leakage and detailed workspace_sequence_runs retention after opt-out/purge/retention."
+        "command": "Independent SW-015 frontend/backend QA",
+        "result": "PASS on integrated head b4288c2; no remaining blockers. In-progress sequence snapshots remain for crash-safe recovery. Rust tests remain NOT_RUN due GLib >=2.70 build dependency blocker."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Complete Core corrections for CSV path-free output and compact/delete detailed sequence-run data under recording opt-out, purge and retention; re-review backend, rerun all available checks, update PR #39 strategy, then submit SW-015 PR with exact evidence. Keep PR #38 open until GitHub review. Continue SW-016..SW-025 cross-platform; V1 remains BLOCKED absent real Windows 11 x64 acceptance.",
+  "next_action": "PAUSED per user request. One-time continuation is scheduled in 2.5 hours; resume from CODEX_RESUME.md/backlog/AGENT_STATUS.json. On resume, close superseded draft PR #39, track GitHub reviews for PR #38 and stacked SW-015 PR #41, then continue SW-016..SW-025 cross-platform. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -211,10 +212,19 @@
       "number": 39,
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/39",
-      "state": "OPEN_DRAFT",
-      "head_sha": "646b98c",
+      "state": "OPEN_DRAFT_SUPERSEDED",
+      "head_sha": "8e797d2",
       "base": "feature/sw-015-usage-retention",
-      "note": "Backend draft; GitHub reports branches diverged. Coordinator cherry-picked backend commits onto SW-015 integration branch; close/replace or retarget after final QA."
+      "note": "Backend-only draft; superseded by integrated PR #41. Left open during user pause; close on resume."
+    },
+    {
+      "number": 41,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
+      "state": "OPEN",
+      "head_sha": "b4288c2c3c8d488c43b98536267ff0eddca3bb96",
+      "base": "feature/sw-014-action-sequences",
+      "note": "Integrated frontend/backend implementation; independent QA passed. GitHub review pending and stacked on PR #38."
     }
   ]
 }

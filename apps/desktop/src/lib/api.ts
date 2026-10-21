@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -49,9 +49,9 @@ export const api = {
     if (!isNative()) throw new Error("Profile export is available in the Windows desktop app.");
     return invokeTyped("profile_export", { profileId, outputPath, includeHistory });
   },
-  async previewProfileImport(packagePath: string): Promise<ProfileImportPreview> {
+  async previewProfileImport(packagePath: string, targetProfileId?: string): Promise<ProfileImportPreview> {
     if (!isNative()) throw new Error("Profile import is available in the Windows desktop app.");
-    return invokeTyped("profile_import_preview", { packagePath });
+    return invokeTyped("profile_import_preview", { packagePath, ...(targetProfileId ? { targetProfileId } : {}) });
   },
   async commitProfileImport(packagePath: string, strategy: ProfileImportStrategy, targetProfileId: string | undefined, packageSha256: string, previewToken: string): Promise<ProfileImportResult> {
     if (!isNative()) throw new Error("Profile import is available in the Windows desktop app.");
@@ -97,8 +97,8 @@ export const api = {
     if (isNative()) { await invokeTyped("resource_delete", { id }); await notifyWorkspaceChanged(profileId); return; }
     writeDemo(readDemo().filter((r) => r.id !== id));
   },
-  async launch(id: string, source: LaunchSource = "dashboard", profileId?: string): Promise<LaunchResult> {
-    if (isNative()) { const result = await invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId } }); if (result.status !== "failed") await notifyWorkspaceChanged(profileId); return result; }
+  async launch(id: string, source: LaunchSource = "dashboard", profileId?: string, targetId?: string): Promise<LaunchResult> {
+    if (isNative()) { const result = await invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId, ...(targetId ? { targetId } : {}) } }); if (result.status !== "failed") await notifyWorkspaceChanged(profileId); return result; }
     throw new Error("Native launch is available in the Windows desktop app. This browser preview does not open local resources.");
   },
   async search(query: string, profileId: string | undefined, fallbackResources: Resource[]): Promise<Resource[]> {
@@ -151,6 +151,43 @@ export const api = {
     if (isNative()) return invokeTyped("profile_list");
     const profile: Profile = { id: "default", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: now, updatedUtc: now };
     try { const saved = localStorage.getItem("swl-profile-theme-default"); return [saved ? { ...profile, ...JSON.parse(saved) as Profile } : profile]; } catch { return [profile]; }
+  },
+  async smartCollections(profileId: string): Promise<SmartCollection[]> {
+    if (isNative()) return invokeTyped("smart_collection_list", { profileId });
+    try { return JSON.parse(localStorage.getItem(`swl-smart-collections-${profileId}`) || "[]") as SmartCollection[]; } catch { return []; }
+  },
+  async saveSmartCollection(collection: SmartCollection): Promise<SmartCollection> {
+    if (isNative()) {
+      const saved = await invokeTyped("smart_collection_save", { collection });
+      await notifyWorkspaceChanged(collection.profileId);
+      return saved;
+    }
+    const current = await api.smartCollections(collection.profileId);
+    const index = current.findIndex((item) => item.id === collection.id);
+    const saved = { ...collection };
+    const next = index < 0 ? [...current, saved] : current.map((item, itemIndex) => itemIndex === index ? saved : item);
+    localStorage.setItem(`swl-smart-collections-${collection.profileId}`, JSON.stringify(next));
+    return saved;
+  },
+  async deleteSmartCollection(profileId: string, id: string): Promise<void> {
+    if (isNative()) { await invokeTyped("smart_collection_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
+    const next = (await api.smartCollections(profileId)).filter((item) => item.id !== id);
+    localStorage.setItem(`swl-smart-collections-${profileId}`, JSON.stringify(next));
+  },
+  async dynamicShortcuts(profileId: string): Promise<DynamicShortcut[]> {
+    if (isNative()) return invokeTyped("dynamic_shortcut_list", { profileId });
+    try { return JSON.parse(localStorage.getItem(`swl-dynamic-shortcuts-${profileId}`) || "[]") as DynamicShortcut[]; } catch { return []; }
+  },
+  async saveDynamicShortcut(shortcut: DynamicShortcut): Promise<DynamicShortcut> {
+    if (isNative()) { const saved = await invokeTyped("dynamic_shortcut_save", { shortcut }); await notifyWorkspaceChanged(shortcut.profileId); return saved; }
+    const current = await api.dynamicShortcuts(shortcut.profileId);
+    const next = current.some((item) => item.id === shortcut.id) ? current.map((item) => item.id === shortcut.id ? shortcut : item) : [...current, shortcut];
+    localStorage.setItem(`swl-dynamic-shortcuts-${shortcut.profileId}`, JSON.stringify(next));
+    return shortcut;
+  },
+  async deleteDynamicShortcut(profileId: string, id: string): Promise<void> {
+    if (isNative()) { await invokeTyped("dynamic_shortcut_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
+    localStorage.setItem(`swl-dynamic-shortcuts-${profileId}`, JSON.stringify((await api.dynamicShortcuts(profileId)).filter((item) => item.id !== id)));
   },
   async layout(profileId: string, surface: "dashboard" | "dock" = "dashboard"): Promise<DashboardLayout | null> {
     if (isNative()) return invokeTyped("layout_get", { profileId, surface });

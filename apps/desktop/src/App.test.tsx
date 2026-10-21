@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api, windowState } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
   windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
@@ -24,7 +24,7 @@ let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
-  api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false);
+  api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false); api.smartCollections.mockResolvedValue([]); api.saveSmartCollection.mockImplementation(async (collection) => collection); api.deleteSmartCollection.mockResolvedValue(undefined); api.dynamicShortcuts.mockResolvedValue([]); api.saveDynamicShortcut.mockImplementation(async (shortcut) => shortcut); api.deleteDynamicShortcut.mockResolvedValue(undefined);
   api.setProfileTheme.mockImplementation(async (id: string, theme: { mode: string; accent: string; density: string }) => ({ ...profiles.find((profile) => profile.id === id)!, themeId: theme.mode, settingsJson: JSON.stringify({ ...JSON.parse(profiles.find((profile) => profile.id === id)!.settingsJson), accent: theme.accent, density: theme.density }) }));
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
@@ -240,6 +240,75 @@ describe("workspace dashboard", () => {
     expect(host.querySelector(".resource-card h3")?.textContent).toBe("Roadmap.xlsx");
     expect(api.switchProfile).toHaveBeenCalledWith("p1");
     expect(api.switchProfile).toHaveBeenCalledWith("p2");
+  });
+
+  it("keeps saved-query shortcuts isolated per profile and wires collection create/select", async () => {
+    const p1Collections = [{ id: "sc-work", profileId: "p1", name: "Work files", filters: { resourceType: "file" as const } }];
+    const p2Collections = [{ id: "sc-web", profileId: "p2", name: "Web links", filters: { resourceType: "url" as const } }];
+    api.smartCollections.mockImplementation(async (profileId: string) => profileId === "p2" ? p2Collections : p1Collections);
+    api.resources.mockImplementation(async () => resources);
+    api.saveSmartCollection.mockImplementation(async (collection) => collection);
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const rows = () => [...host.querySelectorAll<HTMLElement>(".resource-card")];
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Work files"]')?.click(); });
+    expect(rows().map((card) => card.querySelector("h3")?.textContent)).toEqual(["Roadmap.xlsx"]);
+
+    const profile = host.querySelector<HTMLSelectElement>(".profile-switch")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(profile, "p2"); profile.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(rows().map((card) => card.querySelector("h3")?.textContent)).toEqual(["Roadmap.xlsx", "Calendar"]);
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Web links"]')?.click(); });
+    expect(rows().map((card) => card.querySelector("h3")?.textContent)).toEqual(["Calendar"]);
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(profile, "p1"); profile.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(rows().map((card) => card.querySelector("h3")?.textContent)).toEqual(["Roadmap.xlsx"]);
+
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent === "Smart Collections")!.click(); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent === "New collection")!.click(); });
+    const name = host.querySelector<HTMLInputElement>('[aria-label="Collection name"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "PDF files"); name.dispatchEvent(new Event("input", { bubbles: true })); });
+    const type = host.querySelector<HTMLSelectElement>('[aria-label="Resource type filter"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(type, "file"); type.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { host.querySelector<HTMLFormElement>(".smart-collection-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(api.saveSmartCollection).toHaveBeenCalledWith(expect.objectContaining({ profileId: "p1", name: "PDF files", filters: { resourceType: "file" } }));
+    expect(host.textContent).toContain("PDF files");
+  });
+
+  it("manages a saved shortcut and launches only its saved resource target from Quick Launch", async () => {
+    const saved = { id: "ds-report", profileId: "p1", name: "Open roadmap backup", resourceId: "r1", targetId: "t1" };
+    api.saveDynamicShortcut.mockResolvedValue(saved);
+    api.launch.mockResolvedValue({ requestId: "launch-ds", status: "handed_off", launchedAtUtc: timestamp });
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent === "Quick Launch shortcuts")!.click(); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent === "New shortcut")!.click(); });
+    const name = host.querySelector<HTMLInputElement>('[aria-label="Shortcut name"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Open roadmap backup"); name.dispatchEvent(new Event("input", { bubbles: true })); });
+    const target = host.querySelector<HTMLSelectElement>('[aria-label="Shortcut target"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(target, "t1"); target.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { host.querySelector(".dynamic-shortcuts-manager form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(api.saveDynamicShortcut).toHaveBeenCalledWith(expect.objectContaining({ profileId: "p1", resourceId: "r1", targetId: "t1", name: "Open roadmap backup" }));
+
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const quickShortcut = host.querySelector<HTMLButtonElement>('[aria-label="Saved shortcut Open roadmap backup opens Roadmap.xlsx"]');
+    expect(quickShortcut).not.toBeNull();
+    await act(async () => { quickShortcut!.click(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(api.launch).toHaveBeenCalledWith("r1", "quick_launch", "p1", "t1");
+    expect(host.querySelector(".quick-launch")).toBeNull();
+  });
+
+  it("loads only the active profile's dynamic shortcuts into Quick Launch", async () => {
+    api.dynamicShortcuts.mockImplementation(async (profileId: string) => profileId === "p2"
+      ? [{ id: "ds-p2", profileId, name: "Work calendar", resourceId: "r2" }]
+      : [{ id: "ds-p1", profileId, name: "Personal roadmap", resourceId: "r1" }]);
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const open = async () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    await open();
+    expect(host.querySelector('[aria-label="Saved shortcut Personal roadmap opens Roadmap.xlsx"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Saved shortcut Work calendar opens Calendar"]')).toBeNull();
+    await act(async () => { host.querySelector<HTMLInputElement>(".quick-launch-search input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    const profile = host.querySelector<HTMLSelectElement>(".profile-switch")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(profile, "p2"); profile.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    await open();
+    expect(host.querySelector('[aria-label="Saved shortcut Work calendar opens Calendar"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Saved shortcut Personal roadmap opens Roadmap.xlsx"]')).toBeNull();
   });
 });
 

@@ -156,6 +156,44 @@ pub struct ProfileThemeInput {
     pub density: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SmartCollectionFilters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SmartCollection {
+    pub id: String,
+    pub profile_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub filters: SmartCollectionFilters,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DynamicShortcut {
+    pub id: String,
+    pub profile_id: String,
+    pub name: String,
+    pub resource_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+}
+
+const MAX_SMART_COLLECTIONS_PER_PROFILE: i64 = 100;
+const MAX_DYNAMIC_SHORTCUTS_PER_PROFILE: i64 = 100;
 const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
@@ -207,6 +245,28 @@ struct ProfilePackageDocument {
     memberships: Vec<String>,
     #[serde(default)]
     membership_details: Vec<ProfilePackageMembership>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    smart_collections: Vec<ProfilePackageSmartCollection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dynamic_shortcuts: Vec<ProfilePackageDynamicShortcut>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageSmartCollection {
+    id: String,
+    name: String,
+    filters: SmartCollectionFilters,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageDynamicShortcut {
+    id: String,
+    name: String,
+    resource_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -338,14 +398,22 @@ pub struct ProfileImportPreview {
     pub preview_token: String,
     pub profile_id: String,
     pub profile_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_profile_id: Option<String>,
     pub resource_count: usize,
     pub layout_count: usize,
     pub history_event_count: usize,
+    pub smart_collection_count: usize,
+    pub dynamic_shortcut_count: usize,
     pub profile_id_collision: bool,
     pub profile_name_collision: bool,
     pub resource_id_collisions: Vec<String>,
     pub target_id_collisions: Vec<String>,
     pub resource_conflicts: Vec<ProfileResourceConflictPreview>,
+    pub smart_collection_id_collisions: Vec<String>,
+    pub smart_collection_name_collisions: Vec<String>,
+    pub dynamic_shortcut_id_collisions: Vec<String>,
+    pub dynamic_shortcut_name_collisions: Vec<String>,
     pub asset_count: usize,
 }
 
@@ -533,6 +601,8 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
     if package.resources.resources.len() > 10_000
         || package.profile.memberships.len() > 10_000
         || package.layouts.layouts.len() > 25
+        || package.profile.smart_collections.len() > MAX_SMART_COLLECTIONS_PER_PROFILE as usize
+        || package.profile.dynamic_shortcuts.len() > MAX_DYNAMIC_SHORTCUTS_PER_PROFILE as usize
     {
         return Err(package_error("package exceeds item count limit"));
     }
@@ -616,6 +686,81 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
         if !known_resources.contains(id) || !membership_ids.insert(id.clone()) {
             return Err(package_error(
                 "profile memberships must be unique known resources",
+            ));
+        }
+    }
+    let mut smart_collection_ids = std::collections::HashSet::new();
+    let mut smart_collection_names = std::collections::HashSet::new();
+    for collection in &package.profile.smart_collections {
+        valid_uuid(&collection.id, "smart collection id")?;
+        if !smart_collection_ids.insert(collection.id.as_str())
+            || collection.id == package.profile.id
+            || resource_ids.contains(&collection.id)
+            || target_ids.contains(&collection.id)
+        {
+            return Err(package_error(
+                "smart collection IDs must be unique across package entities",
+            ));
+        }
+        validate_smart_collection_fields(&collection.id, &collection.name, &collection.filters)
+            .map_err(|error| package_error(error.to_string()))?;
+        if !smart_collection_names.insert(collection.name.trim().to_lowercase()) {
+            return Err(package_error(
+                "smart collection names must be unique within the profile",
+            ));
+        }
+    }
+    let mut dynamic_shortcut_ids = std::collections::HashSet::new();
+    let mut dynamic_shortcut_names = std::collections::HashSet::new();
+    let package_targets: std::collections::HashMap<&str, (&str, bool)> = package
+        .resources
+        .resources
+        .iter()
+        .flat_map(|resource| {
+            resource
+                .targets
+                .iter()
+                .map(move |target| (target.id.as_str(), (resource.id.as_str(), target.active)))
+        })
+        .collect();
+    for shortcut in &package.profile.dynamic_shortcuts {
+        valid_uuid(&shortcut.id, "dynamic shortcut id")?;
+        valid_uuid(&shortcut.resource_id, "dynamic shortcut resource id")?;
+        if !dynamic_shortcut_ids.insert(shortcut.id.as_str())
+            || shortcut.id == package.profile.id
+            || resource_ids.contains(&shortcut.id)
+            || target_ids.contains(&shortcut.id)
+            || smart_collection_ids.contains(shortcut.id.as_str())
+        {
+            return Err(package_error(
+                "dynamic shortcut IDs must be unique across package entities",
+            ));
+        }
+        if shortcut.name.trim().is_empty()
+            || shortcut.name.trim().chars().count() > 100
+            || shortcut.name.chars().any(char::is_control)
+            || !membership_ids.contains(&shortcut.resource_id)
+        {
+            return Err(package_error(
+                "invalid dynamic shortcut name or resource membership",
+            ));
+        }
+        if let Some(target_id) = shortcut.target_id.as_deref() {
+            valid_uuid(target_id, "dynamic shortcut target id")?;
+            if !package_targets
+                .get(target_id)
+                .is_some_and(|(resource_id, active)| {
+                    *resource_id == shortcut.resource_id && *active
+                })
+            {
+                return Err(package_error(
+                    "dynamic shortcut target must be active and owned by its resource",
+                ));
+            }
+        }
+        if !dynamic_shortcut_names.insert(shortcut.name.trim().to_lowercase()) {
+            return Err(package_error(
+                "dynamic shortcut names must be unique within the profile",
             ));
         }
     }
@@ -1080,6 +1225,39 @@ fn profile_package_from_db(
     } else {
         None
     };
+    let mut smart_collection_stmt = conn.prepare(
+        "SELECT id,name,filters_json FROM smart_collections WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let smart_collections = smart_collection_stmt
+        .query_map([profile_id], |row| {
+            let filters_json: String = row.get(2)?;
+            let filters = serde_json::from_str(&filters_json).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    filters_json.len(),
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok(ProfilePackageSmartCollection {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                filters,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut dynamic_shortcut_stmt = conn.prepare(
+        "SELECT id,name,resource_id,target_id FROM dynamic_shortcuts WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let dynamic_shortcuts = dynamic_shortcut_stmt
+        .query_map([profile_id], |row| {
+            Ok(ProfilePackageDynamicShortcut {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                resource_id: row.get(2)?,
+                target_id: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let manifest = ProfilePackageManifest {
         format: "swprofile".into(),
         schema_version: 1,
@@ -1103,6 +1281,8 @@ fn profile_package_from_db(
             settings,
             memberships: membership_ids,
             membership_details: memberships,
+            smart_collections,
+            dynamic_shortcuts,
         },
         resources: ProfileResourcesDocument {
             schema_version: 1,
@@ -1241,7 +1421,19 @@ fn profile_import_preview_from_conn(
     conn: &Connection,
     package: &ValidatedProfilePackage,
     package_sha256: &str,
+    target_profile_id: Option<&str>,
 ) -> Result<ProfileImportPreview, AppError> {
+    if let Some(target_profile_id) = target_profile_id {
+        valid_uuid(target_profile_id, "target profile id")?;
+        let target_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+            [target_profile_id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if !target_exists {
+            return Err(AppError::NotFound);
+        }
+    }
     let profile_id_collision = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
         [&package.profile.id],
@@ -1294,22 +1486,75 @@ fn profile_import_preview_from_conn(
             }
         }
     }
+    let mut smart_collection_id_collisions = Vec::new();
+    let mut smart_collection_name_collisions = Vec::new();
+    for collection in &package.profile.smart_collections {
+        let id_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE id=?1)",
+            [&collection.id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if id_exists {
+            smart_collection_id_collisions.push(collection.id.clone());
+        }
+        let name_exists: bool = if let Some(target_profile_id) = target_profile_id {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+                params![target_profile_id, collection.name], |row| row.get::<_, i64>(0),
+            )? != 0
+        } else {
+            false
+        };
+        if name_exists {
+            smart_collection_name_collisions.push(collection.name.clone());
+        }
+    }
+    let mut dynamic_shortcut_id_collisions = Vec::new();
+    let mut dynamic_shortcut_name_collisions = Vec::new();
+    for shortcut in &package.profile.dynamic_shortcuts {
+        let id_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE id=?1)",
+            [&shortcut.id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if id_exists {
+            dynamic_shortcut_id_collisions.push(shortcut.id.clone());
+        }
+        let name_exists: bool = if let Some(target_profile_id) = target_profile_id {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+                params![target_profile_id, shortcut.name], |row| row.get::<_, i64>(0),
+            )? != 0
+        } else {
+            false
+        };
+        if name_exists {
+            dynamic_shortcut_name_collisions.push(shortcut.name.clone());
+        }
+    }
     let mut preview = ProfileImportPreview {
         package_sha256: package_sha256.into(),
         preview_token: String::new(),
         profile_id: package.profile.id.clone(),
         profile_name: package.profile.name.clone(),
+        target_profile_id: target_profile_id.map(str::to_string),
         resource_count: package.resources.resources.len(),
         layout_count: package.layouts.layouts.len(),
         history_event_count: package
             .history
             .as_ref()
             .map_or(0, |history| history.events.len()),
+        smart_collection_count: package.profile.smart_collections.len(),
+        dynamic_shortcut_count: package.profile.dynamic_shortcuts.len(),
         profile_id_collision,
         profile_name_collision,
         resource_id_collisions,
         target_id_collisions,
         resource_conflicts,
+        smart_collection_id_collisions,
+        smart_collection_name_collisions,
+        dynamic_shortcut_id_collisions,
+        dynamic_shortcut_name_collisions,
         asset_count: package.manifest.assets.len(),
     };
     preview.preview_token = profile_preview_token(&preview)?;
@@ -1476,6 +1721,241 @@ fn safe_import_settings(value: serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(object)
 }
 
+fn unique_smart_collection_name(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    requested: &str,
+) -> Result<String, AppError> {
+    let requested = requested.trim();
+    for suffix in 1..=1000 {
+        let candidate = if suffix == 1 {
+            requested.to_string()
+        } else {
+            let ending = format!(" (imported {suffix})");
+            let base: String = requested
+                .chars()
+                .take(100usize.saturating_sub(ending.chars().count()))
+                .collect();
+            format!("{}{}", base.trim_end(), ending)
+        };
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+            params![profile_id, candidate],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique smart collection name",
+    ))
+}
+
+fn fresh_smart_collection_id(tx: &Transaction<'_>) -> Result<String, AppError> {
+    for _ in 0..100 {
+        let id = Uuid::new_v4().to_string();
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE id=?1)",
+            [&id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(id);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique smart collection ID",
+    ))
+}
+
+fn import_profile_smart_collections(
+    tx: &Transaction<'_>,
+    package: &ValidatedProfilePackage,
+    target_profile_id: &str,
+    strategy: &str,
+) -> Result<(), AppError> {
+    for collection in &package.profile.smart_collections {
+        let existing_by_name_or_id: Option<(String, String)> = tx
+            .query_row(
+                "SELECT name,filters_json FROM smart_collections WHERE profile_id=?1 AND (id=?2 OR name=?3 COLLATE NOCASE) LIMIT 1",
+                params![target_profile_id, collection.id, collection.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if strategy == "merge" {
+            if let Some((existing_name, existing_filters_json)) = &existing_by_name_or_id {
+                let existing_filters: SmartCollectionFilters =
+                    serde_json::from_str(existing_filters_json)?;
+                if existing_name.eq_ignore_ascii_case(&collection.name)
+                    && existing_filters == collection.filters
+                {
+                    continue;
+                }
+            }
+        }
+        let id_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE id=?1)",
+            [&collection.id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        let id = if strategy == "duplicate" || id_exists {
+            fresh_smart_collection_id(tx)?
+        } else {
+            collection.id.clone()
+        };
+        let name = if existing_by_name_or_id.is_some() {
+            unique_smart_collection_name(tx, target_profile_id, &collection.name)?
+        } else {
+            collection.name.clone()
+        };
+        let existing_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM smart_collections WHERE profile_id=?1",
+            [target_profile_id],
+            |row| row.get(0),
+        )?;
+        if existing_count >= MAX_SMART_COLLECTIONS_PER_PROFILE {
+            return Err(package_error(
+                "profile would exceed the smart collection limit",
+            ));
+        }
+        let filters_json = serde_json::to_string(&collection.filters)?;
+        let timestamp = now_utc();
+        tx.execute(
+            "INSERT INTO smart_collections(id,profile_id,name,filters_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?5)",
+            params![id, target_profile_id, name, filters_json, timestamp],
+        )?;
+    }
+    Ok(())
+}
+
+fn unique_dynamic_shortcut_name(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    requested: &str,
+) -> Result<String, AppError> {
+    let requested = requested.trim();
+    for suffix in 1..=1000 {
+        let candidate = if suffix == 1 {
+            requested.to_string()
+        } else {
+            let ending = format!(" (imported {suffix})");
+            let base: String = requested
+                .chars()
+                .take(100usize.saturating_sub(ending.chars().count()))
+                .collect();
+            format!("{}{}", base.trim_end(), ending)
+        };
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+            params![profile_id, candidate],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique dynamic shortcut name",
+    ))
+}
+
+fn fresh_dynamic_shortcut_id(tx: &Transaction<'_>) -> Result<String, AppError> {
+    for _ in 0..100 {
+        let id = Uuid::new_v4().to_string();
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE id=?1)",
+            [&id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !exists {
+            return Ok(id);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique dynamic shortcut ID",
+    ))
+}
+
+fn import_profile_dynamic_shortcuts(
+    tx: &Transaction<'_>,
+    package: &ValidatedProfilePackage,
+    target_profile_id: &str,
+    strategy: &str,
+    resource_map: &std::collections::HashMap<String, String>,
+    target_map: &std::collections::HashMap<String, String>,
+) -> Result<(), AppError> {
+    for shortcut in &package.profile.dynamic_shortcuts {
+        let resource_id = resource_map
+            .get(&shortcut.resource_id)
+            .ok_or_else(|| package_error("dynamic shortcut resource mapping missing"))?;
+        let target_id = if let Some(source_target_id) = shortcut.target_id.as_ref() {
+            if let Some(mapped_id) = target_map.get(source_target_id) {
+                let active_and_owned: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)",
+                    params![mapped_id, resource_id],
+                    |row| row.get::<_, i64>(0).map(|value| value != 0),
+                )?;
+                active_and_owned.then(|| mapped_id.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let existing: Option<(String, String, Option<String>, String)> = tx
+            .query_row(
+                "SELECT id,resource_id,target_id,name FROM dynamic_shortcuts WHERE profile_id=?1 AND (id=?2 OR name=?3 COLLATE NOCASE) LIMIT 1",
+                params![target_profile_id, shortcut.id, shortcut.name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if strategy == "merge" {
+            if let Some((_existing_id, existing_resource, existing_target, existing_name)) =
+                &existing
+            {
+                if existing_name.eq_ignore_ascii_case(&shortcut.name)
+                    && existing_resource == resource_id
+                    && existing_target == &target_id
+                {
+                    continue;
+                }
+            }
+        }
+        let id_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE id=?1)",
+            [&shortcut.id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        let id = if strategy == "duplicate" || id_exists {
+            fresh_dynamic_shortcut_id(tx)?
+        } else {
+            shortcut.id.clone()
+        };
+        let name = if existing.is_some() {
+            unique_dynamic_shortcut_name(tx, target_profile_id, &shortcut.name)?
+        } else {
+            shortcut.name.clone()
+        };
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM dynamic_shortcuts WHERE profile_id=?1",
+            [target_profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_DYNAMIC_SHORTCUTS_PER_PROFILE {
+            return Err(package_error(
+                "profile would exceed the dynamic shortcut limit",
+            ));
+        }
+        let timestamp = now_utc();
+        tx.execute(
+            "INSERT INTO dynamic_shortcuts(id,profile_id,name,resource_id,target_id,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![id, target_profile_id, name, resource_id, target_id, timestamp],
+        )?;
+    }
+    Ok(())
+}
+
 fn import_profile_package(
     conn: &mut Connection,
     package: &ValidatedProfilePackage,
@@ -1553,6 +2033,14 @@ fn import_profile_package(
             [&target_id],
         )?;
         tx.execute("DELETE FROM layouts WHERE profile_id=?1", [&target_id])?;
+        tx.execute(
+            "DELETE FROM smart_collections WHERE profile_id=?1",
+            [&target_id],
+        )?;
+        tx.execute(
+            "DELETE FROM dynamic_shortcuts WHERE profile_id=?1",
+            [&target_id],
+        )?;
         tx.execute(
             "UPDATE profiles SET name=?2,theme_id=?3,settings_json=?4,updated_utc=?5 WHERE id=?1",
             params![target_id, profile_name, theme, settings_json, now],
@@ -1704,6 +2192,15 @@ fn import_profile_package(
         }
         imported_layouts += 1;
     }
+    import_profile_smart_collections(&tx, package, &target_id, strategy)?;
+    import_profile_dynamic_shortcuts(
+        &tx,
+        package,
+        &target_id,
+        strategy,
+        &resource_map,
+        &target_map,
+    )?;
     let mut imported_history_events = 0;
     if let Some(history) = &package.history {
         for event in &history.events {
@@ -1737,13 +2234,24 @@ fn import_profile_package_from_path(
     expected_package_sha256: &str,
     expected_preview_token: &str,
 ) -> Result<ProfileImportResult, AppError> {
+    if strategy == "duplicate" && target_profile_id.is_some() {
+        return Err(AppError::Invalid(
+            "duplicate imports do not use a target profile".into(),
+        ));
+    }
+    if strategy != "duplicate" && target_profile_id.is_none() {
+        return Err(AppError::Invalid(
+            "merge and replace imports require a target profile".into(),
+        ));
+    }
     let (package, package_sha256) = read_profile_package_with_digest(package_path)?;
     if package_sha256 != expected_package_sha256 {
         return Err(package_error(
             "profile package changed after preview; preview it again",
         ));
     }
-    let preview = profile_import_preview_from_conn(conn, &package, &package_sha256)?;
+    let preview =
+        profile_import_preview_from_conn(conn, &package, &package_sha256, target_profile_id)?;
     if preview.preview_token != expected_preview_token {
         return Err(package_error(
             "workspace changed after preview; review the updated preview",
@@ -2149,6 +2657,42 @@ CREATE TABLE IF NOT EXISTS layouts (
  updated_utc TEXT NOT NULL,
  PRIMARY KEY(profile_id,surface)
 );
+CREATE TABLE IF NOT EXISTS smart_collections (
+ id TEXT PRIMARY KEY,
+ profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100),
+ filters_json TEXT NOT NULL CHECK(length(filters_json) <= 4096),
+ created_utc TEXT NOT NULL,
+ updated_utc TEXT NOT NULL,
+ UNIQUE(profile_id,name COLLATE NOCASE)
+);
+CREATE INDEX IF NOT EXISTS idx_smart_collections_profile_name
+ ON smart_collections(profile_id,name COLLATE NOCASE);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_resource_id
+ ON resource_targets(resource_id,id);
+CREATE TABLE IF NOT EXISTS dynamic_shortcuts (
+ id TEXT PRIMARY KEY,
+ profile_id TEXT NOT NULL,
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100),
+ resource_id TEXT NOT NULL,
+ target_id TEXT,
+ created_utc TEXT NOT NULL,
+ updated_utc TEXT NOT NULL,
+ UNIQUE(profile_id,name COLLATE NOCASE),
+ FOREIGN KEY(profile_id,resource_id)
+   REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE,
+ FOREIGN KEY(resource_id,target_id)
+   REFERENCES resource_targets(resource_id,id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_dynamic_shortcuts_profile_name
+ ON dynamic_shortcuts(profile_id,name COLLATE NOCASE);
+CREATE TRIGGER IF NOT EXISTS prevent_deactivating_dynamic_shortcut_target
+BEFORE UPDATE OF active ON resource_targets
+WHEN OLD.active=1 AND NEW.active=0
+ AND EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE resource_id=OLD.resource_id AND target_id=OLD.id)
+BEGIN
+ SELECT RAISE(ABORT,'target is referenced by a dynamic shortcut');
+END;
 INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (1,'sw001-core-schema-v1',CURRENT_TIMESTAMP);
 "#;
 
@@ -2213,6 +2757,10 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
         "TEXT NOT NULL DEFAULT 'fresh'",
     )?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (4,'sw007-metadata-cache-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS smart_collections (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), filters_json TEXT NOT NULL CHECK(length(filters_json) <= 4096), created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,name COLLATE NOCASE)); CREATE INDEX IF NOT EXISTS idx_smart_collections_profile_name ON smart_collections(profile_id,name COLLATE NOCASE);")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (5,'sw013-profile-smart-collections-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_resource_id ON resource_targets(resource_id,id); CREATE TABLE IF NOT EXISTS dynamic_shortcuts (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), resource_id TEXT NOT NULL, target_id TEXT, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,name COLLATE NOCASE), FOREIGN KEY(profile_id,resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE, FOREIGN KEY(resource_id,target_id) REFERENCES resource_targets(resource_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_dynamic_shortcuts_profile_name ON dynamic_shortcuts(profile_id,name COLLATE NOCASE); CREATE TRIGGER IF NOT EXISTS prevent_deactivating_dynamic_shortcut_target BEFORE UPDATE OF active ON resource_targets WHEN OLD.active=1 AND NEW.active=0 AND EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE resource_id=OLD.resource_id AND target_id=OLD.id) BEGIN SELECT RAISE(ABORT,'target is referenced by a dynamic shortcut'); END;")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (6,'sw013-dynamic-shortcuts-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -3233,6 +3781,354 @@ fn profile_theme_set(
     profile_theme_set_on_conn(&mut conn, &profile_id, &theme)
 }
 
+fn validate_smart_collection_fields(
+    id: &str,
+    name: &str,
+    filters: &SmartCollectionFilters,
+) -> Result<(), AppError> {
+    valid_uuid(id, "smart collection id")?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err(AppError::Invalid(
+            "smart collection name must contain 1 to 100 printable characters".into(),
+        ));
+    }
+    if filters
+        .resource_type
+        .as_ref()
+        .is_some_and(|kind| !["file", "folder", "app", "shortcut", "url"].contains(&kind.as_str()))
+    {
+        return Err(AppError::Invalid(
+            "unsupported smart collection resource type".into(),
+        ));
+    }
+    for (field, value, maximum) in [
+        ("category", filters.category.as_ref(), 80usize),
+        ("tag", filters.tag.as_ref(), 80usize),
+        ("text", filters.text.as_ref(), 200usize),
+    ] {
+        if value.is_some_and(|value| {
+            value.trim().is_empty()
+                || value.chars().count() > maximum
+                || value.chars().any(char::is_control)
+        }) {
+            return Err(AppError::Invalid(format!(
+                "smart collection {field} must contain 1 to {maximum} printable characters"
+            )));
+        }
+    }
+    let encoded = serde_json::to_vec(filters)?;
+    if encoded.len() > 4096 {
+        return Err(AppError::Invalid(
+            "smart collection filters exceed size limit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppError> {
+    valid_uuid(&collection.profile_id, "profile id")?;
+    validate_smart_collection_fields(&collection.id, &collection.name, &collection.filters)
+}
+
+fn smart_collection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SmartCollection> {
+    let filters_json: String = row.get(3)?;
+    let filters = serde_json::from_str(&filters_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            filters_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(SmartCollection {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        name: row.get(2)?,
+        filters,
+    })
+}
+
+fn smart_collection_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<SmartCollection>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id,profile_id,name,filters_json FROM smart_collections WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let rows = stmt.query_map([profile_id], smart_collection_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
+#[tauri::command]
+fn smart_collection_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<SmartCollection>, AppError> {
+    let conn = lock(&state)?;
+    smart_collection_list_on_conn(&conn, &profile_id)
+}
+
+fn smart_collection_save_on_conn(
+    conn: &mut Connection,
+    mut collection: SmartCollection,
+) -> Result<SmartCollection, AppError> {
+    collection.name = collection.name.trim().to_string();
+    validate_smart_collection(&collection)?;
+    let tx = conn.transaction()?;
+    let profile_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&collection.profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let existing_profile: Option<String> = tx
+        .query_row(
+            "SELECT profile_id FROM smart_collections WHERE id=?1",
+            [&collection.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing_profile
+        .as_deref()
+        .is_some_and(|profile_id| profile_id != collection.profile_id)
+    {
+        return Err(AppError::NotFound);
+    }
+    let filters_json = serde_json::to_string(&collection.filters)?;
+    let timestamp = now_utc();
+    if existing_profile.is_none() {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM smart_collections WHERE profile_id=?1",
+            [&collection.profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_SMART_COLLECTIONS_PER_PROFILE {
+            return Err(AppError::Invalid(
+                "profile already has the maximum number of smart collections".into(),
+            ));
+        }
+    }
+    if existing_profile.is_some() {
+        tx.execute(
+            "UPDATE smart_collections SET name=?2,filters_json=?3,updated_utc=?4 WHERE id=?1 AND profile_id=?5",
+            params![collection.id, collection.name, filters_json, timestamp, collection.profile_id],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO smart_collections(id,profile_id,name,filters_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?5)",
+            params![collection.id, collection.profile_id, collection.name, filters_json, timestamp],
+        )?;
+    }
+    tx.commit()?;
+    Ok(collection)
+}
+
+#[tauri::command]
+fn smart_collection_save(
+    state: State<'_, AppState>,
+    collection: SmartCollection,
+) -> Result<SmartCollection, AppError> {
+    let mut conn = lock(&state)?;
+    smart_collection_save_on_conn(&mut conn, collection)
+}
+
+fn smart_collection_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "smart collection id")?;
+    let changed = conn.execute(
+        "DELETE FROM smart_collections WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn smart_collection_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    smart_collection_delete_on_conn(&conn, &profile_id, &id)
+}
+
+fn validate_dynamic_shortcut(shortcut: &DynamicShortcut) -> Result<(), AppError> {
+    valid_uuid(&shortcut.id, "dynamic shortcut id")?;
+    valid_uuid(&shortcut.profile_id, "profile id")?;
+    valid_uuid(&shortcut.resource_id, "resource id")?;
+    if shortcut.name.trim().is_empty()
+        || shortcut.name.trim().chars().count() > 100
+        || shortcut.name.chars().any(char::is_control)
+    {
+        return Err(AppError::Invalid(
+            "dynamic shortcut name must contain 1 to 100 printable characters".into(),
+        ));
+    }
+    if let Some(target_id) = shortcut.target_id.as_deref() {
+        valid_uuid(target_id, "target id")?;
+    }
+    Ok(())
+}
+
+fn dynamic_shortcut_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicShortcut> {
+    Ok(DynamicShortcut {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        name: row.get(2)?,
+        resource_id: row.get(3)?,
+        target_id: row.get(4)?,
+    })
+}
+
+fn dynamic_shortcut_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<DynamicShortcut>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id,profile_id,name,resource_id,target_id FROM dynamic_shortcuts WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let rows = stmt.query_map([profile_id], dynamic_shortcut_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
+#[tauri::command]
+fn dynamic_shortcut_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<DynamicShortcut>, AppError> {
+    let conn = lock(&state)?;
+    dynamic_shortcut_list_on_conn(&conn, &profile_id)
+}
+
+fn dynamic_shortcut_save_on_conn(
+    conn: &mut Connection,
+    mut shortcut: DynamicShortcut,
+) -> Result<DynamicShortcut, AppError> {
+    shortcut.name = shortcut.name.trim().to_string();
+    validate_dynamic_shortcut(&shortcut)?;
+    let tx = conn.transaction()?;
+    let member: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles p JOIN profile_resources pr ON pr.profile_id=p.id WHERE p.id=?1 AND pr.resource_id=?2)",
+        params![shortcut.profile_id, shortcut.resource_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !member {
+        return Err(AppError::NotFound);
+    }
+    if let Some(target_id) = shortcut.target_id.as_deref() {
+        let owned_active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)",
+            params![target_id, shortcut.resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !owned_active {
+            return Err(AppError::NotFound);
+        }
+    }
+    let existing_profile: Option<String> = tx
+        .query_row(
+            "SELECT profile_id FROM dynamic_shortcuts WHERE id=?1",
+            [&shortcut.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing_profile
+        .as_deref()
+        .is_some_and(|profile_id| profile_id != shortcut.profile_id)
+    {
+        return Err(AppError::NotFound);
+    }
+    if existing_profile.is_none() {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM dynamic_shortcuts WHERE profile_id=?1",
+            [&shortcut.profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_DYNAMIC_SHORTCUTS_PER_PROFILE {
+            return Err(AppError::Invalid(
+                "profile already has the maximum number of dynamic shortcuts".into(),
+            ));
+        }
+    }
+    let now = now_utc();
+    if existing_profile.is_some() {
+        tx.execute(
+            "UPDATE dynamic_shortcuts SET name=?2,resource_id=?3,target_id=?4,updated_utc=?5 WHERE id=?1 AND profile_id=?6",
+            params![shortcut.id, shortcut.name, shortcut.resource_id, shortcut.target_id, now, shortcut.profile_id],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO dynamic_shortcuts(id,profile_id,name,resource_id,target_id,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![shortcut.id, shortcut.profile_id, shortcut.name, shortcut.resource_id, shortcut.target_id, now],
+        )?;
+    }
+    tx.commit()?;
+    Ok(shortcut)
+}
+
+#[tauri::command]
+fn dynamic_shortcut_save(
+    state: State<'_, AppState>,
+    shortcut: DynamicShortcut,
+) -> Result<DynamicShortcut, AppError> {
+    let mut conn = lock(&state)?;
+    dynamic_shortcut_save_on_conn(&mut conn, shortcut)
+}
+
+fn dynamic_shortcut_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "dynamic shortcut id")?;
+    let changed = conn.execute(
+        "DELETE FROM dynamic_shortcuts WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn dynamic_shortcut_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    dynamic_shortcut_delete_on_conn(&conn, &profile_id, &id)
+}
+
 #[tauri::command]
 fn profile_export(
     state: State<'_, AppState>,
@@ -3263,10 +4159,16 @@ fn profile_export(
 fn profile_import_preview(
     state: State<'_, AppState>,
     package_path: String,
+    target_profile_id: Option<String>,
 ) -> Result<ProfileImportPreview, AppError> {
     let (package, package_sha256) = read_profile_package_with_digest(Path::new(&package_path))?;
     let conn = lock(&state)?;
-    profile_import_preview_from_conn(&conn, &package, &package_sha256)
+    profile_import_preview_from_conn(
+        &conn,
+        &package,
+        &package_sha256,
+        target_profile_id.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -4116,6 +5018,12 @@ pub fn run() {
             profile_list,
             profile_create,
             profile_theme_set,
+            smart_collection_list,
+            smart_collection_save,
+            smart_collection_delete,
+            dynamic_shortcut_list,
+            dynamic_shortcut_save,
+            dynamic_shortcut_delete,
             profile_export,
             profile_import_preview,
             profile_import_commit,
@@ -4386,6 +5294,8 @@ mod tests {
                 category: Some("Work".into()),
                 sort_position: 0,
             }],
+            smart_collections: Vec::new(),
+            dynamic_shortcuts: Vec::new(),
         };
         let package = ValidatedProfilePackage {
             manifest: ProfilePackageManifest {
@@ -4553,7 +5463,8 @@ mod tests {
         )
         .unwrap();
         let preview =
-            profile_import_preview_from_conn(&conn, &package, "a".repeat(64).as_str()).unwrap();
+            profile_import_preview_from_conn(&conn, &package, "a".repeat(64).as_str(), None)
+                .unwrap();
         assert_eq!(preview.resource_conflicts.len(), 1);
         let conflict = &preview.resource_conflicts[0];
         assert_eq!(conflict.resolution, "import_as_new");
@@ -4584,6 +5495,86 @@ mod tests {
     }
 
     #[test]
+    fn profile_import_preview_binds_target_and_shows_collection_shortcut_collisions() {
+        let mut conn = database();
+        let mut package = package("file");
+        let collection = ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Work items".into(),
+            filters: SmartCollectionFilters::default(),
+        };
+        let shortcut = ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Pinned item".into(),
+            resource_id: package.resources.resources[0].id.clone(),
+            target_id: Some(package.resources.resources[0].targets[0].id.clone()),
+        };
+        package.profile.smart_collections = vec![collection.clone()];
+        package.profile.dynamic_shortcuts = vec![shortcut.clone()];
+        let target_profile = profile(&conn);
+        package.profile.id = target_profile.clone();
+        validate_package_fields(&package).unwrap();
+        install_package_resource(&mut conn, &package, &target_profile);
+        smart_collection_save_on_conn(
+            &mut conn,
+            SmartCollection {
+                id: collection.id.clone(),
+                profile_id: target_profile.clone(),
+                name: collection.name.clone(),
+                filters: collection.filters.clone(),
+            },
+        )
+        .unwrap();
+        dynamic_shortcut_save_on_conn(
+            &mut conn,
+            DynamicShortcut {
+                id: shortcut.id.clone(),
+                profile_id: target_profile.clone(),
+                name: shortcut.name.clone(),
+                resource_id: shortcut.resource_id.clone(),
+                target_id: shortcut.target_id.clone(),
+            },
+        )
+        .unwrap();
+
+        let default_preview =
+            profile_import_preview_from_conn(&conn, &package, &"a".repeat(64), None).unwrap();
+        assert_eq!(default_preview.target_profile_id, None);
+        assert!(default_preview.smart_collection_name_collisions.is_empty());
+        assert!(default_preview.dynamic_shortcut_name_collisions.is_empty());
+        let targeted_preview = profile_import_preview_from_conn(
+            &conn,
+            &package,
+            &"a".repeat(64),
+            Some(&target_profile),
+        )
+        .unwrap();
+        assert_eq!(targeted_preview.target_profile_id, Some(target_profile));
+        assert_eq!(targeted_preview.smart_collection_count, 1);
+        assert_eq!(targeted_preview.dynamic_shortcut_count, 1);
+        assert_eq!(
+            targeted_preview.smart_collection_id_collisions,
+            vec![collection.id.clone()]
+        );
+        assert_eq!(
+            targeted_preview.smart_collection_name_collisions,
+            vec![collection.name]
+        );
+        assert_eq!(
+            targeted_preview.dynamic_shortcut_id_collisions,
+            vec![shortcut.id.clone()]
+        );
+        assert_eq!(
+            targeted_preview.dynamic_shortcut_name_collisions,
+            vec![shortcut.name]
+        );
+        assert_ne!(
+            default_preview.preview_token,
+            targeted_preview.preview_token
+        );
+    }
+
+    #[test]
     fn profile_import_commit_rejects_changed_package_or_workspace_after_preview() {
         let mut conn = database();
         let mut package = package("url");
@@ -4595,7 +5586,26 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         let (parsed, digest) = read_profile_package_with_digest(&path).unwrap();
-        let preview = profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+        let preview = profile_import_preview_from_conn(&conn, &parsed, &digest, None).unwrap();
+
+        let profile_count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert!(matches!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "merge",
+                None,
+                &preview.package_sha256,
+                &preview.preview_token,
+            ),
+            Err(AppError::Invalid(_))
+        ));
+        let profile_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(profile_count_after, profile_count_before);
 
         let local_profile = Uuid::new_v4().to_string();
         let timestamp = now_utc();
@@ -4617,7 +5627,7 @@ mod tests {
         );
 
         let preview_after_workspace_change =
-            profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+            profile_import_preview_from_conn(&conn, &parsed, &digest, None).unwrap();
         package.profile.name = "Changed package after preview".into();
         archive_entries = serialized_documents(&package);
         let changed_path = write_test_archive(
@@ -4660,6 +5670,174 @@ mod tests {
             before, after,
             "failed import must roll back profile creation"
         );
+    }
+
+    #[test]
+    fn profile_export_import_roundtrip_preserves_smart_collections_and_old_packages_default_empty()
+    {
+        let mut conn = database();
+        let source_profile = profile(&conn);
+        let source_collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: source_profile.clone(),
+            name: "Quarterly files".into(),
+            filters: SmartCollectionFilters {
+                resource_type: Some("file".into()),
+                category: Some("Finance".into()),
+                tag: Some("reports".into()),
+                favorite_only: Some(true),
+                text: Some("quarterly".into()),
+            },
+        };
+        smart_collection_save_on_conn(&mut conn, source_collection.clone()).unwrap();
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &source_profile, &path, false).unwrap();
+        let package = read_profile_package(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(package.profile.smart_collections.len(), 1);
+        assert_eq!(
+            package.profile.smart_collections[0].filters,
+            source_collection.filters
+        );
+
+        let mut old_package = package.clone();
+        let mut old_profile_json = serde_json::to_value(&old_package.profile).unwrap();
+        old_profile_json
+            .as_object_mut()
+            .unwrap()
+            .remove("smart_collections");
+        old_package.profile = serde_json::from_value(old_profile_json).unwrap();
+        assert!(old_package.profile.smart_collections.is_empty());
+        validate_package_fields(&old_package).unwrap();
+
+        let imported = import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
+        let imported_collections =
+            smart_collection_list_on_conn(&conn, &imported.profile_id).unwrap();
+        assert_eq!(imported_collections.len(), 1);
+        assert_ne!(imported_collections[0].id, source_collection.id);
+        assert_eq!(imported_collections[0].name, source_collection.name);
+        assert_eq!(imported_collections[0].filters, source_collection.filters);
+    }
+
+    #[test]
+    fn profile_import_merge_remaps_smart_collection_id_and_name_collisions() {
+        let mut conn = database();
+        let mut package = package("url");
+        let imported_collection = ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Reports".into(),
+            filters: SmartCollectionFilters {
+                text: Some("quarterly".into()),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        package.profile.smart_collections = vec![imported_collection.clone()];
+        validate_package_fields(&package).unwrap();
+        let target_profile = profile(&conn);
+        smart_collection_save_on_conn(
+            &mut conn,
+            SmartCollection {
+                id: imported_collection.id.clone(),
+                profile_id: target_profile.clone(),
+                name: imported_collection.name.clone(),
+                filters: SmartCollectionFilters {
+                    text: Some("annual".into()),
+                    ..SmartCollectionFilters::default()
+                },
+            },
+        )
+        .unwrap();
+
+        import_profile_package(&mut conn, &package, "merge", Some(&target_profile)).unwrap();
+        let collections = smart_collection_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(collections.len(), 2);
+        let remapped = collections
+            .iter()
+            .find(|item| item.name.starts_with("Reports (imported"))
+            .unwrap();
+        assert_ne!(remapped.id, imported_collection.id);
+        assert_eq!(remapped.filters, imported_collection.filters);
+    }
+
+    #[test]
+    fn profile_import_replace_replaces_smart_collections() {
+        let mut conn = database();
+        let mut package = package("url");
+        let incoming = ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming".into(),
+            filters: SmartCollectionFilters {
+                favorite_only: Some(true),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        package.profile.smart_collections = vec![incoming.clone()];
+        let target_profile = profile(&conn);
+        smart_collection_save_on_conn(
+            &mut conn,
+            SmartCollection {
+                id: Uuid::new_v4().to_string(),
+                profile_id: target_profile.clone(),
+                name: "Old collection".into(),
+                filters: SmartCollectionFilters::default(),
+            },
+        )
+        .unwrap();
+
+        import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).unwrap();
+        let collections = smart_collection_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(collections.len(), 1);
+        assert_eq!(collections[0].id, incoming.id);
+        assert_eq!(collections[0].name, incoming.name);
+        assert_eq!(collections[0].filters, incoming.filters);
+    }
+
+    #[test]
+    fn profile_import_rolls_back_smart_collections_and_resources_on_collection_failure() {
+        let mut conn = database();
+        let mut package = package("url");
+        package.profile.smart_collections = vec![ProfilePackageSmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming".into(),
+            filters: SmartCollectionFilters::default(),
+        }];
+        let target_profile = profile(&conn);
+        let original_collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Original".into(),
+            filters: SmartCollectionFilters::default(),
+        };
+        smart_collection_save_on_conn(&mut conn, original_collection.clone()).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_smart_collection_import BEFORE INSERT ON smart_collections BEGIN SELECT RAISE(ABORT,'injected smart collection failure'); END;").unwrap();
+
+        assert!(
+            import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).is_err()
+        );
+        let profile_name: String = conn
+            .query_row(
+                "SELECT name FROM profiles WHERE id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_name, "Work");
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &target_profile).unwrap(),
+            vec![original_collection]
+        );
+        let resource_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(resource_count, 0);
+        let membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(membership_count, 0);
     }
 
     #[test]
@@ -5215,6 +6393,382 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn smart_collections_are_profile_scoped_validated_and_upserted() {
+        let mut conn = database();
+        let first_profile = profile(&conn);
+        let second_profile = profile(&conn);
+        conn.execute(
+            "UPDATE profiles SET name='Other profile' WHERE id=?1",
+            [&second_profile],
+        )
+        .unwrap();
+        let collection_id = Uuid::new_v4().to_string();
+        let collection = SmartCollection {
+            id: collection_id.clone(),
+            profile_id: first_profile.clone(),
+            name: "  Work files  ".into(),
+            filters: SmartCollectionFilters {
+                resource_type: Some("file".into()),
+                category: Some("Work".into()),
+                tag: Some("important".into()),
+                favorite_only: Some(true),
+                text: Some("quarterly".into()),
+            },
+        };
+        let saved = smart_collection_save_on_conn(&mut conn, collection.clone()).unwrap();
+        assert_eq!(saved.name, "Work files");
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &first_profile).unwrap(),
+            vec![saved.clone()]
+        );
+        assert!(smart_collection_list_on_conn(&conn, &second_profile)
+            .unwrap()
+            .is_empty());
+
+        let updated = SmartCollection {
+            name: "Quarterly reports".into(),
+            filters: SmartCollectionFilters {
+                text: Some("reports".into()),
+                favorite_only: Some(false),
+                ..SmartCollectionFilters::default()
+            },
+            ..saved
+        };
+        let updated = smart_collection_save_on_conn(&mut conn, updated.clone()).unwrap();
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &first_profile).unwrap(),
+            vec![updated.clone()]
+        );
+
+        let wrong_owner = SmartCollection {
+            profile_id: second_profile.clone(),
+            ..updated.clone()
+        };
+        assert!(matches!(
+            smart_collection_save_on_conn(&mut conn, wrong_owner),
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            smart_collection_delete_on_conn(&conn, &second_profile, &collection_id),
+            Err(AppError::NotFound)
+        ));
+        smart_collection_delete_on_conn(&conn, &first_profile, &collection_id).unwrap();
+        assert!(smart_collection_list_on_conn(&conn, &first_profile)
+            .unwrap()
+            .is_empty());
+
+        let duplicate_name = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: first_profile.clone(),
+            name: "Same name".into(),
+            filters: SmartCollectionFilters::default(),
+        };
+        smart_collection_save_on_conn(&mut conn, duplicate_name.clone()).unwrap();
+        let duplicate = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "same NAME".into(),
+            ..duplicate_name
+        };
+        assert!(smart_collection_save_on_conn(&mut conn, duplicate).is_err());
+    }
+
+    #[test]
+    fn smart_collection_filter_dsl_rejects_unknown_fields_and_unbounded_values() {
+        assert!(
+            serde_json::from_value::<SmartCollectionFilters>(serde_json::json!({
+                "resourceType": "file", "sql": "DROP TABLE resources"
+            }))
+            .is_err()
+        );
+        let collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: Uuid::new_v4().to_string(),
+            name: "Valid name".into(),
+            filters: SmartCollectionFilters {
+                text: Some("x".repeat(201)),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        assert!(validate_smart_collection(&collection).is_err());
+        let control_value = SmartCollection {
+            filters: SmartCollectionFilters {
+                category: Some("Work\nFiles".into()),
+                ..SmartCollectionFilters::default()
+            },
+            ..SmartCollection {
+                id: Uuid::new_v4().to_string(),
+                profile_id: Uuid::new_v4().to_string(),
+                name: "Valid name".into(),
+                filters: SmartCollectionFilters::default(),
+            }
+        };
+        assert!(validate_smart_collection(&control_value).is_err());
+        let invalid_type = SmartCollection {
+            filters: SmartCollectionFilters {
+                resource_type: Some("script".into()),
+                ..SmartCollectionFilters::default()
+            },
+            ..collection
+        };
+        assert!(validate_smart_collection(&invalid_type).is_err());
+    }
+
+    #[test]
+    fn dynamic_shortcuts_are_profile_scoped_and_validate_membership_targets_and_names() {
+        let mut conn = database();
+        let source = package("file");
+        let resource_id = source.resources.resources[0].id.clone();
+        let target_id = source.resources.resources[0].targets[0].id.clone();
+        let imported_profile = import_profile_package(&mut conn, &source, "duplicate", None)
+            .unwrap()
+            .profile_id;
+        let imported_resource: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1",
+                [&imported_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let imported_target: String = conn
+            .query_row(
+                "SELECT id FROM resource_targets WHERE resource_id=?1",
+                [&imported_resource],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let first = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: imported_profile.clone(),
+            name: "  Quick Calculator  ".into(),
+            resource_id: imported_resource.clone(),
+            target_id: Some(imported_target.clone()),
+        };
+        let saved = dynamic_shortcut_save_on_conn(&mut conn, first.clone()).unwrap();
+        assert_eq!(saved.name, "Quick Calculator");
+        assert_eq!(
+            dynamic_shortcut_list_on_conn(&conn, &imported_profile).unwrap(),
+            vec![saved.clone()]
+        );
+
+        let other_profile = profile(&conn);
+        assert!(dynamic_shortcut_list_on_conn(&conn, &other_profile)
+            .unwrap()
+            .is_empty());
+        let wrong_owner = DynamicShortcut {
+            profile_id: other_profile.clone(),
+            ..saved.clone()
+        };
+        assert!(matches!(
+            dynamic_shortcut_save_on_conn(&mut conn, wrong_owner),
+            Err(AppError::NotFound)
+        ));
+        let wrong_target = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Wrong target".into(),
+            target_id: Some(target_id),
+            ..saved.clone()
+        };
+        assert!(matches!(
+            dynamic_shortcut_save_on_conn(&mut conn, wrong_target),
+            Err(AppError::NotFound)
+        ));
+        let unmembered = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Unmembered".into(),
+            resource_id,
+            target_id: None,
+            ..saved.clone()
+        };
+        assert!(matches!(
+            dynamic_shortcut_save_on_conn(&mut conn, unmembered),
+            Err(AppError::NotFound)
+        ));
+        let duplicate_name = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "quick calculator".into(),
+            ..saved.clone()
+        };
+        assert!(dynamic_shortcut_save_on_conn(&mut conn, duplicate_name).is_err());
+        let invalid_name = DynamicShortcut {
+            name: "Bad\nName".into(),
+            ..saved.clone()
+        };
+        assert!(validate_dynamic_shortcut(&invalid_name).is_err());
+        dynamic_shortcut_delete_on_conn(&conn, &imported_profile, &saved.id).unwrap();
+        assert!(dynamic_shortcut_list_on_conn(&conn, &imported_profile)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn dynamic_shortcuts_roundtrip_and_duplicate_import_remaps_ids_and_names() {
+        let mut conn = database();
+        let mut source = package("file");
+        let source_shortcut = ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Pinned calculator".into(),
+            resource_id: source.resources.resources[0].id.clone(),
+            target_id: Some(source.resources.resources[0].targets[0].id.clone()),
+        };
+        source.profile.dynamic_shortcuts = vec![source_shortcut.clone()];
+        validate_package_fields(&source).unwrap();
+        let first = import_profile_package(&mut conn, &source, "duplicate", None).unwrap();
+        let first_records = dynamic_shortcut_list_on_conn(&conn, &first.profile_id).unwrap();
+        assert_eq!(first_records.len(), 1);
+        assert_ne!(first_records[0].id, source_shortcut.id);
+        let exported = profile_package_from_db(&conn, &first.profile_id, false).unwrap();
+        assert_eq!(exported.profile.dynamic_shortcuts.len(), 1);
+        assert_eq!(
+            exported.profile.dynamic_shortcuts[0].name,
+            "Pinned calculator"
+        );
+        assert!(exported.history.is_none());
+
+        let second = import_profile_package(&mut conn, &source, "duplicate", None).unwrap();
+        let second_records = dynamic_shortcut_list_on_conn(&conn, &second.profile_id).unwrap();
+        assert_eq!(second_records.len(), 1);
+        assert_ne!(second_records[0].id, first_records[0].id);
+        assert_eq!(second_records[0].name, "Pinned calculator");
+    }
+
+    #[test]
+    fn dynamic_shortcut_merge_collision_preserves_existing_and_allocates_unique_name() {
+        let mut conn = database();
+        let mut source = package("file");
+        let package_shortcut = ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Pinned item".into(),
+            resource_id: source.resources.resources[0].id.clone(),
+            target_id: Some(source.resources.resources[0].targets[0].id.clone()),
+        };
+        source.profile.dynamic_shortcuts = vec![package_shortcut.clone()];
+        let target_profile = profile(&conn);
+        install_package_resource(&mut conn, &source, &target_profile);
+        let existing = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: package_shortcut.name.clone(),
+            resource_id: package_shortcut.resource_id.clone(),
+            target_id: None,
+        };
+        let existing = dynamic_shortcut_save_on_conn(&mut conn, existing).unwrap();
+
+        import_profile_package(&mut conn, &source, "merge", Some(&target_profile)).unwrap();
+        let records = dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records
+            .iter()
+            .any(|item| item.id == existing.id && item.target_id.is_none()));
+        assert!(records
+            .iter()
+            .any(|item| item.name == "Pinned item (imported 2)"));
+    }
+
+    #[test]
+    fn profile_import_replace_replaces_dynamic_shortcuts_and_remaps_references() {
+        let mut conn = database();
+        let mut package = package("url");
+        let incoming = ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming shortcut".into(),
+            resource_id: package.resources.resources[0].id.clone(),
+            target_id: Some(package.resources.resources[0].targets[0].id.clone()),
+        };
+        package.profile.dynamic_shortcuts = vec![incoming.clone()];
+        validate_package_fields(&package).unwrap();
+
+        let target_profile = profile(&conn);
+        let old_resource = resource("Existing local resource");
+        persist_resource(&mut conn, &old_resource, true, Some(&target_profile)).unwrap();
+        let old_shortcut = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Old shortcut".into(),
+            resource_id: old_resource.id.clone(),
+            target_id: Some(old_resource.targets[0].id.clone()),
+        };
+        dynamic_shortcut_save_on_conn(&mut conn, old_shortcut.clone()).unwrap();
+
+        import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).unwrap();
+        let shortcuts = dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(shortcuts.len(), 1);
+        assert_eq!(shortcuts[0].id, incoming.id);
+        assert_eq!(shortcuts[0].name, incoming.name);
+        assert_ne!(shortcuts[0].resource_id, incoming.resource_id);
+        assert_ne!(
+            shortcuts[0].target_id.as_deref(),
+            incoming.target_id.as_deref()
+        );
+        assert_eq!(shortcuts[0].profile_id, target_profile);
+        let is_member: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+                params![target_profile, shortcuts[0].resource_id],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )
+            .unwrap();
+        assert!(is_member);
+        assert_ne!(shortcuts[0].id, old_shortcut.id);
+    }
+
+    #[test]
+    fn profile_import_rolls_back_replace_when_dynamic_shortcut_insert_fails() {
+        let mut conn = database();
+        let mut package = package("url");
+        package.profile.dynamic_shortcuts = vec![ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming shortcut".into(),
+            resource_id: package.resources.resources[0].id.clone(),
+            target_id: Some(package.resources.resources[0].targets[0].id.clone()),
+        }];
+        validate_package_fields(&package).unwrap();
+
+        let target_profile = profile(&conn);
+        let old_resource = resource("Existing local resource");
+        persist_resource(&mut conn, &old_resource, true, Some(&target_profile)).unwrap();
+        let old_shortcut = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Old shortcut".into(),
+            resource_id: old_resource.id.clone(),
+            target_id: Some(old_resource.targets[0].id.clone()),
+        };
+        dynamic_shortcut_save_on_conn(&mut conn, old_shortcut.clone()).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_dynamic_shortcut_import BEFORE INSERT ON dynamic_shortcuts BEGIN SELECT RAISE(ABORT,'injected dynamic shortcut failure'); END;").unwrap();
+        let resource_count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(
+            import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).is_err()
+        );
+        let profile_name: String = conn
+            .query_row(
+                "SELECT name FROM profiles WHERE id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_name, "Work");
+        assert_eq!(
+            dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap(),
+            vec![old_shortcut]
+        );
+        let incoming_membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+                params![target_profile, package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(incoming_membership_count, 0);
+        let resource_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(resource_count_after, resource_count_before);
     }
 
     #[test]
@@ -5887,7 +7441,18 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 6);
+        let table_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(table_exists, 1);
+        let shortcuts_exist: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='dynamic_shortcuts'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(shortcuts_exist, 1);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",

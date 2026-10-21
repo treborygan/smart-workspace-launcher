@@ -124,6 +124,64 @@ describe("profile theme API", () => {
   });
 });
 
+describe("smart collections API", () => {
+  const collection = { id: "c1", profileId: "p1", name: "Planning files", filters: { resourceType: "file" as const, tag: "planning", favoriteOnly: true } };
+  it("persists collection definitions through typed native commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeTyped.mockResolvedValueOnce([collection]).mockResolvedValueOnce(collection).mockResolvedValueOnce(undefined);
+    expect(await api.smartCollections("p1")).toEqual([collection]);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "smart_collection_list", { profileId: "p1" });
+    expect(await api.saveSmartCollection(collection)).toEqual(collection);
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "smart_collection_save", { collection });
+    await api.deleteSmartCollection("p1", "c1");
+    expect(invokeTyped).toHaveBeenNthCalledWith(3, "smart_collection_delete", { profileId: "p1", id: "c1" });
+    expect(emitTyped).toHaveBeenNthCalledWith(1, "workspace-state-changed", { profileId: "p1" });
+    expect(emitTyped).toHaveBeenNthCalledWith(2, "workspace-state-changed", { profileId: "p1" });
+  });
+  it("keeps browser-preview collections isolated by profile and supports reload reads", async () => {
+    await api.saveSmartCollection(collection);
+    expect(await api.smartCollections("p1")).toEqual([collection]);
+    expect(await api.smartCollections("p2")).toEqual([]);
+    const updated = { ...collection, name: "Updated planning" };
+    await api.saveSmartCollection(updated);
+    expect(await api.smartCollections("p1")).toEqual([updated]);
+    await api.deleteSmartCollection("p1", "c1");
+    expect(await api.smartCollections("p1")).toEqual([]);
+    expect(localStorage.getItem("swl-smart-collections-p2")).toBeNull();
+  });
+});
+
+describe("dynamic shortcut API", () => {
+  const shortcut = { id: "ds1", profileId: "p1", name: "Weekly report", resourceId: "r1", targetId: "t1" };
+  it("uses typed profile-scoped list/save/delete commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeTyped.mockResolvedValueOnce([shortcut]).mockResolvedValueOnce(shortcut).mockResolvedValueOnce(undefined);
+    expect(await api.dynamicShortcuts("p1")).toEqual([shortcut]);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "dynamic_shortcut_list", { profileId: "p1" });
+    expect(await api.saveDynamicShortcut(shortcut)).toEqual(shortcut);
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "dynamic_shortcut_save", { shortcut });
+    await api.deleteDynamicShortcut("p1", "ds1");
+    expect(invokeTyped).toHaveBeenNthCalledWith(3, "dynamic_shortcut_delete", { profileId: "p1", id: "ds1" });
+    expect(emitTyped).toHaveBeenNthCalledWith(1, "workspace-state-changed", { profileId: "p1" });
+    expect(emitTyped).toHaveBeenNthCalledWith(2, "workspace-state-changed", { profileId: "p1" });
+  });
+  it("keeps browser preview shortcuts isolated and persistent per profile", async () => {
+    await api.saveDynamicShortcut(shortcut);
+    expect(await api.dynamicShortcuts("p1")).toEqual([shortcut]);
+    expect(await api.dynamicShortcuts("p2")).toEqual([]);
+    await api.deleteDynamicShortcut("p1", "ds1");
+    expect(await api.dynamicShortcuts("p1")).toEqual([]);
+    expect(localStorage.getItem("swl-dynamic-shortcuts-p2")).toBeNull();
+  });
+  it("launches only the referenced resource with the selected target through the normal command", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const result = { requestId: "q1", status: "handed_off", launchedAtUtc: "2026-01-01T00:00:00Z" };
+    invokeTyped.mockResolvedValue(result);
+    expect(await api.launch(shortcut.resourceId, "quick_launch", shortcut.profileId, shortcut.targetId)).toEqual(result);
+    expect(invokeTyped).toHaveBeenCalledWith("resource_launch", { request: expect.objectContaining({ resourceId: "r1", targetId: "t1", profileId: "p1", source: "quick_launch" }) });
+  });
+});
+
 describe("metadata and analytics API", () => {
   it("calls the typed inspection and event summary commands with exact payloads", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
@@ -153,17 +211,19 @@ describe("metadata and analytics API", () => {
 describe("profile archive API", () => {
   it("uses the frozen typed preview, export and commit boundaries", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    const preview = { profileId: "p", profileName: "Work", packageSha256: "sha256", previewToken: "preview-token", resourceCount: 3, layoutCount: 1, historyEventCount: 2, profileIdCollision: true, profileNameCollision: true, resourceIdCollisions: ["r1"], targetIdCollisions: [], resourceConflicts: [], assetCount: 0 };
+    const preview = { profileId: "p", profileName: "Work", targetProfileId: "p", packageSha256: "sha256", previewToken: "preview-token", resourceCount: 3, layoutCount: 1, historyEventCount: 2, smartCollectionCount: 1, dynamicShortcutCount: 2, profileIdCollision: true, profileNameCollision: true, resourceIdCollisions: ["r1"], targetIdCollisions: [], smartCollectionIdCollisions: [], smartCollectionNameCollisions: [], dynamicShortcutIdCollisions: [], dynamicShortcutNameCollisions: [], resourceConflicts: [], assetCount: 0 };
     const exported = { path: "C:\\Work.swprofile", profileName: "Work", resourceCount: 3, historyEventCount: 2 };
     const imported = { profileId: "p2", profileName: "Work (2)", importedResources: 3, reusedResources: 0, importedLayouts: 1, importedHistoryEvents: 2 };
-    invokeTyped.mockResolvedValueOnce(exported).mockResolvedValueOnce(preview).mockResolvedValueOnce(imported);
+    invokeTyped.mockResolvedValueOnce(exported).mockResolvedValueOnce(preview).mockResolvedValueOnce(preview).mockResolvedValueOnce(imported);
     expect(await api.exportProfile("p", exported.path, true)).toEqual(exported);
     expect(await api.previewProfileImport(exported.path)).toEqual(preview);
+    expect(await api.previewProfileImport(exported.path, "p")).toEqual(preview);
     expect(await api.commitProfileImport(exported.path, "replace", "p", preview.packageSha256, preview.previewToken)).toEqual(imported);
     expect(emitTyped).toHaveBeenCalledWith("workspace-state-changed", { profileId: "p2" });
     expect(invokeTyped.mock.calls).toEqual([
       ["profile_export", { profileId: "p", outputPath: exported.path, includeHistory: true }],
       ["profile_import_preview", { packagePath: exported.path }],
+      ["profile_import_preview", { packagePath: exported.path, targetProfileId: "p" }],
       ["profile_import_commit", { packagePath: exported.path, strategy: "replace", targetProfileId: "p", packageSha256: "sha256", previewToken: "preview-token" }],
     ]);
   });

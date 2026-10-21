@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 19:25 UTC. Coordinator: `feature/sw-001-bootstrap`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-001 #1](https://github.com/treborygan/smart-workspace-launcher/issues/1). Implementation work is active; no PR has been opened yet.
+Updated 2026-10-21 19:28 UTC. Coordinator: `feature/sw-001-bootstrap`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-001 #1](https://github.com/treborygan/smart-workspace-launcher/issues/1). Draft integration PR: [#26](https://github.com/treborygan/smart-workspace-launcher/pull/26); review and additional implementation are pending.
 
 | Work item | State | Evidence / remaining work |
 |---|---|---|

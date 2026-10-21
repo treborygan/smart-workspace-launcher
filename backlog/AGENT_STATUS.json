@@ -9,6 +9,12 @@
     "state": "ACTIVE",
     "branch": "feature/sw-001-bootstrap"
   },
+  "active_pull_request": {
+    "number": 26,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/26",
+    "state": "DRAFT",
+    "head_commit": "de654bc3e0655c9511c77a333488875e759e7560"
+  },
   "subagent_limit": 3,
   "agents": [
     {

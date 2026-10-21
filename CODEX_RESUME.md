@@ -3,6 +3,7 @@
 ## Active implementation checkpoint (2026-10-21)
 
 - Coordinator branch: `feature/sw-001-bootstrap`; GitHub repository confirmed as `treborygan/smart-workspace-launcher`; SW-001 (#1) selected.
+- Draft integration PR: https://github.com/treborygan/smart-workspace-launcher/pull/26. Head commit at opening: `de654bc3e0655c9511c77a333488875e759e7560`.
 - Integrated commits: Core `745a0de` (initial SQLite/Tauri implementation), UI `ef99e21` (dashboard/Explorer) and UI follow-up `fabf03b` (shared contract adapter and two frontend tests). These are partial and require backend completion and Windows acceptance.
 - Root bootstrap, contract, QA, script and status changes may be uncommitted; inspect `git status` before proceeding.
 - Cross-platform checks executed in the coordinator checkout: `npm run typecheck` PASS; `npm test` PASS (2 tests); `npm run frontend:build` PASS; `python scripts/verify_handoff.py` PASS; profile archive contract tests PASS (7 tests).

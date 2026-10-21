@@ -157,6 +157,27 @@ pub struct LaunchEvent {
     pub duration_ms: Option<i64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LayoutCard {
+    pub resource_id: String,
+    pub x: i64,
+    pub y: i64,
+    pub w: i64,
+    pub h: i64,
+    #[serde(rename = "type")]
+    pub card_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DashboardLayout {
+    pub profile_id: String,
+    pub surface: String,
+    pub version: i64,
+    pub cards: Vec<LayoutCard>,
+}
+
 pub struct AppState(pub Mutex<Connection>);
 
 const MIGRATION: &str = r#"
@@ -196,6 +217,14 @@ CREATE TABLE IF NOT EXISTS launch_events (
  status TEXT NOT NULL, error_code TEXT, message TEXT, duration_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_launch_resource_time ON launch_events(resource_id, launched_at_utc DESC);
+CREATE TABLE IF NOT EXISTS layouts (
+ profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+ surface TEXT NOT NULL CHECK(surface IN ('dashboard','dock')),
+ version INTEGER NOT NULL,
+ layout_json TEXT NOT NULL,
+ updated_utc TEXT NOT NULL,
+ PRIMARY KEY(profile_id,surface)
+);
 INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (1,'sw001-core-schema-v1',CURRENT_TIMESTAMP);
 "#;
 
@@ -249,6 +278,7 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
         conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Default','system','{}',?2,?2)",params![Uuid::new_v4().to_string(),ts])?;
     }
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (2,'sw003-profile-launch-metadata-v2',?1)",[now_utc()])?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (3,'sw004-profile-surface-layouts-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -336,7 +366,7 @@ fn load_resource_details(
 }
 
 #[tauri::command]
-pub fn resource_list(
+fn resource_list(
     state: State<'_, AppState>,
     profile_id: Option<String>,
 ) -> Result<Vec<Resource>, AppError> {
@@ -488,7 +518,7 @@ fn persist_resource(
 }
 
 #[tauri::command]
-pub fn resource_create(
+fn resource_create(
     state: State<'_, AppState>,
     resource: ResourceInput,
 ) -> Result<Resource, AppError> {
@@ -531,7 +561,7 @@ pub fn resource_create(
 }
 
 #[tauri::command]
-pub fn resource_update(
+fn resource_update(
     state: State<'_, AppState>,
     id: String,
     patch: ResourcePatch,
@@ -592,7 +622,7 @@ pub fn resource_update(
 }
 
 #[tauri::command]
-pub fn resource_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+fn resource_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
     Uuid::parse_str(&id).map_err(|_| AppError::Invalid("resource id must be a UUID".into()))?;
     let changed = lock(&state)?.execute("DELETE FROM resources WHERE id=?1", [id])?;
     if changed == 0 {
@@ -602,7 +632,7 @@ pub fn resource_delete(state: State<'_, AppState>, id: String) -> Result<(), App
 }
 
 #[tauri::command]
-pub fn resource_search(
+fn resource_search(
     state: State<'_, AppState>,
     query: String,
     profile_id: Option<String>,
@@ -657,8 +687,123 @@ fn search_resources(
     Ok(result)
 }
 
+fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
+    if layout.version != 1 || !matches!(layout.surface.as_str(), "dashboard" | "dock") {
+        return Err(AppError::Invalid(
+            "unsupported layout version or surface".into(),
+        ));
+    }
+    if layout.cards.len() > 10_000 {
+        return Err(AppError::Invalid("layout exceeds 10000 cards".into()));
+    }
+    let mut ids = std::collections::HashSet::with_capacity(layout.cards.len());
+    for card in &layout.cards {
+        if card.resource_id.is_empty()
+            || card.resource_id.len() > 64
+            || !ids.insert(&card.resource_id)
+            || card.x < 0
+            || card.x > 11
+            || card.y < 0
+            || card.y > 9999
+            || card.w < 1
+            || card.w > 12
+            || card.h < 1
+            || card.h > 100
+            || card.x + card.w > 12
+            || !matches!(
+                card.card_type.as_str(),
+                "icon" | "compact" | "info" | "group"
+            )
+        {
+            return Err(AppError::Invalid(
+                "layout card violates bounds or uniqueness".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn filter_layout_cards(conn: &Connection, layout: &mut DashboardLayout) -> Result<(), AppError> {
+    // Removed resources and resources no longer in this profile are omitted from the returned layout.
+    let mut stmt = conn.prepare("SELECT EXISTS(SELECT 1 FROM resources r JOIN profile_resources pr ON pr.resource_id=r.id WHERE r.id=?1 AND pr.profile_id=?2)")?;
+    let mut kept = Vec::with_capacity(layout.cards.len());
+    for card in layout.cards.drain(..) {
+        if stmt.query_row(params![card.resource_id, layout.profile_id], |row| {
+            row.get::<_, i64>(0)
+        })? != 0
+        {
+            kept.push(card);
+        }
+    }
+    layout.cards = kept;
+    Ok(())
+}
+
 #[tauri::command]
-pub fn profile_list(state: State<'_, AppState>) -> Result<Vec<Profile>, AppError> {
+fn layout_get(
+    state: State<'_, AppState>,
+    profile_id: String,
+    surface: String,
+) -> Result<DashboardLayout, AppError> {
+    if !matches!(surface.as_str(), "dashboard" | "dock") {
+        return Err(AppError::Invalid("invalid layout surface".into()));
+    }
+    let conn = lock(&state)?;
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface=?2",
+            params![profile_id, surface],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let mut layout = match json {
+        Some(json) => {
+            if json.len() > 1_048_576 {
+                return Err(AppError::Invalid("stored layout exceeds 1 MiB".into()));
+            }
+            serde_json::from_str::<DashboardLayout>(&json)?
+        }
+        None => DashboardLayout {
+            profile_id,
+            surface,
+            version: 1,
+            cards: Vec::new(),
+        },
+    };
+    validate_layout(&layout)?;
+    filter_layout_cards(&conn, &mut layout)?;
+    Ok(layout)
+}
+
+#[tauri::command]
+fn layout_save(
+    state: State<'_, AppState>,
+    layout: DashboardLayout,
+) -> Result<DashboardLayout, AppError> {
+    validate_layout(&layout)?;
+    let mut conn = lock(&state)?;
+    let tx = conn.transaction()?;
+    let profile_exists: i64 = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&layout.profile_id],
+        |row| row.get(0),
+    )?;
+    if profile_exists == 0 {
+        return Err(AppError::NotFound);
+    }
+    let mut normalized = layout;
+    filter_layout_cards(&tx, &mut normalized)?;
+    let json = serde_json::to_string(&normalized)?;
+    if json.len() > 1_048_576 {
+        return Err(AppError::Invalid("layout exceeds 1 MiB".into()));
+    }
+    tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![normalized.profile_id,normalized.surface,normalized.version,json,now_utc()])?;
+    tx.commit()?;
+    Ok(normalized)
+}
+
+#[tauri::command]
+fn profile_list(state: State<'_, AppState>) -> Result<Vec<Profile>, AppError> {
     let conn = lock(&state)?;
     let mut stmt=conn.prepare("SELECT id,name,theme_id,settings_json,created_utc,updated_utc FROM profiles ORDER BY name COLLATE NOCASE")?;
     let profiles = stmt
@@ -687,7 +832,7 @@ fn default_profile_id(conn: &Connection) -> Result<String, AppError> {
 }
 
 #[tauri::command]
-pub fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, AppError> {
+fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, AppError> {
     if name.trim().is_empty() {
         return Err(AppError::Invalid("profile name is required".into()));
     }
@@ -715,7 +860,7 @@ pub fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profil
 }
 
 #[tauri::command]
-pub fn profile_switch(state: State<'_, AppState>, profile_id: String) -> Result<Profile, AppError> {
+fn profile_switch(state: State<'_, AppState>, profile_id: String) -> Result<Profile, AppError> {
     Uuid::parse_str(&profile_id)
         .map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
     let conn = lock(&state)?;
@@ -729,7 +874,7 @@ pub fn profile_switch(state: State<'_, AppState>, profile_id: String) -> Result<
 }
 
 #[tauri::command]
-pub fn resource_launch(
+fn resource_launch(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: LaunchRequest,
@@ -820,7 +965,7 @@ where
 }
 
 #[tauri::command]
-pub fn analytics_query(
+fn analytics_query(
     state: State<'_, AppState>,
     profile_id: Option<String>,
     limit: Option<usize>,
@@ -942,6 +1087,8 @@ pub fn run() {
             profile_list,
             profile_create,
             profile_switch,
+            layout_get,
+            layout_save,
             analytics_query
         ])
         .run(tauri::generate_context!())
@@ -1028,7 +1175,7 @@ mod tests {
     }
     #[test]
     fn resource_ids_must_be_uuid() {
-        let mut r = resource("x", None);
+        let mut r = resource("x");
         r.id = "path-as-id".into();
         assert!(validate_resource(&r).is_err());
     }
@@ -1168,6 +1315,69 @@ mod tests {
     }
 
     #[test]
+    fn layout_round_trip_bounds_and_filters_stale_membership() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        let resource = resource("Pinned item");
+        persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        let layout = DashboardLayout {
+            profile_id: pid.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: resource.id.clone(),
+                x: 0,
+                y: 12,
+                w: 3,
+                h: 2,
+                card_type: "compact".into(),
+            }],
+        };
+        validate_layout(&layout).unwrap();
+        let json = serde_json::to_string(&layout).unwrap();
+        conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dashboard',1,?2,?3)", params![pid,json,now_utc()]).unwrap();
+        let mut read: DashboardLayout = serde_json::from_str(
+            &conn
+                .query_row(
+                    "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
+                    [&pid],
+                    |r| r.get::<_, String>(0),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        filter_layout_cards(&conn, &mut read).unwrap();
+        assert_eq!(read.cards.len(), 1);
+        assert_eq!(read.cards[0].resource_id, resource.id);
+        conn.execute(
+            "DELETE FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+            params![pid, resource.id],
+        )
+        .unwrap();
+        filter_layout_cards(&conn, &mut read).unwrap();
+        assert!(read.cards.is_empty());
+
+        let mut invalid = DashboardLayout {
+            profile_id: pid,
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: Uuid::new_v4().to_string(),
+                x: 11,
+                y: 0,
+                w: 2,
+                h: 1,
+                card_type: "icon".into(),
+            }],
+        };
+        assert!(validate_layout(&invalid).is_err());
+        invalid.cards[0].x = 0;
+        invalid.cards[0].w = 1;
+        invalid.cards.push(invalid.cards[0].clone());
+        assert!(validate_layout(&invalid).is_err());
+    }
+
+    #[test]
     fn migration_is_repeatable_and_versioned() {
         let conn = database();
         migrate_database(&conn).unwrap();
@@ -1177,7 +1387,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",

@@ -83,7 +83,9 @@ describe("workspace dashboard", () => {
     const input = host.querySelector<HTMLInputElement>(".quick-launch-search input")!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "old query"); input.dispatchEvent(new Event("input", { bubbles: true })); });
     await act(async () => { toggle?.(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(host.querySelector<HTMLInputElement>(".quick-launch-search input")?.value).toBe("");
+    expect(api.resources).toHaveBeenCalledTimes(2);
   });
 
   it("restores each profile's own resource ordering when switching", async () => {

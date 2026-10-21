@@ -69,17 +69,19 @@ export default function App() {
   const [nativeWindowLabel, setNativeWindowLabel] = useState<string | null>(null);
   const [quickLaunchSignal, setQuickLaunchSignal] = useState(0);
 
+  const loadProfile = async (preferredProfileId?: string) => {
+    const availableProfiles = await api.profiles();
+    const rememberedProfile = preferredProfileId || localStorage.getItem("swl-active-profile");
+    const profile = availableProfiles.find((item) => item.id === rememberedProfile) || availableProfiles[0];
+    const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
+    const restored = restoreLayout(items, layout);
+    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
+    if (profile) localStorage.setItem("swl-active-profile", profile.id);
+    setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
+    return profile?.id || "";
+  };
   const reload = async () => {
-    try {
-      const activeProfiles = await api.profiles();
-      const rememberedProfile = localStorage.getItem("swl-active-profile");
-      const profile = activeProfiles.find((item) => item.id === rememberedProfile) || activeProfiles[0];
-      const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
-      const restored = restoreLayout(items, layout);
-      setProfiles(activeProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
-      if (profile) localStorage.setItem("swl-active-profile", profile.id);
-      setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
-    }
+    try { await loadProfile(); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not connect to the local workspace."); }
     finally { setLoading(false); }
   };
@@ -110,7 +112,10 @@ export default function App() {
     let unlistenToggle: () => void = () => {};
     let unlistenStatus: () => void = () => {};
     const toggleListener = nativeWindowLabel === "quick-launch"
-      ? api.onQuickLaunchToggle(() => { setQuickLaunchOpen(true); setQuickLaunchSignal((value) => value + 1); })
+      ? api.onQuickLaunchToggle(() => {
+        setQuickLaunchOpen(true); setQuickLaunchSignal((value) => value + 1);
+        void loadProfile().catch((e: unknown) => setNotice(e instanceof Error ? e.message : "Could not refresh the active profile."));
+      })
       : Promise.resolve(() => undefined);
     Promise.all([toggleListener, api.onQuickLaunchHotkeyStatus((status) => setHotkeyStatus(status))]).then(([toggle, status]) => {
       if (disposed) { toggle(); status(); return; }
@@ -158,12 +163,8 @@ export default function App() {
   const switchProfile = async (profileId: string) => {
     if (profileId === activeProfileId) return;
     setLoading(true); setNotice("");
-    try {
-      const [items, layout] = await Promise.all([api.resources(profileId), api.layout(profileId)]);
-      const restored = restoreLayout(items, layout);
-      setActiveProfileId(profileId); localStorage.setItem("swl-active-profile", profileId);
-      setResources(restored.resources); setCardWidths(restored.widths); setSelectedId(restored.resources[0]?.id ?? null); setQuery("");
-    } catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
+    try { await loadProfile(profileId); setQuery(""); }
+    catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
     finally { setLoading(false); }
   };
   const persistLayout = async (items: Resource[], widths: Record<string, number>) => {

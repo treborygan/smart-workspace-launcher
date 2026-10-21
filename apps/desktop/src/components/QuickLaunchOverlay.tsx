@@ -3,12 +3,12 @@ import type { KeyboardEvent } from "react";
 import { Icon } from "./Icon";
 import { api } from "../lib/api";
 import type { Resource } from "../lib/contracts";
+import type { QuickLaunchHotkeyStatus } from "@sw/contracts";
 
-type HotkeyStatus = { registered: boolean; shortcut: string; errorCode?: string };
 type Props = {
   resources: Resource[];
   profileId?: string;
-  hotkeyStatus: HotkeyStatus | null;
+  hotkeyStatus: QuickLaunchHotkeyStatus | null;
   presentation?: "overlay" | "window";
   onClose: () => void;
   onLaunch: (resource: Resource) => void;

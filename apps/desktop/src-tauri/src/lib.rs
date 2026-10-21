@@ -5273,7 +5273,7 @@ mod tests {
     fn profile(conn: &Connection) -> String {
         let id = Uuid::new_v4().to_string();
         let ts = now_utc();
-        conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Work','system','{}',?2,?2)",params![id,ts]).unwrap();
+        conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,?2,'system','{}',?3,?3)",params![id, format!("Work-{id}"), ts]).unwrap();
         id
     }
 
@@ -5330,7 +5330,15 @@ mod tests {
                     targets: vec![ProfilePackageTarget {
                         id: target_id,
                         kind: kind.into(),
-                        value: "calc.exe".into(),
+                        value: match kind {
+                            "url" => "https://example.com/",
+                            "app" => "C:\\Windows\\System32\\calc.exe",
+                            "file" => "C:\\Example\\example.xlsx",
+                            "folder" => "C:\\Example",
+                            "shortcut" => "C:\\Example\\example.lnk",
+                            _ => "https://example.com/",
+                        }
+                        .into(),
                         priority: 0,
                         device_label: None,
                         argv: vec![],

@@ -156,6 +156,32 @@ pub struct ProfileThemeInput {
     pub density: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SmartCollectionFilters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SmartCollection {
+    pub id: String,
+    pub profile_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub filters: SmartCollectionFilters,
+}
+
+const MAX_SMART_COLLECTIONS_PER_PROFILE: i64 = 100;
 const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
@@ -2149,6 +2175,17 @@ CREATE TABLE IF NOT EXISTS layouts (
  updated_utc TEXT NOT NULL,
  PRIMARY KEY(profile_id,surface)
 );
+CREATE TABLE IF NOT EXISTS smart_collections (
+ id TEXT PRIMARY KEY,
+ profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100),
+ filters_json TEXT NOT NULL CHECK(length(filters_json) <= 4096),
+ created_utc TEXT NOT NULL,
+ updated_utc TEXT NOT NULL,
+ UNIQUE(profile_id,name COLLATE NOCASE)
+);
+CREATE INDEX IF NOT EXISTS idx_smart_collections_profile_name
+ ON smart_collections(profile_id,name COLLATE NOCASE);
 INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (1,'sw001-core-schema-v1',CURRENT_TIMESTAMP);
 "#;
 
@@ -2213,6 +2250,8 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
         "TEXT NOT NULL DEFAULT 'fresh'",
     )?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (4,'sw007-metadata-cache-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS smart_collections (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), filters_json TEXT NOT NULL CHECK(length(filters_json) <= 4096), created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,name COLLATE NOCASE)); CREATE INDEX IF NOT EXISTS idx_smart_collections_profile_name ON smart_collections(profile_id,name COLLATE NOCASE);")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (5,'sw013-profile-smart-collections-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -3233,6 +3272,188 @@ fn profile_theme_set(
     profile_theme_set_on_conn(&mut conn, &profile_id, &theme)
 }
 
+fn validate_smart_collection(collection: &SmartCollection) -> Result<(), AppError> {
+    valid_uuid(&collection.id, "smart collection id")?;
+    valid_uuid(&collection.profile_id, "profile id")?;
+    let name = collection.name.trim();
+    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err(AppError::Invalid(
+            "smart collection name must contain 1 to 100 printable characters".into(),
+        ));
+    }
+    if collection
+        .filters
+        .resource_type
+        .as_ref()
+        .is_some_and(|kind| !["file", "folder", "app", "shortcut", "url"].contains(&kind.as_str()))
+    {
+        return Err(AppError::Invalid(
+            "unsupported smart collection resource type".into(),
+        ));
+    }
+    for (field, value, maximum) in [
+        ("category", collection.filters.category.as_ref(), 80usize),
+        ("tag", collection.filters.tag.as_ref(), 80usize),
+        ("text", collection.filters.text.as_ref(), 200usize),
+    ] {
+        if value.is_some_and(|value| {
+            value.trim().is_empty()
+                || value.chars().count() > maximum
+                || value.chars().any(char::is_control)
+        }) {
+            return Err(AppError::Invalid(format!(
+                "smart collection {field} must contain 1 to {maximum} printable characters"
+            )));
+        }
+    }
+    let encoded = serde_json::to_vec(&collection.filters)?;
+    if encoded.len() > 4096 {
+        return Err(AppError::Invalid(
+            "smart collection filters exceed size limit".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn smart_collection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SmartCollection> {
+    let filters_json: String = row.get(3)?;
+    let filters = serde_json::from_str(&filters_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            filters_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(SmartCollection {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        name: row.get(2)?,
+        filters,
+    })
+}
+
+fn smart_collection_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<SmartCollection>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id,profile_id,name,filters_json FROM smart_collections WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id",
+    )?;
+    let rows = stmt.query_map([profile_id], smart_collection_from_row)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
+#[tauri::command]
+fn smart_collection_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<SmartCollection>, AppError> {
+    let conn = lock(&state)?;
+    smart_collection_list_on_conn(&conn, &profile_id)
+}
+
+fn smart_collection_save_on_conn(
+    conn: &mut Connection,
+    mut collection: SmartCollection,
+) -> Result<SmartCollection, AppError> {
+    collection.name = collection.name.trim().to_string();
+    validate_smart_collection(&collection)?;
+    let tx = conn.transaction()?;
+    let profile_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&collection.profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let existing_profile: Option<String> = tx
+        .query_row(
+            "SELECT profile_id FROM smart_collections WHERE id=?1",
+            [&collection.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing_profile
+        .as_deref()
+        .is_some_and(|profile_id| profile_id != collection.profile_id)
+    {
+        return Err(AppError::NotFound);
+    }
+    let filters_json = serde_json::to_string(&collection.filters)?;
+    let timestamp = now_utc();
+    if existing_profile.is_none() {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM smart_collections WHERE profile_id=?1",
+            [&collection.profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_SMART_COLLECTIONS_PER_PROFILE {
+            return Err(AppError::Invalid(
+                "profile already has the maximum number of smart collections".into(),
+            ));
+        }
+    }
+    if existing_profile.is_some() {
+        tx.execute(
+            "UPDATE smart_collections SET name=?2,filters_json=?3,updated_utc=?4 WHERE id=?1 AND profile_id=?5",
+            params![collection.id, collection.name, filters_json, timestamp, collection.profile_id],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO smart_collections(id,profile_id,name,filters_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?5)",
+            params![collection.id, collection.profile_id, collection.name, filters_json, timestamp],
+        )?;
+    }
+    tx.commit()?;
+    Ok(collection)
+}
+
+#[tauri::command]
+fn smart_collection_save(
+    state: State<'_, AppState>,
+    collection: SmartCollection,
+) -> Result<SmartCollection, AppError> {
+    let mut conn = lock(&state)?;
+    smart_collection_save_on_conn(&mut conn, collection)
+}
+
+fn smart_collection_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "smart collection id")?;
+    let changed = conn.execute(
+        "DELETE FROM smart_collections WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn smart_collection_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    smart_collection_delete_on_conn(&conn, &profile_id, &id)
+}
+
 #[tauri::command]
 fn profile_export(
     state: State<'_, AppState>,
@@ -4116,6 +4337,9 @@ pub fn run() {
             profile_list,
             profile_create,
             profile_theme_set,
+            smart_collection_list,
+            smart_collection_save,
+            smart_collection_delete,
             profile_export,
             profile_import_preview,
             profile_import_commit,
@@ -5218,6 +5442,127 @@ mod tests {
     }
 
     #[test]
+    fn smart_collections_are_profile_scoped_validated_and_upserted() {
+        let mut conn = database();
+        let first_profile = profile(&conn);
+        let second_profile = profile(&conn);
+        conn.execute(
+            "UPDATE profiles SET name='Other profile' WHERE id=?1",
+            [&second_profile],
+        )
+        .unwrap();
+        let collection_id = Uuid::new_v4().to_string();
+        let collection = SmartCollection {
+            id: collection_id.clone(),
+            profile_id: first_profile.clone(),
+            name: "  Work files  ".into(),
+            filters: SmartCollectionFilters {
+                resource_type: Some("file".into()),
+                category: Some("Work".into()),
+                tag: Some("important".into()),
+                favorite_only: Some(true),
+                text: Some("quarterly".into()),
+            },
+        };
+        let saved = smart_collection_save_on_conn(&mut conn, collection.clone()).unwrap();
+        assert_eq!(saved.name, "Work files");
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &first_profile).unwrap(),
+            vec![saved.clone()]
+        );
+        assert!(smart_collection_list_on_conn(&conn, &second_profile)
+            .unwrap()
+            .is_empty());
+
+        let updated = SmartCollection {
+            name: "Quarterly reports".into(),
+            filters: SmartCollectionFilters {
+                text: Some("reports".into()),
+                favorite_only: Some(false),
+                ..SmartCollectionFilters::default()
+            },
+            ..saved
+        };
+        let updated = smart_collection_save_on_conn(&mut conn, updated.clone()).unwrap();
+        assert_eq!(
+            smart_collection_list_on_conn(&conn, &first_profile).unwrap(),
+            vec![updated.clone()]
+        );
+
+        let wrong_owner = SmartCollection {
+            profile_id: second_profile.clone(),
+            ..updated.clone()
+        };
+        assert!(matches!(
+            smart_collection_save_on_conn(&mut conn, wrong_owner),
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            smart_collection_delete_on_conn(&conn, &second_profile, &collection_id),
+            Err(AppError::NotFound)
+        ));
+        smart_collection_delete_on_conn(&conn, &first_profile, &collection_id).unwrap();
+        assert!(smart_collection_list_on_conn(&conn, &first_profile)
+            .unwrap()
+            .is_empty());
+
+        let duplicate_name = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: first_profile.clone(),
+            name: "Same name".into(),
+            filters: SmartCollectionFilters::default(),
+        };
+        smart_collection_save_on_conn(&mut conn, duplicate_name.clone()).unwrap();
+        let duplicate = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            name: "same NAME".into(),
+            ..duplicate_name
+        };
+        assert!(smart_collection_save_on_conn(&mut conn, duplicate).is_err());
+    }
+
+    #[test]
+    fn smart_collection_filter_dsl_rejects_unknown_fields_and_unbounded_values() {
+        assert!(
+            serde_json::from_value::<SmartCollectionFilters>(serde_json::json!({
+                "resourceType": "file", "sql": "DROP TABLE resources"
+            }))
+            .is_err()
+        );
+        let collection = SmartCollection {
+            id: Uuid::new_v4().to_string(),
+            profile_id: Uuid::new_v4().to_string(),
+            name: "Valid name".into(),
+            filters: SmartCollectionFilters {
+                text: Some("x".repeat(201)),
+                ..SmartCollectionFilters::default()
+            },
+        };
+        assert!(validate_smart_collection(&collection).is_err());
+        let control_value = SmartCollection {
+            filters: SmartCollectionFilters {
+                category: Some("Work\nFiles".into()),
+                ..SmartCollectionFilters::default()
+            },
+            ..SmartCollection {
+                id: Uuid::new_v4().to_string(),
+                profile_id: Uuid::new_v4().to_string(),
+                name: "Valid name".into(),
+                filters: SmartCollectionFilters::default(),
+            }
+        };
+        assert!(validate_smart_collection(&control_value).is_err());
+        let invalid_type = SmartCollection {
+            filters: SmartCollectionFilters {
+                resource_type: Some("script".into()),
+                ..SmartCollectionFilters::default()
+            },
+            ..collection
+        };
+        assert!(validate_smart_collection(&invalid_type).is_err());
+    }
+
+    #[test]
     fn metadata_inspection_caches_size_and_force_refreshes_local_file() {
         let mut conn = database();
         let r = resource("Metadata file");
@@ -5887,7 +6232,13 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
+        let table_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(table_exists, 1);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",

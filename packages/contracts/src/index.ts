@@ -67,6 +67,22 @@ export interface ProfileThemeInput {
   density?: "compact" | "balanced" | "comfortable";
 }
 
+/** Safe, bounded filter criteria; all populated fields are combined with AND. */
+export interface SmartCollectionFilters {
+  resourceType?: ResourceType;
+  category?: string;
+  tag?: string;
+  favoriteOnly?: boolean;
+  text?: string;
+}
+
+export interface SmartCollection {
+  id: string;
+  profileId: string;
+  name: string;
+  filters: SmartCollectionFilters;
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -220,6 +236,9 @@ export interface CommandMap {
   profile_list: { args?: undefined; result: Profile[] };
   profile_create: { args: { name: string }; result: Profile };
   profile_theme_set: { args: { profileId: string; theme: ProfileThemeInput }; result: Profile };
+  smart_collection_list: { args: { profileId: string }; result: SmartCollection[] };
+  smart_collection_save: { args: { collection: SmartCollection }; result: SmartCollection };
+  smart_collection_delete: { args: { profileId: string; id: string }; result: void };
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
   profile_import_preview: { args: { packagePath: string }; result: ProfileImportPreview };

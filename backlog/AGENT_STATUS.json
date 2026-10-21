@@ -1,19 +1,20 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T19:44:00Z",
+  "updated_at_utc": "2026-10-21T20:08:10Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-001-bootstrap"
+    "branch": "feature/sw-005-quick-launch"
   },
   "active_pull_request": {
-    "number": 26,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/26",
+    "number": 27,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/27",
     "state": "DRAFT",
-    "head_commit": "a4285cb"
+    "base_pr": 26,
+    "head_commit": "805ae07"
   },
   "subagent_limit": 3,
   "agents": [
@@ -22,33 +23,33 @@
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-002/SW-003/SW-004",
+      "issue": "SW-005",
       "branch": "feature/sw-001-core",
-      "commit": "7ffcdef",
-      "pr": null,
-      "task": "Resource/profile persistence, launch analytics, Tauri macro fix, SQLite layouts with validation and test coverage; Windows-target Rust tests type-checked with compiler shims, not built/run"
+      "commit": "2b05fba",
+      "pr": 27,
+      "task": "Per-profile OS shortcut persistence/conflict handling and bounded fuzzy-ranked local resource search; Windows GNU type-check only, Rust tests unexecuted because GLib/GTK dev packages are unavailable."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-006/SW-010/SW-004",
+      "issue": "SW-005",
       "branch": "feature/sw-002-ui",
-      "commit": "0a8cdd1",
-      "pr": null,
-      "task": "Dashboard/Explorer/Inspector and profile-scoped layout persistence using native commands with browser fallback; five UI tests"
+      "commit": "57bce73",
+      "pr": 27,
+      "task": "Separate Quick Launch native window UI, shortcut settings, failure feedback, profile-keyed drafts and regression tests."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-008/SW-004",
+      "issue": "SW-005",
       "branch": "shared-checkout",
       "commit": null,
-      "pr": null,
-      "task": "11 archive contract tests and independent SW-004 layout review; verified Core fixes, no blocking findings; notes raw IPC cap remains host-controlled"
+      "pr": 27,
+      "task": "Reviewed integrated hotkey/search/profile settings/launch failure flows; initial profile draft bug fixed and re-reviewed; no remaining blocking findings in SW-005 scope. Windows acceptance unavailable."
     },
     {
       "role": "research",
@@ -78,8 +79,8 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T19:44:00Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable; Chromium Linux browser preview",
+    "at_utc": "2026-10-21T20:08:10Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows or PowerShell host",
     "results": [
       {
         "command": "npm run lint",
@@ -87,19 +88,11 @@
       },
       {
         "command": "npm test",
-        "result": "PASS (5 UI/API tests)"
+        "result": "PASS (15 frontend tests)"
       },
       {
         "command": "npm run frontend:build",
         "result": "PASS"
-      },
-      {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS (11 profile archive contract harness tests only)"
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS (no binary or Windows runtime assertion)"
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
@@ -110,23 +103,27 @@
         "result": "PASS"
       },
       {
-        "command": "env CC_x86_64_pc_windows_gnu=cc CC_x86_64-pc-windows-gnu=cc RC_x86_64_pc_windows_gnu=/tmp/windres cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --tests",
-        "result": "PASS Rust type-check including test code using host cc, fake windres and ephemeral placeholder icon; not a Windows build and did not run tests"
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS (11 archive QA harness tests; production importer is not implemented)"
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "result": "BLOCKED: Debian GTK/GLib development libraries are unavailable"
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS (handoff/schema/fixture checks only)"
+      },
+      {
+        "command": "env CC_x86_64_pc_windows_gnu=cc CC_x86_64-pc-windows-gnu=cc RC_x86_64_pc_windows_gnu=/tmp/windres cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --tests",
+        "result": "PASS Rust type-check only using Linux host cc, fake windres and temporary placeholder icon; produced no Windows binary and ran no tests"
+      },
+      {
+        "command": "cargo test --lib --manifest-path apps/desktop/src-tauri/Cargo.toml",
+        "result": "BLOCKED before test execution: Linux host lacks glib-2.0 >= 2.70 / GTK development libraries"
       },
       {
         "command": "python scripts/check_release_gate.py",
         "result": "BLOCKED as expected (exit 2); no real Windows 11 verification"
-      },
-      {
-        "command": "Playwright Chromium dashboard screenshot",
-        "result": "PASS Linux browser preview at artifacts/screenshots/dashboard-linux-preview.png; synthetic demo data only"
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Implement SW-005 true OS global hotkey/search; SW-007 bounded metadata and analytics; production SW-008 importer/exporter with preview and transaction rollback; then SW-009 Dock/SW-011 integration, and obtain a Windows 11 x64 acceptance host for SW-012. V1 remains BLOCKED."
+  "next_action": "Proceed to SW-007 bounded metadata/analytics and SW-008 production package import/export with previews, collision strategies, transactions and rollback, then SW-009 Dock and SW-011 hardening. Obtain Windows 11 x64 host for SW-012; V1 remains BLOCKED. Continue SW-013..SW-025 after V1."
 }

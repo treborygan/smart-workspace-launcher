@@ -1,16 +1,22 @@
 # Restart Codex development from GitHub state
 
-## Active implementation checkpoint (2026-10-21)
+## Current checkpoint (2026-10-21)
 
-- Coordinator branch: `feature/sw-001-bootstrap`; GitHub repository confirmed as `treborygan/smart-workspace-launcher`; SW-001 (#1) selected.
-- Draft integration PR: https://github.com/treborygan/smart-workspace-launcher/pull/26. Head commit at opening: `de654bc3e0655c9511c77a333488875e759e7560`; latest implementation commit before the current status update: `a4285cb`.
-- Integrated changes include initial Core commits `745a0de` and `458b0d3`, Core SW-004 commits `b9ff722`, `50e8f04`, `a4285cb` (migrations, typed layout persistence, bounds/UUID/profile/membership/identity checks and Rust tests), UI commits `ef99e21`, `fabf03b`, `bcb89a8` (dashboard, typed API, profile-scoped layout persistence and five frontend tests), plus bootstrap and archive-QA commits. All remain partial and require runtime verification.
-- Inspect `git status` and update the draft PR body after every integration commit. Keep `.github/workflows/` absent.
-- Cross-platform checks: `npm run lint` PASS; `npm test` PASS (5 tests); `npm run frontend:build` PASS; Python archive contract tests PASS (11 tests); `python scripts/verify_handoff.py` PASS. `cargo fmt --check` PASS.
-- `cargo test` is BLOCKED on missing Debian GTK/GLib development packages. `cargo check --target x86_64-pc-windows-gnu --tests` PASS as Rust type-check only when using host `cc`, fake `windres`, and temporary placeholder icon. This produced no Windows binary and ran no tests. Direct cross-check without shims is blocked by absent MinGW compiler.
-- No PowerShell or real Windows 11 execution host is available. V1 readiness remains BLOCKED; do not publish a binary or send a ready notice.
-- Core made Tauri command handlers private to resolve E0255. QA reviewed SW-004 fixes with no blocking findings; residual limitation: 1 MiB serialization limit applies after Tauri IPC deserialization, with raw transport limit host-controlled. Next: SW-005 native hotkey/search, SW-007 bounded metadata, SW-008 production safe import/export, SW-009 Dock, SW-011 hardening, SW-012 real Windows 11 acceptance. Browser screenshot `artifacts/screenshots/dashboard-linux-preview.png` is synthetic UI evidence only.
+- Repository: `treborygan/smart-workspace-launcher`; verified environment is Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable. Loaded coordinator is GPT-6 Luna Medium. The 3-agent Core/UI/QA workflow was activated as documented.
+- Coordinator branch: `feature/sw-005-quick-launch`, current commit `805ae07`. Selected issue SW-005 (#5).
+- Draft PR #27: https://github.com/treborygan/smart-workspace-launcher/pull/27, based on draft PR #26 (`feature/sw-001-bootstrap`). PR #27 body has scope, exact verification, QA status and blockers. Neither PR is merged. PR #27 attachment to this Codex chat failed with an app service connection error; the PR itself was successfully updated.
+- SW-005 integrated commits include `1174004` (native hotkey), `67670ec` (Quick Launch window config), `7ff39e7` + `443e5bc` (UI), `887375c` (typed configurable-hotkey contract), `32fbd62` (UI/settings), `2cd7a94` (Core profile hotkeys/fuzzy ranking), `c2afde4` (synthetic Linux preview), `994dec5` (per-profile draft bug fix) and `805ae07` (bounded search work).
+- QA reviewed integrated shortcut conflict handling, profile settings draft behavior, launch failure UI and bounded fuzzy search. Initial profile-draft bug was fixed and re-reviewed; no remaining blocker in SW-005 review scope.
+- Checks on this revision: `npm run lint` PASS; `npm test` PASS (15 frontend tests); `npm run frontend:build` PASS; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check` PASS; `git diff --check` PASS; Python archive QA harness PASS (11 tests); `python scripts/verify_handoff.py` PASS. `cargo check --target x86_64-pc-windows-gnu --tests` PASS only as a Rust type-check using Linux `cc`, fake `windres` and temporary placeholder icon; it produced no Windows binary and ran no tests. Native Rust tests are BLOCKED before execution because Linux lacks `glib-2.0 >= 2.70`/GTK development libraries.
+- No PowerShell or real Windows 11 host exists. Windows global-hotkey/Shell behavior is unverified. `python scripts/check_release_gate.py` is BLOCKED as expected. V1 readiness is BLOCKED; no EXE, portable package, Release upload or READY notice exists. `.github/workflows/` remains absent.
+- Synthetic browser screenshot: `artifacts/screenshots/quick-launch-linux-preview.png`; it is not a native desktop capture.
 
-Resume `treborygan/smart-workspace-launcher` as coordinator with the active `.codex/config.toml` (Luna Medium root, max 3 Luna subagents). Read `AGENTS.md`, `CODEX_KICKOFF.md`, `docs/MULTI_AGENT_WORKFLOW.md`, `docs/NOTIFICATIONS_AND_RELEASE_GATES.md`, `backlog/ROADMAP.md`, `backlog/STATUS.md`, `backlog/AGENT_STATUS.json`, all active PRs/issues, and latest commits. Reconcile reported status with actual branches and test logs; no guessing.
+## Next executable work
 
-Pick highest-priority unblocked item according to dependency graph. Explicitly spawn Core/UI/QA subagents as described when independent work exists, each on its own worktree/branch. Continue implementing, testing, reviewing and merging; V1 is an intermediate distribution milestone and project completion requires SW-013..SW-025. If V1 release is verified but not notified, perform one accurate notification including tested binary URL and SHA. Do not claim persistent execution after the Codex session ends; commit a detailed restartable next-step queue and report blockers.
+1. Start SW-007: bounded background metadata collection (size, last modified, status) with provenance labels; complete analytics verification.
+2. Implement SW-008 production profile export/import with schema/path/size checks, preview/diffs, duplicate/merge/replace, safe transaction rollback and no automatic script execution.
+3. Implement SW-009 independent optional Dock, then SW-011 integration/security hardening.
+4. Obtain a real Windows 11 x64 host for all W-001..W-014 acceptance cases in `docs/TEST_AND_ACCEPTANCE.md`. Keep SW-012 BLOCKED until evidence exists; do not claim an EXE or send a V1 READY notice.
+5. Continue SW-013..SW-025 after V1 gates; V1 is not project completion.
+
+Before continuing, inspect `git status`, fetch/reconcile PR #26/#27 and branches, read `backlog/AGENT_STATUS.json`, `backlog/STATUS.md`, `docs/MULTI_AGENT_WORKFLOW.md`, `docs/NOTIFICATIONS_AND_RELEASE_GATES.md` and `backlog/ROADMAP.md`. Keep the coordinator as sole integrator, cap active subagents at three, preserve feature PRs and do not add GitHub Actions without explicit approval.

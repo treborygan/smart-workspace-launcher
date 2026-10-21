@@ -2161,6 +2161,8 @@ pub fn open_database(path: &Path) -> Result<Connection, AppError> {
         std::fs::create_dir_all(parent).map_err(|e| AppError::Invalid(e.to_string()))?;
     }
     let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA trusted_schema=OFF;")?;
     migrate_database(&conn)?;
     Ok(conn)
 }
@@ -2339,8 +2341,37 @@ fn resource_list(
 fn validate_resource(resource: &Resource) -> Result<(), AppError> {
     Uuid::parse_str(&resource.id)
         .map_err(|_| AppError::Invalid("resource id must be a UUID".into()))?;
-    if resource.display_name.trim().is_empty() {
-        return Err(AppError::Invalid("display name is required".into()));
+    if resource.display_name.trim().is_empty() || resource.display_name.chars().count() > 256 {
+        return Err(AppError::Invalid(
+            "display name must contain 1 to 256 characters".into(),
+        ));
+    }
+    if resource
+        .description
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 4096)
+        || resource
+            .icon
+            .as_ref()
+            .is_some_and(|value| value.chars().count() > 256)
+        || resource.targets.is_empty()
+        || resource.targets.len() > 8
+        || resource.tags.len() > 64
+        || resource.aliases.len() > 32
+    {
+        return Err(AppError::Invalid("resource exceeds field limits".into()));
+    }
+    for (name, values) in [("tag", &resource.tags), ("alias", &resource.aliases)] {
+        let mut unique = std::collections::HashSet::new();
+        if values.iter().any(|value| {
+            value.trim().is_empty()
+                || value.chars().count() > 80
+                || !unique.insert(value.to_lowercase())
+        }) {
+            return Err(AppError::Invalid(format!(
+                "invalid or duplicate resource {name}"
+            )));
+        }
     }
     if !["file", "folder", "app", "shortcut", "url"].contains(&resource.resource_type.as_str()) {
         return Err(AppError::Invalid("unsupported resource type".into()));
@@ -2354,12 +2385,36 @@ fn validate_resource(resource: &Resource) -> Result<(), AppError> {
 }
 
 fn validate_target(target: &ResourceTarget) -> Result<(), AppError> {
+    if target.canonical_uri.trim().is_empty()
+        || target.canonical_uri.chars().count() > 4096
+        || target.canonical_uri.chars().any(char::is_control)
+        || !(0..=1000).contains(&target.priority)
+        || target.arguments.len() > 64
+        || target
+            .arguments
+            .iter()
+            .any(|arg| arg.chars().count() > 4096 || arg.contains('\0'))
+        || target.working_directory.as_ref().is_some_and(|value| {
+            value.chars().count() > 4096
+                || value.chars().any(char::is_control)
+                || !valid_windows_absolute_path(value)
+        })
+    {
+        return Err(AppError::Invalid(
+            "target exceeds field limits or contains invalid characters".into(),
+        ));
+    }
     match target.kind.as_str() {
         "url" => {
             let parsed = Url::parse(&target.canonical_uri)
                 .map_err(|_| AppError::Invalid("URL is invalid".into()))?;
-            if parsed.scheme() != "https" {
+            if parsed.scheme() != "https" || parsed.host_str().is_none() {
                 return Err(AppError::Invalid("only HTTPS URLs may be opened".into()));
+            }
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                return Err(AppError::Invalid(
+                    "URL targets cannot include credentials".into(),
+                ));
             }
             if !target.arguments.is_empty() {
                 return Err(AppError::Invalid(
@@ -2369,13 +2424,7 @@ fn validate_target(target: &ResourceTarget) -> Result<(), AppError> {
         }
         "file" | "folder" | "app" | "shortcut" => {
             let path = target.canonical_uri.trim();
-            let drive_path = path.as_bytes().get(1) == Some(&b':')
-                && path
-                    .as_bytes()
-                    .get(2)
-                    .is_some_and(|b| *b == b'\\' || *b == b'/');
-            let unc_path = path.starts_with("\\\\") && path.len() > 2;
-            if !(drive_path || unc_path) || path.starts_with("\\\\?\\") {
+            if !valid_windows_absolute_path(path) {
                 return Err(AppError::Invalid(
                     "target must be an absolute Windows path or UNC path".into(),
                 ));
@@ -2388,10 +2437,63 @@ fn validate_target(target: &ResourceTarget) -> Result<(), AppError> {
         }
         _ => return Err(AppError::Invalid("unsupported target kind".into())),
     }
-    if target.arguments.iter().any(|a| a.contains('\0')) {
-        return Err(AppError::Invalid("arguments cannot contain NUL".into()));
-    }
     Ok(())
+}
+
+fn valid_windows_absolute_path(path: &str) -> bool {
+    if path.is_empty()
+        || path.chars().any(char::is_control)
+        || path.starts_with("\\\\?\\")
+        || path.starts_with("\\\\.\\")
+    {
+        return false;
+    }
+    let normalized = path.replace('/', "\\");
+    let parts: Vec<&str>;
+    let rest: &str;
+    if normalized.as_bytes().get(1) == Some(&b':')
+        && normalized
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+        && normalized.as_bytes().get(2) == Some(&b'\\')
+    {
+        rest = &normalized[3..];
+        parts = rest.split('\\').filter(|part| !part.is_empty()).collect();
+    } else if normalized.starts_with("\\\\") {
+        let unc_parts: Vec<&str> = normalized[2..].split('\\').collect();
+        if unc_parts.len() < 2 || unc_parts[0].is_empty() || unc_parts[1].is_empty() {
+            return false;
+        }
+        parts = unc_parts;
+    } else {
+        return false;
+    }
+    parts.iter().all(|part| {
+        *part != "."
+            && *part != ".."
+            && !part.ends_with([' ', '.'])
+            && !part
+                .chars()
+                .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+            && !is_reserved_windows_device_name(part)
+    })
+}
+
+fn is_reserved_windows_device_name(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+    })
 }
 
 fn persist_resource(
@@ -3031,8 +3133,10 @@ fn default_profile_id(conn: &Connection) -> Result<String, AppError> {
 
 #[tauri::command]
 fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, AppError> {
-    if name.trim().is_empty() {
-        return Err(AppError::Invalid("profile name is required".into()));
+    if name.trim().is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+        return Err(AppError::Invalid(
+            "profile name must contain 1 to 80 printable characters".into(),
+        ));
     }
     let ts = now_utc();
     let profile = Profile {
@@ -3268,8 +3372,18 @@ fn quick_launch_hotkey_set(
 fn resource_launch(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    request: LaunchRequest,
+    active_profile: State<'_, ActiveProfileState>,
+    mut request: LaunchRequest,
 ) -> Result<LaunchResult, AppError> {
+    if request.profile_id.is_none() {
+        request.profile_id = Some(
+            active_profile
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        );
+    }
     let mut conn = lock(&state)?;
     let event = launch_event_with(&mut conn, &request, |target| {
         launch_target(&app, target).map_err(|e| e.to_string())
@@ -3316,12 +3430,38 @@ where
     if let Some(pid) = request.profile_id.as_ref() {
         Uuid::parse_str(pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
     }
+    if let Some(target_id) = request.target_id.as_ref() {
+        Uuid::parse_str(target_id)
+            .map_err(|_| AppError::Invalid("target id must be a UUID".into()))?;
+    }
     if !["dashboard", "quick_launch", "dock", "explorer", "other"]
         .contains(&request.source.as_str())
     {
         return Err(AppError::Invalid("unsupported launch source".into()));
     }
-    if let Some(existing)=conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1",[&request.request_id],launch_event_from_row).optional()? {return Ok(existing);}
+    if let Some(existing) = conn
+        .query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)
+        .optional()?
+    {
+        if existing.resource_id != request.resource_id
+            || existing.profile_id != request.profile_id
+            || existing.source != request.source
+            || request.target_id.as_ref().is_some_and(|target_id| existing.target_id.as_ref() != Some(target_id))
+        {
+            return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
+        }
+        return Ok(existing);
+    }
+    if let Some(profile_id) = request.profile_id.as_deref() {
+        let allowed: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles p JOIN profile_resources pr ON pr.profile_id=p.id WHERE p.id=?1 AND pr.resource_id=?2)",
+            params![profile_id, request.resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !allowed {
+            return Err(AppError::NotFound);
+        }
+    }
     let target:Option<ResourceTarget>=conn.query_row("SELECT id,kind,canonical_uri,priority,arguments_json,working_directory,active FROM resource_targets WHERE resource_id=?1 AND active=1 AND (?2 IS NULL OR id=?2) ORDER BY priority DESC LIMIT 1",params![request.resource_id,request.target_id],|r|Ok(ResourceTarget{id:r.get(0)?,kind:r.get(1)?,canonical_uri:r.get(2)?,priority:r.get(3)?,arguments:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),working_directory:r.get(5)?,active:r.get::<_,i64>(6)?!=0})).optional()?;
     let target_id = target.as_ref().map(|t| t.id.clone());
     let launched_at_utc = now_utc();
@@ -4007,6 +4147,27 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate_database(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn production_database_enables_busy_timeout_and_untrusted_schema_protection() {
+        let directory = std::env::temp_dir().join(format!("sw011-db-{}", Uuid::new_v4()));
+        let path = directory.join("launcher.sqlite3");
+        let conn = open_database(&path).unwrap();
+        let busy_timeout: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        let trusted_schema: i64 = conn
+            .query_row("PRAGMA trusted_schema", [], |row| row.get(0))
+            .unwrap();
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(busy_timeout, 5000);
+        assert_eq!(trusted_schema, 0);
+        assert_eq!(foreign_keys, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -4937,6 +5098,43 @@ mod tests {
         load_resource_details(&conn, &mut loaded, None).unwrap();
         assert_eq!(loaded.launch_count, 1);
         assert!(loaded.last_launched_utc.is_some());
+    }
+
+    #[test]
+    fn launch_request_replay_rejects_reused_id_and_checks_profile_membership() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        let allowed = resource("Allowed resource");
+        let disallowed = resource("Other profile resource");
+        persist_resource(&mut conn, &allowed, true, Some(&pid)).unwrap();
+        persist_resource(&mut conn, &disallowed, true, None).unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: allowed.id.clone(),
+            target_id: None,
+            profile_id: Some(pid.clone()),
+            source: "dashboard".into(),
+        };
+        launch_event_with(&mut conn, &request, |_| Ok(())).unwrap();
+        let mut reused_id = request.clone();
+        reused_id.resource_id = disallowed.id.clone();
+        assert!(launch_event_with(&mut conn, &reused_id, |_| panic!("must not relaunch")).is_err());
+
+        let unauthorized = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: disallowed.id,
+            target_id: None,
+            profile_id: Some(pid),
+            source: "dashboard".into(),
+        };
+        assert!(matches!(
+            launch_event_with(&mut conn, &unauthorized, |_| panic!("must not launch")),
+            Err(AppError::NotFound)
+        ));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

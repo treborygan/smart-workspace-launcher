@@ -122,6 +122,11 @@ export interface CommandMap {
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
 }
 
+export interface AppEventMap {
+  "quick-launch-toggle": undefined;
+  "quick-launch-hotkey-status": { registered: boolean; shortcut: string; errorCode?: string };
+}
+
 /** The only frontend entry point for invoking native commands. */
 export async function invokeTyped<K extends keyof CommandMap>(
   command: K,
@@ -131,4 +136,12 @@ export async function invokeTyped<K extends keyof CommandMap>(
 ): Promise<CommandMap[K]["result"]> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CommandMap[K]["result"]>(command, args[0] as Record<string, unknown> | undefined);
+}
+
+export async function listenTyped<K extends keyof AppEventMap>(
+  event: K,
+  handler: (payload: AppEventMap[K]) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<AppEventMap[K]>(event, (message) => handler(message.payload));
 }

@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 22:24 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
+Updated 2026-10-21 22:31 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
 
 ## Environment and release status
 
@@ -26,6 +26,11 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 - SW-015 (issue #14) is active on `feature/sw-015-usage-retention`, stacked on SW-014 PR #38. The TypeScript contract is frozen for profile-local UTC filters, pagination, scoped recording/retention/exclusions, explicit purge, and CSV export. UI is integrated (`fb2146f`), with 88 frontend tests passing. Core is correcting backend findings: CSV must not leak a path used as a resource display name, and workspace sequence run storage must honor opt-out/purge/retention while preserving minimal replay guards. Backend commits integrated locally through `19b3c75`; draft PR #39 is open on a divergent branch. PR #38 review remains pending.
 
+## In progress — SW-016
+
+- SW-016 (issue #15, related resource graph and workspace snapshots) is active on `feature/sw-016-resource-graph`, stacked after SW-015 PR #41 and SW-014 PR #38. Contract/data-model freeze is commit `91327ed` and pushed. The contract defines profile-local undirected descriptive edges and named dashboard/dock layout snapshots with current resource IDs; restore is non-destructive and reports missing resources. Core, UI and independent QA agents are assigned disjoint ownership. `npm run typecheck` and `git diff --check` pass on the contract-only commit. No implementation PR has been opened yet.
+- GitHub review APIs show no submitted reviews or inline threads on PR #38 and #41 at this check. V1 remains BLOCKED because this environment has no Windows 11 x64 runtime, PowerShell or MinGW; Rust tests remain blocked by absent GLib >=2.70 development files. `gh auth status` reports an invalid token, while GitHub push and connected GitHub app operations work.
+
 ## Verification evidence
 
 - Integrated SW-015 UI: `npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check` — PASS; 12 files/88 tests. Existing nonfatal Vite dynamic import warning. `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` and `python scripts/verify_handoff.py` — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib usage` — BLOCKED before app compile because GLib >=2.70 development files / `glib-2.0.pc` are absent. Independent QA cleared UI after fixes but backend approval is held on CSV path-like display names and detailed sequence-run storage after privacy controls. `python scripts/check_release_gate.py` — BLOCKED; no Windows 11 x64 runtime.
@@ -43,7 +48,7 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## Next executable tasks
 
-1. Await review and merge SW-014 PR #38, then continue SW-015..SW-025 in dependency order while performing cross-platform work available here.
+1. Complete and independently review SW-016; open its PR against the SW-015 feature branch, then continue SW-017..SW-025 in dependency order while performing cross-platform work available here. Track PR #38 and #41 reviews/merge in dependency order.
 2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:24:21Z",
+  "updated_at_utc": "2026-10-21T22:31:18Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-015-usage-retention"
+    "branch": "feature/sw-016-resource-graph"
   },
   "active_pull_request": {
     "number": 41,
@@ -102,6 +102,39 @@
       "commit": null,
       "pr": null,
       "task": "Independent UI and backend review passed after pagination/profile-switch and privacy corrections; no remaining implementation blockers. Rust execution remains blocked by missing GLib."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-016 backend",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": null,
+      "pr": null,
+      "task": "Implement typed profile-scoped resource relationships and non-destructive workspace snapshots, SQLite migrations/commands/tests."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-016 frontend",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": null,
+      "pr": null,
+      "task": "Implement related-resource graph and workspace snapshot controls via typed APIs, accessible interactions/tests."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-016 independent QA",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": null,
+      "pr": null,
+      "task": "Review contract and implementation independently; test relationship scoping, snapshot safety, graph UI, and regressions."
     }
   ],
   "milestones": {
@@ -113,41 +146,33 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T22:24:00Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; Linux and Windows GNU Rust targets installed; no PowerShell, Windows 11 host, or MinGW; GLib >=2.70 development files absent.",
+    "at_utc": "2026-10-21T22:31:18Z",
+    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; Windows GNU Rust target installed; no PowerShell, real Windows 11 x64 host, MinGW, or GLib >=2.70 development files.",
     "results": [
       {
-        "command": "npm ci --cache /tmp/swl-npm-cache",
-        "result": "PASS on integration worktree."
+        "command": "npm run typecheck",
+        "result": "PASS on frozen SW-016 contract commit 91327ed."
       },
       {
-        "command": "npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check",
-        "result": "PASS after integrated SW-015 UI fixes: typecheck; 12 files/88 tests; production frontend build; diff check. Existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS."
+        "command": "git diff --check",
+        "result": "PASS on frozen SW-016 contract commit 91327ed."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS; handoff, catalog, schema and fixture checks only; no runtime verification."
+        "result": "PASS at prior SW-015 checkpoint; no runtime or Windows verification."
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib usage",
-        "result": "BLOCKED before application compilation because pkg-config cannot find glib-2.0 >=2.70 / glib-2.0.pc."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+        "result": "NOT RUN for SW-016 yet; known blocked at dependency compilation due missing glib-2.0.pc."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: real Windows 11 x64 acceptance and portable package evidence unavailable."
-      },
-      {
-        "command": "Independent SW-015 frontend/backend QA",
-        "result": "PASS on integrated head b4288c2; no remaining blockers. In-progress sequence snapshots remain for crash-safe recovery. Rust tests remain NOT_RUN due GLib >=2.70 build dependency blocker."
+        "result": "BLOCKED: no real Windows 11 x64 acceptance/package evidence."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "PAUSED per user request. One-time continuation is scheduled in 2.5 hours; resume from CODEX_RESUME.md/backlog/AGENT_STATUS.json. On resume, close superseded draft PR #39, track GitHub reviews for PR #38 and stacked SW-015 PR #41, then continue SW-016..SW-025 cross-platform. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Implement SW-016 on feature/sw-016-resource-graph; contract commit 91327ed is pushed. Core, UI, and independent QA are active. PR #38 and #41 currently have no submitted reviews or inline review threads. GitHub CLI token is invalid, but git push and the connected GitHub app are available. V1 remains BLOCKED without Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,

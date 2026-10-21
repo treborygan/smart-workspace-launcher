@@ -13,7 +13,7 @@
     "number": 41,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
     "state": "OPEN",
-    "head_sha": "b4288c2c3c8d488c43b98536267ff0eddca3bb96",
+    "head_sha": "1367caf",
     "base": "feature/sw-014-action-sequences",
     "review_status": "independent QA passed; GitHub review pending; stacked behind PR #38"
   },
@@ -222,7 +222,7 @@
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
       "state": "OPEN",
-      "head_sha": "b4288c2c3c8d488c43b98536267ff0eddca3bb96",
+      "head_sha": "1367caf",
       "base": "feature/sw-014-action-sequences",
       "note": "Integrated frontend/backend implementation; independent QA passed. GitHub review pending and stacked on PR #38."
     }

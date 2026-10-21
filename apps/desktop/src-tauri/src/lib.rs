@@ -1,5 +1,5 @@
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex};
 use tauri::{Emitter, Manager, State};
@@ -448,6 +448,18 @@ fn persist_resource(
 ) -> Result<(), AppError> {
     validate_resource(resource)?;
     let tx = conn.transaction()?;
+    persist_resource_in_transaction(&tx, resource, creating, profile_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn persist_resource_in_transaction(
+    tx: &Transaction<'_>,
+    resource: &Resource,
+    creating: bool,
+    profile_id: Option<&str>,
+) -> Result<(), AppError> {
+    validate_resource(resource)?;
     if creating {
         tx.execute(
             "INSERT INTO resources VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -513,7 +525,6 @@ fn persist_resource(
             )?;
         }
     }
-    tx.commit()?;
     Ok(())
 }
 
@@ -566,11 +577,18 @@ fn resource_update(
     id: String,
     patch: ResourcePatch,
 ) -> Result<Resource, AppError> {
-    Uuid::parse_str(&id).map_err(|_| AppError::Invalid("resource id must be a UUID".into()))?;
-    let conn = lock(&state)?;
-    let mut resource=conn.query_row("SELECT id,resource_type,display_name,description,icon,default_action,created_utc,updated_utc FROM resources WHERE id=?1",[&id],resource_from_row).optional()?.ok_or(AppError::NotFound)?;
-    load_resource_details(&conn, &mut resource, patch.profile_id.as_deref())?;
-    drop(conn);
+    let mut conn = lock(&state)?;
+    resource_update_in_conn(&mut conn, &id, patch)
+}
+
+fn resource_update_in_conn(
+    conn: &mut Connection,
+    id: &str,
+    patch: ResourcePatch,
+) -> Result<Resource, AppError> {
+    Uuid::parse_str(id).map_err(|_| AppError::Invalid("resource id must be a UUID".into()))?;
+    let mut resource=conn.query_row("SELECT id,resource_type,display_name,description,icon,default_action,created_utc,updated_utc FROM resources WHERE id=?1",[id],resource_from_row).optional()?.ok_or(AppError::NotFound)?;
+    load_resource_details(conn, &mut resource, patch.profile_id.as_deref())?;
     if let Some(v) = patch.resource_type {
         resource.resource_type = v;
     }
@@ -612,12 +630,26 @@ fn resource_update(
         resource.favorite = patch.favorite.unwrap_or(resource.favorite);
     }
     resource.updated_utc = now_utc();
-    let mut conn = lock(&state)?;
-    persist_resource(&mut conn, &resource, false, None)?;
-    if let Some(pid) = profile_id {
-        Uuid::parse_str(&pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
-        conn.execute("INSERT INTO profile_resources(profile_id,resource_id,favorite,category) VALUES (?1,?2,?3,?4) ON CONFLICT(profile_id,resource_id) DO UPDATE SET favorite=excluded.favorite,category=excluded.category",params![pid,resource.id,if resource.favorite {1i64}else{0i64},resource.category])?;
+    validate_resource(&resource)?;
+    if let Some(pid) = profile_id.as_deref() {
+        Uuid::parse_str(pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
     }
+    let tx = conn.transaction()?;
+    if let Some(pid) = profile_id.as_deref() {
+        let profile_exists: i64 = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+            [pid],
+            |row| row.get(0),
+        )?;
+        if profile_exists == 0 {
+            return Err(AppError::NotFound);
+        }
+    }
+    persist_resource_in_transaction(&tx, &resource, false, None)?;
+    if let Some(pid) = profile_id {
+        tx.execute("INSERT INTO profile_resources(profile_id,resource_id,favorite,category) VALUES (?1,?2,?3,?4) ON CONFLICT(profile_id,resource_id) DO UPDATE SET favorite=excluded.favorite,category=excluded.category",params![pid,resource.id,if resource.favorite {1i64}else{0i64},resource.category])?;
+    }
+    tx.commit()?;
     Ok(resource)
 }
 
@@ -1262,6 +1294,75 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn update_with_nonexistent_valid_profile_rolls_back_resource_and_membership() {
+        let mut conn = database();
+        let existing_profile = profile(&conn);
+        let r = resource("Original title");
+        persist_resource(&mut conn, &r, true, Some(&existing_profile)).unwrap();
+        let before = conn
+            .query_row(
+                "SELECT display_name,updated_utc FROM resources WHERE id=?1",
+                [&r.id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        let before_target: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE resource_id=?1",
+                [&r.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let unknown_profile = Uuid::new_v4().to_string();
+        assert_ne!(unknown_profile, existing_profile);
+        let error = resource_update_in_conn(
+            &mut conn,
+            &r.id,
+            ResourcePatch {
+                display_name: Some("Should not persist".into()),
+                profile_id: Some(unknown_profile.clone()),
+                favorite: Some(true),
+                category: Some("Changed category".into()),
+                ..ResourcePatch::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, AppError::NotFound));
+        let after = conn
+            .query_row(
+                "SELECT display_name,updated_utc FROM resources WHERE id=?1",
+                [&r.id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before);
+        let after_target: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE resource_id=?1",
+                [&r.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(after_target, before_target);
+        let invalid_membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+                params![unknown_profile, r.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(invalid_membership_count, 0);
+        let membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE resource_id=?1",
+                [&r.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(membership_count, 1);
     }
 
     #[test]

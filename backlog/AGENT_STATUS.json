@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:03:10Z",
+  "updated_at_utc": "2026-10-21T22:03:40Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -9,7 +9,13 @@
     "state": "ACTIVE",
     "branch": "feature/sw-014-action-sequences"
   },
-  "active_pull_request": null,
+  "active_pull_request": {
+    "number": 38,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+    "state": "OPEN",
+    "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c",
+    "review_status": "independent QA passed; GitHub review pending"
+  },
   "subagent_limit": 3,
   "agents": [
     {
@@ -20,7 +26,7 @@
       "issue": "SW-014 backend",
       "branch": "feature/sw-014-action-sequences",
       "commit": "76d5ce6",
-      "pr": null,
+      "pr": 38,
       "task": "Implemented profile-scoped sequence CRUD, run semantics, events, import/export, collision remapping and Rust regressions."
     },
     {
@@ -31,7 +37,7 @@
       "issue": "SW-014 UI",
       "branch": "feature/sw-014-action-sequences",
       "commit": "019180a",
-      "pr": null,
+      "pr": 38,
       "task": "Implemented sequence editor, ordered resources/targets, explicit runs, progress/failure UI, typed APIs and tests."
     },
     {
@@ -42,7 +48,7 @@
       "issue": "SW-014 independent QA",
       "branch": "feature/sw-014-action-sequences",
       "commit": null,
-      "pr": null,
+      "pr": 38,
       "task": "Final independent review passed; no implementation blockers."
     },
     {
@@ -111,7 +117,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Open SW-014 PR against main for issue #13 with exact checks and blockers; attach PR artifact. Merge after review. Continue SW-015..SW-025 cross-platform tasks; SW-012/V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Await GitHub review and merge SW-014 PR #38 after review. PR attachment connector returned connection closed; retry on resume. Continue SW-015..SW-025 cross-platform work; SW-012/V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -164,5 +170,13 @@
       "scope": "SW-013 profile-scoped smart collections and dynamic resource shortcuts"
     }
   ],
-  "open_pull_requests": []
+  "open_pull_requests": [
+    {
+      "number": 38,
+      "issue": "SW-014",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+      "state": "OPEN",
+      "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c"
+    }
+  ]
 }

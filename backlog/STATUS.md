@@ -19,12 +19,12 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 ## In progress
 
 - SW-013 (issue #12) is complete and merged in PR #37 (`77b3b1b`).
-- SW-014 (issue #13) is implemented on `feature/sw-014-action-sequences`: profile-scoped named sequences of 1–20 existing-resource steps, optional active owned targets, manual launch through the validated command, durable per-step progress/idempotent request replay, stop on first failure, and inert archive round trips with transactional collision remapping. Final independent QA passed without blocker. This is cross-platform V1.1 work; its SW-012 Windows acceptance dependency remains unmet.
+- SW-014 (issue #13) is implemented on `feature/sw-014-action-sequences`: profile-scoped named sequences of 1–20 existing-resource steps, optional active owned targets, manual launch through the validated command, durable per-step progress/idempotent request replay, stop on first failure, and inert archive round trips with transactional collision remapping. Final independent QA passed without blocker. PR #38 is open against `main`, head `2b61024`; GitHub review is pending. This is cross-platform V1.1 work; its SW-012 Windows acceptance dependency remains unmet.
 
 
 ## Verification evidence
 
-- SW-014 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check` — PASS (82 frontend tests/12 files, build); `python tests/test_profile_archive_contract.py -q` — PASS (14); `python scripts/verify_handoff.py` — PASS; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS. Focused Rust sequence tests are authored but cannot compile: GLib/GObject >=2.70 dev files are absent. Final independent QA review passed without blocker. `python scripts/check_release_gate.py` — BLOCKED as expected; real Windows 11 x64 is unavailable.
+- SW-014 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check` — PASS (82 frontend tests/12 files, build); `python tests/test_profile_archive_contract.py -q` — PASS (14); `python scripts/verify_handoff.py` — PASS; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS. Focused Rust sequence tests are authored but cannot compile: GLib/GObject >=2.70 dev files are absent. Final independent QA review passed without blocker. PR #38 is open; the PR artifact connector returned connection closed and needs a retry. `python scripts/check_release_gate.py` — BLOCKED as expected; real Windows 11 x64 is unavailable.
 - SW-013 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build` — PASS (73 tests across 11 files; production build, existing non-fatal Vite dynamic-import warning). `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check` — PASS. `python tests/test_profile_archive_contract.py -q` — PASS (11 tests); `python scripts/verify_handoff.py` — PASS. `python scripts/check_release_gate.py` — BLOCKED as expected. Focused Rust tests including Replace/remap and injected transaction rollback are authored, but blocked before compilation by missing GLib/GObject >=2.70 development packages. Windows GNU checks remain blocked by missing MinGW; Windows acceptance unavailable. Final QA found no SW-013 blocker.
 - On integrated SW-011: `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS; 8 frontend test files/56 tests; build and diff check pass. Vite reports a non-failing ineffective dynamic import warning.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
@@ -37,7 +37,7 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## Next executable tasks
 
-1. Complete QA, open and review/merge SW-014 PR #13, then continue SW-015..SW-025 in dependency order while performing cross-platform work available here.
+1. Await review and merge SW-014 PR #38, then continue SW-015..SW-025 in dependency order while performing cross-platform work available here.
 2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

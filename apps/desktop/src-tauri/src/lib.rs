@@ -687,7 +687,16 @@ fn search_resources(
     Ok(result)
 }
 
+const MAX_LAYOUT_BYTES: usize = 1_048_576;
+
+fn valid_uuid(value: &str) -> bool {
+    Uuid::parse_str(value).is_ok()
+}
+
 fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
+    if !valid_uuid(&layout.profile_id) {
+        return Err(AppError::Invalid("profileId must be a UUID".into()));
+    }
     if layout.version != 1 || !matches!(layout.surface.as_str(), "dashboard" | "dock") {
         return Err(AppError::Invalid(
             "unsupported layout version or surface".into(),
@@ -698,8 +707,7 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
     }
     let mut ids = std::collections::HashSet::with_capacity(layout.cards.len());
     for card in &layout.cards {
-        if card.resource_id.is_empty()
-            || card.resource_id.len() > 64
+        if !valid_uuid(&card.resource_id)
             || !ids.insert(&card.resource_id)
             || card.x < 0
             || card.x > 11
@@ -716,72 +724,85 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
             )
         {
             return Err(AppError::Invalid(
-                "layout card violates bounds or uniqueness".into(),
+                "layout card violates UUID, bounds, or uniqueness".into(),
             ));
         }
     }
     Ok(())
 }
 
-fn filter_layout_cards(conn: &Connection, layout: &mut DashboardLayout) -> Result<(), AppError> {
-    // Removed resources and resources no longer in this profile are omitted from the returned layout.
+fn layout_get_from_conn(
+    conn: &Connection,
+    profile_id: &str,
+    surface: &str,
+) -> Result<DashboardLayout, AppError> {
+    if !valid_uuid(profile_id) {
+        return Err(AppError::Invalid("profileId must be a UUID".into()));
+    }
+    if !matches!(surface, "dashboard" | "dock") {
+        return Err(AppError::Invalid("invalid layout surface".into()));
+    }
+    let profile_exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get(0),
+    )?;
+    if profile_exists == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let stored: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT version,layout_json FROM layouts WHERE profile_id=?1 AND surface=?2",
+            params![profile_id, surface],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((row_version, json)) = stored else {
+        return Ok(DashboardLayout {
+            profile_id: profile_id.to_owned(),
+            surface: surface.to_owned(),
+            version: 1,
+            cards: Vec::new(),
+        });
+    };
+    if json.len() > MAX_LAYOUT_BYTES {
+        return Err(AppError::Invalid("stored layout exceeds 1 MiB".into()));
+    }
+    let layout: DashboardLayout = serde_json::from_str(&json)?;
+    validate_layout(&layout)?;
+    if layout.profile_id != profile_id || layout.surface != surface || layout.version != row_version
+    {
+        return Err(AppError::Invalid(
+            "stored layout identity/version does not match its row and request".into(),
+        ));
+    }
     let mut stmt = conn.prepare("SELECT EXISTS(SELECT 1 FROM resources r JOIN profile_resources pr ON pr.resource_id=r.id WHERE r.id=?1 AND pr.profile_id=?2)")?;
-    let mut kept = Vec::with_capacity(layout.cards.len());
-    for card in layout.cards.drain(..) {
-        if stmt.query_row(params![card.resource_id, layout.profile_id], |row| {
+    let mut filtered = layout;
+    let mut cards = Vec::with_capacity(filtered.cards.len());
+    for card in filtered.cards.drain(..) {
+        if stmt.query_row(params![card.resource_id, profile_id], |row| {
             row.get::<_, i64>(0)
         })? != 0
         {
-            kept.push(card);
+            cards.push(card);
         }
     }
-    layout.cards = kept;
-    Ok(())
+    filtered.cards = cards;
+    Ok(filtered)
 }
 
-#[tauri::command]
-fn layout_get(
-    state: State<'_, AppState>,
-    profile_id: String,
-    surface: String,
+fn layout_save_to_conn(
+    conn: &mut Connection,
+    layout: &DashboardLayout,
 ) -> Result<DashboardLayout, AppError> {
-    if !matches!(surface.as_str(), "dashboard" | "dock") {
-        return Err(AppError::Invalid("invalid layout surface".into()));
+    validate_layout(layout)?;
+    // Tauri's IPC transport has a host-controlled payload limit. This command independently
+    // rejects oversized serialized layouts before opening a transaction or touching stored state.
+    let json = serde_json::to_string(layout)?;
+    if json.len() > MAX_LAYOUT_BYTES {
+        return Err(AppError::Invalid("layout exceeds 1 MiB".into()));
     }
-    let conn = lock(&state)?;
-    let json: Option<String> = conn
-        .query_row(
-            "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface=?2",
-            params![profile_id, surface],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let mut layout = match json {
-        Some(json) => {
-            if json.len() > 1_048_576 {
-                return Err(AppError::Invalid("stored layout exceeds 1 MiB".into()));
-            }
-            serde_json::from_str::<DashboardLayout>(&json)?
-        }
-        None => DashboardLayout {
-            profile_id,
-            surface,
-            version: 1,
-            cards: Vec::new(),
-        },
-    };
-    validate_layout(&layout)?;
-    filter_layout_cards(&conn, &mut layout)?;
-    Ok(layout)
-}
-
-#[tauri::command]
-fn layout_save(
-    state: State<'_, AppState>,
-    layout: DashboardLayout,
-) -> Result<DashboardLayout, AppError> {
-    validate_layout(&layout)?;
-    let mut conn = lock(&state)?;
     let tx = conn.transaction()?;
     let profile_exists: i64 = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
@@ -791,15 +812,40 @@ fn layout_save(
     if profile_exists == 0 {
         return Err(AppError::NotFound);
     }
-    let mut normalized = layout;
-    filter_layout_cards(&tx, &mut normalized)?;
-    let json = serde_json::to_string(&normalized)?;
-    if json.len() > 1_048_576 {
-        return Err(AppError::Invalid("layout exceeds 1 MiB".into()));
+    let mut stmt = tx.prepare("SELECT EXISTS(SELECT 1 FROM resources r JOIN profile_resources pr ON pr.resource_id=r.id WHERE r.id=?1 AND pr.profile_id=?2)")?;
+    for card in &layout.cards {
+        if stmt.query_row(params![card.resource_id, layout.profile_id], |row| {
+            row.get::<_, i64>(0)
+        })? == 0
+        {
+            return Err(AppError::Invalid(
+                "layout contains a resource not assigned to this profile".into(),
+            ));
+        }
     }
-    tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![normalized.profile_id,normalized.surface,normalized.version,json,now_utc()])?;
+    drop(stmt);
+    tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![layout.profile_id,layout.surface,layout.version,json,now_utc()])?;
     tx.commit()?;
-    Ok(normalized)
+    Ok(layout.clone())
+}
+
+#[tauri::command]
+fn layout_get(
+    state: State<'_, AppState>,
+    profile_id: String,
+    surface: String,
+) -> Result<DashboardLayout, AppError> {
+    let conn = lock(&state)?;
+    layout_get_from_conn(&conn, &profile_id, &surface)
+}
+
+#[tauri::command]
+fn layout_save(
+    state: State<'_, AppState>,
+    layout: DashboardLayout,
+) -> Result<DashboardLayout, AppError> {
+    let mut conn = lock(&state)?;
+    layout_save_to_conn(&mut conn, &layout)
 }
 
 #[tauri::command]
@@ -1315,7 +1361,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_round_trip_bounds_and_filters_stale_membership() {
+    fn layout_save_get_round_trip_and_stale_membership_filter() {
         let mut conn = database();
         let pid = profile(&conn);
         let resource = resource("Pinned item");
@@ -1333,48 +1379,133 @@ mod tests {
                 card_type: "compact".into(),
             }],
         };
-        validate_layout(&layout).unwrap();
-        let json = serde_json::to_string(&layout).unwrap();
-        conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dashboard',1,?2,?3)", params![pid,json,now_utc()]).unwrap();
-        let mut read: DashboardLayout = serde_json::from_str(
-            &conn
-                .query_row(
-                    "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
-                    [&pid],
-                    |r| r.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        filter_layout_cards(&conn, &mut read).unwrap();
-        assert_eq!(read.cards.len(), 1);
-        assert_eq!(read.cards[0].resource_id, resource.id);
+        let saved = layout_save_to_conn(&mut conn, &layout).unwrap();
+        assert_eq!(saved.cards.len(), 1);
+        assert_eq!(
+            layout_get_from_conn(&conn, &pid, "dashboard")
+                .unwrap()
+                .cards
+                .len(),
+            1
+        );
         conn.execute(
             "DELETE FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
             params![pid, resource.id],
         )
         .unwrap();
-        filter_layout_cards(&conn, &mut read).unwrap();
-        assert!(read.cards.is_empty());
+        assert!(layout_get_from_conn(&conn, &pid, "dashboard")
+            .unwrap()
+            .cards
+            .is_empty());
+    }
 
-        let mut invalid = DashboardLayout {
-            profile_id: pid,
+    #[test]
+    fn invalid_layout_save_does_not_overwrite_prior_row() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        let resource = resource("Known");
+        persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        let prior = DashboardLayout {
+            profile_id: pid.clone(),
             surface: "dashboard".into(),
             version: 1,
             cards: vec![LayoutCard {
-                resource_id: Uuid::new_v4().to_string(),
-                x: 11,
+                resource_id: resource.id.clone(),
+                x: 0,
                 y: 0,
                 w: 2,
-                h: 1,
+                h: 2,
                 card_type: "icon".into(),
             }],
         };
+        layout_save_to_conn(&mut conn, &prior).unwrap();
+        let invalid = DashboardLayout {
+            cards: vec![LayoutCard {
+                resource_id: Uuid::new_v4().to_string(),
+                x: 1,
+                y: 3,
+                w: 1,
+                h: 1,
+                card_type: "icon".into(),
+            }],
+            ..prior.clone()
+        };
+        assert!(layout_save_to_conn(&mut conn, &invalid).is_err());
+        let invalid_profile = DashboardLayout {
+            profile_id: "not-a-uuid".into(),
+            ..prior.clone()
+        };
+        assert!(layout_save_to_conn(&mut conn, &invalid_profile).is_err());
+        let stored: String = conn
+            .query_row(
+                "SELECT layout_json FROM layouts WHERE profile_id=?1 AND surface='dashboard'",
+                [&pid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, serde_json::to_string(&prior).unwrap());
+    }
+
+    #[test]
+    fn layout_requires_uuid_known_profile_and_matching_row_identity() {
+        let conn = database();
+        let pid = profile(&conn);
+        assert!(layout_get_from_conn(&conn, "not-a-uuid", "dashboard").is_err());
+        assert!(matches!(
+            layout_get_from_conn(&conn, &Uuid::new_v4().to_string(), "dashboard"),
+            Err(AppError::NotFound)
+        ));
+        assert!(layout_get_from_conn(&conn, &pid, "window").is_err());
+        let other = profile(&conn);
+        let wrong_identity = DashboardLayout {
+            profile_id: other,
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![],
+        };
+        conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dashboard',1,?2,?3)", params![pid,serde_json::to_string(&wrong_identity).unwrap(),now_utc()]).unwrap();
+        assert!(layout_get_from_conn(&conn, &pid, "dashboard").is_err());
+    }
+
+    #[test]
+    fn layout_checks_card_uuid_surface_and_row_version() {
+        let conn = database();
+        let pid = profile(&conn);
+        let mut invalid = DashboardLayout {
+            profile_id: pid.clone(),
+            surface: "window".into(),
+            version: 1,
+            cards: vec![],
+        };
         assert!(validate_layout(&invalid).is_err());
-        invalid.cards[0].x = 0;
-        invalid.cards[0].w = 1;
-        invalid.cards.push(invalid.cards[0].clone());
+        invalid.surface = "dock".into();
+        invalid.cards.push(LayoutCard {
+            resource_id: "invalid-id".into(),
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            card_type: "icon".into(),
+        });
         assert!(validate_layout(&invalid).is_err());
+        let valid = DashboardLayout {
+            profile_id: pid.clone(),
+            surface: "dock".into(),
+            version: 1,
+            cards: vec![],
+        };
+        conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dock',2,?2,?3)", params![pid,serde_json::to_string(&valid).unwrap(),now_utc()]).unwrap();
+        assert!(layout_get_from_conn(&conn, &valid.profile_id, "dock").is_err());
+        let surface_mismatch = DashboardLayout {
+            surface: "dashboard".into(),
+            ..valid.clone()
+        };
+        conn.execute(
+            "UPDATE layouts SET version=1,layout_json=?2 WHERE profile_id=?1 AND surface='dock'",
+            params![pid, serde_json::to_string(&surface_mismatch).unwrap()],
+        )
+        .unwrap();
+        assert!(layout_get_from_conn(&conn, &valid.profile_id, "dock").is_err());
     }
 
     #[test]

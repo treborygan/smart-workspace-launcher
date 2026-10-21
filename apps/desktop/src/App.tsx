@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./components/Icon";
 import { api } from "./lib/api";
+import type { ResourcePatch } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import "./styles.css";
 
@@ -23,14 +24,14 @@ function ResourceMark({ resource }: { resource: Resource }) {
 function AddResourceDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (resource: Resource) => void }) {
   const [name, setName] = useState("");
   const [uri, setUri] = useState("");
-  const [kind, setKind] = useState("file");
+  const [kind, setKind] = useState<"file" | "folder" | "app">("file");
   const [error, setError] = useState("");
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError("");
     if (!name.trim() || !uri.trim()) { setError("Add a name and a file path or HTTPS address."); return; }
     if (/^https?:\/\//i.test(uri) && !/^https:\/\//i.test(uri)) { setError("Only HTTPS addresses are supported."); return; }
     try {
-      const resource = await api.create({ resourceType: /^https:\/\//i.test(uri) ? "url" : kind, displayName: name.trim(), defaultAction: "open", targets: [{ id: crypto.randomUUID(), kind: /^https:\/\//i.test(uri) ? "url" : "path", canonicalUri: uri.trim(), priority: 0, arguments: [], active: true }] });
+      const resource = await api.create({ resourceType: /^https:\/\//i.test(uri) ? "url" : kind, displayName: name.trim(), defaultAction: "open", targets: [{ id: crypto.randomUUID(), kind: /^https:\/\//i.test(uri) ? "url" : kind, canonicalUri: uri.trim(), priority: 0, arguments: [], active: true }] });
       onCreate(resource); onClose();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not save this resource."); }
   };
@@ -39,7 +40,7 @@ function AddResourceDialog({ onClose, onCreate }: { onClose: () => void; onCreat
       <header className="dialog-heading"><div><h2 id="dialog-title">Add a resource</h2><p>Save a file, folder, application or secure web address.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></header>
       <form onSubmit={submit} className="resource-form">
         <label>Display name<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Project roadmap" /></label>
-        <label>Type<select value={kind} onChange={(e) => setKind(e.target.value)}><option value="file">File</option><option value="folder">Folder</option><option value="application">Application</option></select></label>
+        <label>Type<select value={kind} onChange={(e) => setKind(e.target.value as "file" | "folder" | "app")}><option value="file">File</option><option value="folder">Folder</option><option value="app">Application</option></select></label>
         <label>Location<input value={uri} onChange={(e) => setUri(e.target.value)} placeholder="C:\\Work\\Roadmap.xlsx or https://…" /></label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <footer><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button className="button primary" type="submit"><Icon name="plus" size={16} /> Add resource</button></footer>
@@ -89,7 +90,7 @@ export default function App() {
   }), [resources, query, category]);
   const selected = resources.find((resource) => resource.id === selectedId) ?? null;
 
-  const update = async (id: string, patch: Partial<Resource>) => {
+  const update = async (id: string, patch: ResourcePatch) => {
     try { const changed = await api.update(id, patch); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
   };

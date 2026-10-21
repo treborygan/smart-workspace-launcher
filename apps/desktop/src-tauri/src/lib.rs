@@ -4795,6 +4795,78 @@ fn sequence_step_request_id(run_request_id: &str, step_id: &str) -> String {
     Uuid::from_bytes(bytes).to_string()
 }
 
+fn compact_terminal_workspace_sequence_runs(
+    conn: &Connection,
+    profile_id: &str,
+    older_than_utc: Option<&str>,
+) -> Result<(), AppError> {
+    let rows = {
+        let mut stmt = conn.prepare("SELECT request_id,result_json,updated_utc FROM workspace_sequence_runs WHERE profile_id=?1")?;
+        stmt.query_map([profile_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    };
+    for (request_id, result_json, updated_utc) in rows {
+        let mut result: WorkspaceSequenceRunResult = serde_json::from_str(&result_json)?;
+        if result.status == "in_progress" {
+            continue;
+        }
+        let expired = older_than_utc.is_none_or(|cutoff| {
+            updated_utc.as_str() < cutoff
+                || result
+                    .steps
+                    .iter()
+                    .any(|step| step.result.launched_at_utc.as_str() < cutoff)
+        });
+        if !expired {
+            continue;
+        }
+        result.steps.clear();
+        result.stopped_at_step_id = None;
+        conn.execute(
+            "UPDATE workspace_sequence_runs SET sequence_json='',result_json=?2 WHERE request_id=?1",
+            params![request_id, serde_json::to_string(&result)?],
+        )?;
+    }
+    Ok(())
+}
+
+fn persist_workspace_sequence_result(
+    conn: &Connection,
+    request_id: &str,
+    profile_id: &str,
+    sequence: &WorkspaceSequence,
+    result: &WorkspaceSequenceRunResult,
+) -> Result<(), AppError> {
+    let terminal = result.status != "in_progress";
+    let settings = usage_settings_for(conn, profile_id)?;
+    let history_includes_all_steps = settings.recording_enabled
+        && sequence.steps.iter().all(|step| {
+            !settings
+                .excluded_resource_ids
+                .iter()
+                .any(|excluded| excluded == &step.resource_id)
+        });
+    let mut stored_result = result.clone();
+    let sequence_json = if terminal && !history_includes_all_steps {
+        stored_result.steps.clear();
+        stored_result.stopped_at_step_id = None;
+        String::new()
+    } else {
+        serde_json::to_string(sequence)?
+    };
+    conn.execute(
+        "UPDATE workspace_sequence_runs SET sequence_json=?2,result_json=?3,updated_utc=?4 WHERE request_id=?1",
+        params![request_id, sequence_json, serde_json::to_string(&stored_result)?, now_utc()],
+    )?;
+    Ok(())
+}
+
 fn record_failed_sequence_launch(
     conn: &mut Connection,
     request: &LaunchRequest,
@@ -4845,8 +4917,9 @@ where
     valid_uuid(sequence_id, "workspace sequence id")?;
     valid_uuid(profile_id, "profile id")?;
     valid_uuid(request_id, "sequence request id")?;
+    let _settings = usage_settings_for(conn, profile_id)?;
     let existing_run = conn.query_row("SELECT sequence_id,profile_id,sequence_json,result_json FROM workspace_sequence_runs WHERE request_id=?1", [request_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?))).optional()?;
-    let (mut sequence, mut result, resumed) =
+    let (sequence, mut result, resumed) =
         if let Some((stored_sequence_id, stored_profile_id, stored_snapshot, stored_result)) =
             existing_run
         {
@@ -4855,11 +4928,11 @@ where
                     "sequence request ID was already used for a different action".into(),
                 ));
             }
-            let stored_sequence: WorkspaceSequence = serde_json::from_str(&stored_snapshot)?;
             let stored_result: WorkspaceSequenceRunResult = serde_json::from_str(&stored_result)?;
             if stored_result.status != "in_progress" {
                 return Ok(stored_result);
             }
+            let stored_sequence: WorkspaceSequence = serde_json::from_str(&stored_snapshot)?;
             (stored_sequence, stored_result, true)
         } else {
             let sequence = workspace_sequence_list_on_conn(conn, profile_id)?
@@ -4888,7 +4961,7 @@ where
         conn.execute("INSERT INTO workspace_sequence_runs(request_id,sequence_id,profile_id,sequence_json,result_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![request_id,sequence_id,profile_id,snapshot,result_json,timestamp])?;
     }
     let first_pending = result.steps.len();
-    for step in sequence.steps.into_iter().skip(first_pending) {
+    for step in sequence.steps.iter().skip(first_pending).cloned() {
         let step_request_id = sequence_step_request_id(request_id, &step.id);
         let request = LaunchRequest {
             request_id: step_request_id,
@@ -4955,20 +5028,13 @@ where
             result.status = "failed".into();
             result.stopped_at_step_id = Some(step.id);
         }
-        let result_json = serde_json::to_string(&result)?;
-        conn.execute(
-            "UPDATE workspace_sequence_runs SET result_json=?2,updated_utc=?3 WHERE request_id=?1",
-            params![request_id, result_json, now_utc()],
-        )?;
+        persist_workspace_sequence_result(conn, request_id, profile_id, &sequence, &result)?;
         if result.status == "failed" {
             return Ok(result);
         }
     }
     result.status = "completed".into();
-    conn.execute(
-        "UPDATE workspace_sequence_runs SET result_json=?2,updated_utc=?3 WHERE request_id=?1",
-        params![request_id, serde_json::to_string(&result)?, now_utc()],
-    )?;
+    persist_workspace_sequence_result(conn, request_id, profile_id, &sequence, &result)?;
     Ok(result)
 }
 
@@ -5201,8 +5267,20 @@ fn usage_settings_for(conn: &Connection, profile_id: &str) -> Result<UsageSettin
     }
     let stored = conn.query_row("SELECT recording_enabled,retention_days,excluded_resource_ids_json FROM usage_settings WHERE profile_id=?1", [profile_id], |r| Ok((r.get::<_, i64>(0)?,r.get::<_, Option<u16>>(1)?,r.get::<_, String>(2)?))).optional()?;
     let (recording, retention, excluded) = stored.unwrap_or((1, None, "[]".into()));
-    if let Some(days) = retention {
-        conn.execute("DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now',?2)", params![profile_id, format!("-{} days",days)])?;
+    let cutoff = retention.map(|days| {
+        (Utc::now() - chrono::Duration::days(days as i64))
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    });
+    if recording == 0 {
+        compact_terminal_workspace_sequence_runs(conn, profile_id, None)?;
+    } else if let Some(cutoff_utc) = cutoff.as_deref() {
+        compact_terminal_workspace_sequence_runs(conn, profile_id, Some(cutoff_utc))?;
+    }
+    if let Some(cutoff_utc) = cutoff.as_deref() {
+        conn.execute(
+            "DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc<?2",
+            params![profile_id, cutoff_utc],
+        )?;
     }
     Ok(UsageSettings {
         profile_id: profile_id.to_string(),
@@ -5500,8 +5578,20 @@ fn usage_settings_set(
         ));
     }
     tx.execute("INSERT INTO usage_settings(profile_id,recording_enabled,retention_days,excluded_resource_ids_json) VALUES (?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET recording_enabled=excluded.recording_enabled,retention_days=excluded.retention_days,excluded_resource_ids_json=excluded.excluded_resource_ids_json",params![settings.profile_id,settings.recording_enabled as i64,settings.retention_days,serde_json::to_string(&ids)?])?;
-    if let Some(days) = settings.retention_days {
-        tx.execute("DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now',?2)",params![settings.profile_id,format!("-{} days",days)])?;
+    let cutoff = settings.retention_days.map(|days| {
+        (Utc::now() - chrono::Duration::days(days as i64))
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    });
+    if !settings.recording_enabled {
+        compact_terminal_workspace_sequence_runs(&tx, &settings.profile_id, None)?;
+    } else if let Some(cutoff_utc) = cutoff.as_deref() {
+        compact_terminal_workspace_sequence_runs(&tx, &settings.profile_id, Some(cutoff_utc))?;
+    }
+    if let Some(cutoff_utc) = cutoff.as_deref() {
+        tx.execute(
+            "DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc<?2",
+            params![settings.profile_id, cutoff_utc],
+        )?;
     }
     tx.commit()?;
     usage_settings_for(&conn, &settings.profile_id)
@@ -5511,9 +5601,15 @@ fn usage_settings_set(
 fn usage_history_purge(state: State<'_, AppState>, profile_id: String) -> Result<u64, AppError> {
     valid_uuid(&profile_id, "profile id")?;
     let conn = lock(&state)?;
+    purge_usage_history_for_profile(&conn, &profile_id)
+}
+
+fn purge_usage_history_for_profile(conn: &Connection, profile_id: &str) -> Result<u64, AppError> {
+    let _settings = usage_settings_for(conn, profile_id)?;
+    compact_terminal_workspace_sequence_runs(conn, profile_id, None)?;
     let removed = conn.execute(
         "DELETE FROM launch_events WHERE profile_id=?1",
-        [&profile_id],
+        [profile_id],
     )?;
     Ok(removed as u64)
 }
@@ -5538,6 +5634,15 @@ fn usage_export_csv(
     query: UsageQuery,
     output_path: String,
 ) -> Result<UsageExportResult, AppError> {
+    let conn = lock(&state)?;
+    usage_export_csv_to_path(&conn, query, &output_path)
+}
+
+fn usage_export_csv_to_path(
+    conn: &Connection,
+    query: UsageQuery,
+    output_path: &str,
+) -> Result<UsageExportResult, AppError> {
     if output_path.len() > 4096 {
         return Err(AppError::Invalid("output path is too long".into()));
     }
@@ -5550,9 +5655,8 @@ fn usage_export_csv(
             "usage export path must end in .csv".into(),
         ));
     }
-    let conn = lock(&state)?;
     valid_uuid(&query.profile_id, "profile id")?;
-    let _settings = usage_settings_for(&conn, &query.profile_id)?;
+    let _settings = usage_settings_for(conn, &query.profile_id)?;
     let filter = validate_usage_filter(UsageFilter {
         from_utc: query.from_utc,
         to_utc: query.to_utc,
@@ -5571,8 +5675,12 @@ fn usage_export_csv(
         .open(&temporary)
         .map_err(|e| AppError::Invalid(format!("cannot create CSV export: {e}")))?;
     let written = (|| -> Result<usize, AppError> {
-        writeln!(file,"request_id,resource_id,display_name,launched_at_utc,source,status,error_code,duration_ms").map_err(|e|AppError::Invalid(format!("cannot write CSV: {e}")))?;
-        let mut stmt = conn.prepare("SELECT le.request_id,le.resource_id,r.display_name,le.launched_at_utc,le.source,le.status,le.error_code,le.duration_ms FROM launch_events le LEFT JOIN resources r ON r.id=le.resource_id WHERE le.profile_id=?1 AND (?2 IS NULL OR le.launched_at_utc>=?2) AND (?3 IS NULL OR le.launched_at_utc<=?3) AND (?4 IS NULL OR le.source=?4) AND (?5 IS NULL OR le.status=?5) AND (?6 IS NULL OR le.resource_id=?6) ORDER BY le.launched_at_utc DESC,le.request_id DESC")?;
+        writeln!(
+            file,
+            "request_id,resource_id,launched_at_utc,source,status,duration_ms"
+        )
+        .map_err(|e| AppError::Invalid(format!("cannot write CSV: {e}")))?;
+        let mut stmt = conn.prepare("SELECT request_id,resource_id,launched_at_utc,source,status,duration_ms FROM launch_events WHERE profile_id=?1 AND (?2 IS NULL OR launched_at_utc>=?2) AND (?3 IS NULL OR launched_at_utc<=?3) AND (?4 IS NULL OR source=?4) AND (?5 IS NULL OR status=?5) AND (?6 IS NULL OR resource_id=?6) ORDER BY launched_at_utc DESC,request_id DESC")?;
         let rows = stmt.query_map(
             params![
                 query.profile_id,
@@ -5586,29 +5694,24 @@ fn usage_export_csv(
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
                     r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, Option<String>>(6)?,
-                    r.get::<_, Option<i64>>(7)?,
+                    r.get::<_, Option<i64>>(5)?,
                 ))
             },
         )?;
         let mut count = 0;
         for row in rows {
-            let (request_id, resource_id, display_name, utc, source, status, error, duration) =
-                row?;
+            let (request_id, resource_id, utc, source, status, duration) = row?;
             writeln!(
                 file,
-                "{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{}",
                 csv_safe(&request_id),
                 csv_safe(&resource_id),
-                csv_safe(display_name.as_deref().unwrap_or("")),
                 csv_safe(&utc),
                 csv_safe(&source),
                 csv_safe(&status),
-                csv_safe(error.as_deref().unwrap_or("")),
                 duration.map(|d| d.to_string()).unwrap_or_default()
             )
             .map_err(|e| AppError::Invalid(format!("cannot write CSV: {e}")))?;
@@ -5635,7 +5738,7 @@ fn usage_export_csv(
         return Err(error);
     }
     Ok(UsageExportResult {
-        path: output_path,
+        path: output_path.to_string(),
         event_count,
     })
 }
@@ -8757,6 +8860,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first_run.status, "completed");
+        let stored_sequence: String = conn
+            .query_row(
+                "SELECT sequence_json FROM workspace_sequence_runs WHERE request_id=?1",
+                [&sequence_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let stored_result_json: String = conn
+            .query_row(
+                "SELECT result_json FROM workspace_sequence_runs WHERE request_id=?1",
+                [&sequence_request],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let stored_result: WorkspaceSequenceRunResult =
+            serde_json::from_str(&stored_result_json).unwrap();
+        assert!(
+            stored_sequence.is_empty(),
+            "recording-off terminal run must discard its sequence snapshot"
+        );
+        assert!(
+            stored_result.steps.is_empty(),
+            "recording-off terminal run must discard per-step details"
+        );
         let sequence_event_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM launch_events WHERE profile_id=?1 AND source='sequence'",
@@ -8799,6 +8926,35 @@ mod tests {
     }
 
     #[test]
+    fn usage_csv_never_exports_user_controlled_resource_names_or_error_text() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("C:\\private\\secret.txt");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let request_id = Uuid::new_v4().to_string();
+        conn.execute("INSERT INTO launch_events(id,request_id,resource_id,profile_id,source,launched_at_utc,status,error_code,message) VALUES (?1,?2,?3,?4,'dashboard','2026-10-21T00:00:00.000Z','failed',?5,?5)", params![Uuid::new_v4().to_string(),request_id,resource.id,profile_id,"C:\\private\\secret.txt"]).unwrap();
+        let path = std::env::temp_dir().join(format!("sw015-{}.csv", Uuid::new_v4()));
+        let query = UsageQuery {
+            profile_id,
+            from_utc: None,
+            to_utc: None,
+            source: None,
+            status: None,
+            resource_id: None,
+            limit: None,
+            offset: None,
+        };
+        let result = usage_export_csv_to_path(&conn, query, path.to_str().unwrap()).unwrap();
+        assert_eq!(result.event_count, 1);
+        let csv = std::fs::read_to_string(&path).unwrap();
+        assert!(csv.starts_with("request_id,resource_id,launched_at_utc,source,status,duration_ms"));
+        assert!(!csv.contains("display_name"));
+        assert!(!csv.contains("secret.txt"));
+        assert!(csv.contains(&request_id));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn retention_prunes_only_analytics_rows_and_keeps_guard_records() {
         let conn = database();
         let profile_id = profile(&conn);
@@ -8807,6 +8963,22 @@ mod tests {
         conn.execute("INSERT INTO usage_settings(profile_id,recording_enabled,retention_days,excluded_resource_ids_json) VALUES (?1,1,30,'[]')", [&profile_id]).unwrap();
         conn.execute("INSERT INTO launch_events(id,request_id,resource_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,'dashboard','2020-01-01T00:00:00.000Z','handed_off')",params![Uuid::new_v4().to_string(),request_id,resource_id,profile_id]).unwrap();
         conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,profile_id,source,status,launched_at_utc) VALUES (?1,'hash',?2,?3,'dashboard','handed_off','2020-01-01T00:00:00.000Z')",params![request_id,resource_id,profile_id]).unwrap();
+        let resource = resource("Retained sequence");
+        let mut conn = conn;
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(&profile_id, "Old sequence", &[(&resource, None)]);
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let sequence_request = Uuid::new_v4().to_string();
+        workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &sequence_request,
+            |_| Ok(()),
+        )
+        .unwrap();
+        conn.execute("UPDATE workspace_sequence_runs SET updated_utc='2020-01-01T00:00:00.000Z' WHERE request_id=?1",[&sequence_request]).unwrap();
+        conn.execute("UPDATE launch_events SET launched_at_utc='2020-01-01T00:00:00.000Z' WHERE profile_id=?1",[&profile_id]).unwrap();
         let settings = usage_settings_for(&conn, &profile_id).unwrap();
         assert_eq!(settings.retention_days, Some(30));
         let events: i64 = conn
@@ -8825,6 +8997,62 @@ mod tests {
             .unwrap();
         assert_eq!(events, 0);
         assert_eq!(guards, 1);
+        let (snapshot, result_json): (String, String) = conn
+            .query_row(
+                "SELECT sequence_json,result_json FROM workspace_sequence_runs WHERE request_id=?1",
+                [&sequence_request],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let compact: WorkspaceSequenceRunResult = serde_json::from_str(&result_json).unwrap();
+        assert!(
+            snapshot.is_empty(),
+            "retention must discard the full terminal sequence snapshot"
+        );
+        assert!(
+            compact.steps.is_empty(),
+            "retention must discard per-step results with expired history"
+        );
+    }
+
+    #[test]
+    fn explicit_history_purge_compacts_terminal_sequence_results_and_replay_stays_safe() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("Purge sequence");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(&profile_id, "Purge sequence", &[(&resource, None)]);
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let request_id = Uuid::new_v4().to_string();
+        let mut launches = 0;
+        let initial =
+            workspace_sequence_run_with(&mut conn, &sequence.id, &profile_id, &request_id, |_| {
+                launches += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(initial.steps.len(), 1);
+        let event_count = purge_usage_history_for_profile(&conn, &profile_id).unwrap();
+        assert_eq!(event_count, 1);
+        let (sequence_json, result_json): (String, String) = conn
+            .query_row(
+                "SELECT sequence_json,result_json FROM workspace_sequence_runs WHERE request_id=?1",
+                [&request_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let compact: WorkspaceSequenceRunResult = serde_json::from_str(&result_json).unwrap();
+        assert!(sequence_json.is_empty());
+        assert!(compact.steps.is_empty());
+        assert_eq!(compact.total_steps, 1);
+        let replay =
+            workspace_sequence_run_with(&mut conn, &sequence.id, &profile_id, &request_id, |_| {
+                panic!("purged sequence replay must not relaunch")
+            })
+            .unwrap();
+        assert_eq!(replay.status, "completed");
+        assert!(replay.steps.is_empty());
+        assert_eq!(launches, 1);
     }
 
     #[test]

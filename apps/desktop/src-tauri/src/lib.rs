@@ -6668,6 +6668,110 @@ mod tests {
     }
 
     #[test]
+    fn profile_import_replace_replaces_dynamic_shortcuts_and_remaps_references() {
+        let mut conn = database();
+        let mut package = package("url");
+        let incoming = ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming shortcut".into(),
+            resource_id: package.resources.resources[0].id.clone(),
+            target_id: Some(package.resources.resources[0].targets[0].id.clone()),
+        };
+        package.profile.dynamic_shortcuts = vec![incoming.clone()];
+        validate_package_fields(&package).unwrap();
+
+        let target_profile = profile(&conn);
+        let old_resource = resource("Existing local resource");
+        persist_resource(&mut conn, &old_resource, true, Some(&target_profile)).unwrap();
+        let old_shortcut = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Old shortcut".into(),
+            resource_id: old_resource.id.clone(),
+            target_id: Some(old_resource.targets[0].id.clone()),
+        };
+        dynamic_shortcut_save_on_conn(&mut conn, old_shortcut.clone()).unwrap();
+
+        import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).unwrap();
+        let shortcuts = dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(shortcuts.len(), 1);
+        assert_eq!(shortcuts[0].id, incoming.id);
+        assert_eq!(shortcuts[0].name, incoming.name);
+        assert_ne!(shortcuts[0].resource_id, incoming.resource_id);
+        assert_ne!(
+            shortcuts[0].target_id.as_deref(),
+            incoming.target_id.as_deref()
+        );
+        assert_eq!(shortcuts[0].profile_id, target_profile);
+        let is_member: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+                params![target_profile, shortcuts[0].resource_id],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )
+            .unwrap();
+        assert!(is_member);
+        assert_ne!(shortcuts[0].id, old_shortcut.id);
+    }
+
+    #[test]
+    fn profile_import_rolls_back_replace_when_dynamic_shortcut_insert_fails() {
+        let mut conn = database();
+        let mut package = package("url");
+        package.profile.dynamic_shortcuts = vec![ProfilePackageDynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            name: "Incoming shortcut".into(),
+            resource_id: package.resources.resources[0].id.clone(),
+            target_id: Some(package.resources.resources[0].targets[0].id.clone()),
+        }];
+        validate_package_fields(&package).unwrap();
+
+        let target_profile = profile(&conn);
+        let old_resource = resource("Existing local resource");
+        persist_resource(&mut conn, &old_resource, true, Some(&target_profile)).unwrap();
+        let old_shortcut = DynamicShortcut {
+            id: Uuid::new_v4().to_string(),
+            profile_id: target_profile.clone(),
+            name: "Old shortcut".into(),
+            resource_id: old_resource.id.clone(),
+            target_id: Some(old_resource.targets[0].id.clone()),
+        };
+        dynamic_shortcut_save_on_conn(&mut conn, old_shortcut.clone()).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_dynamic_shortcut_import BEFORE INSERT ON dynamic_shortcuts BEGIN SELECT RAISE(ABORT,'injected dynamic shortcut failure'); END;").unwrap();
+        let resource_count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(
+            import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).is_err()
+        );
+        let profile_name: String = conn
+            .query_row(
+                "SELECT name FROM profiles WHERE id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_name, "Work");
+        assert_eq!(
+            dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap(),
+            vec![old_shortcut]
+        );
+        let incoming_membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+                params![target_profile, package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(incoming_membership_count, 0);
+        let resource_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(resource_count_after, resource_count_before);
+    }
+
+    #[test]
     fn metadata_inspection_caches_size_and_force_refreshes_local_file() {
         let mut conn = database();
         let r = resource("Metadata file");

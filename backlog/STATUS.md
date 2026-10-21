@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 21:51 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`. SW-013 implementation is integrated on `feature/sw-013-dynamic-collections`; final independent QA passed with no blocker; Replace/remap and injected rollback regression coverage is present. PR creation is next.
+Updated 2026-10-21 22:03 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
 
 ## Environment and release status
 
@@ -18,13 +18,13 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## In progress
 
-- SW-013 PR #37 is open against `main` (head `f8fbb3d`); final independent QA passed. GitHub review submissions are not yet present.
-- SW-014 implementation is proceeding cross-platform on a stacked feature branch atop SW-013; SW-012 remains a Windows-only release blocker and is not claimed complete.
+- SW-013 (issue #12) is complete and merged in PR #37 (`77b3b1b`).
+- SW-014 (issue #13) is implemented on `feature/sw-014-action-sequences`: profile-scoped named sequences of 1–20 existing-resource steps, optional active owned targets, manual launch through the validated command, durable per-step progress/idempotent request replay, stop on first failure, and inert archive round trips with transactional collision remapping. Final independent QA passed without blocker. This is cross-platform V1.1 work; its SW-012 Windows acceptance dependency remains unmet.
 
-- SW-013 (issue #12) implementation and final independent QA are complete locally; PR #37 is open; independent QA passed. GitHub review is pending. It adds profile-scoped bounded AND-filter smart collections, named shortcuts to existing profile resources and optional active owned targets, Quick Launch integration, profile archive round trips, target-bound preview tokens and import collision details. Archive imports do not execute package content. No per-resource/global OS hotkeys are included; the existing global Quick Launch hotkey remains.
 
 ## Verification evidence
 
+- SW-014 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check` — PASS (82 frontend tests/12 files, build); `python tests/test_profile_archive_contract.py -q` — PASS (14); `python scripts/verify_handoff.py` — PASS; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS. Focused Rust sequence tests are authored but cannot compile: GLib/GObject >=2.70 dev files are absent. Final independent QA review passed without blocker. `python scripts/check_release_gate.py` — BLOCKED as expected; real Windows 11 x64 is unavailable.
 - SW-013 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build` — PASS (73 tests across 11 files; production build, existing non-fatal Vite dynamic-import warning). `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check` — PASS. `python tests/test_profile_archive_contract.py -q` — PASS (11 tests); `python scripts/verify_handoff.py` — PASS. `python scripts/check_release_gate.py` — BLOCKED as expected. Focused Rust tests including Replace/remap and injected transaction rollback are authored, but blocked before compilation by missing GLib/GObject >=2.70 development packages. Windows GNU checks remain blocked by missing MinGW; Windows acceptance unavailable. Final QA found no SW-013 blocker.
 - On integrated SW-011: `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS; 8 frontend test files/56 tests; build and diff check pass. Vite reports a non-failing ineffective dynamic import warning.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
@@ -37,7 +37,7 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## Next executable tasks
 
-1. Finish SW-013 independent review and merge its feature PR, then continue SW-014..SW-025 in dependency order while performing cross-platform work available here.
+1. Complete QA, open and review/merge SW-014 PR #13, then continue SW-015..SW-025 in dependency order while performing cross-platform work available here.
 2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

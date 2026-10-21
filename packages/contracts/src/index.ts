@@ -83,6 +83,15 @@ export interface SmartCollection {
   filters: SmartCollectionFilters;
 }
 
+/** A named profile-local reference to an existing resource and optional target. */
+export interface DynamicShortcut {
+  id: string;
+  profileId: string;
+  name: string;
+  resourceId: string;
+  targetId?: string;
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -170,14 +179,21 @@ export interface ProfileImportPreview {
   previewToken: string;
   profileId: string;
   profileName: string;
+  targetProfileId: string;
   resourceCount: number;
   layoutCount: number;
   historyEventCount: number;
+  smartCollectionCount: number;
+  dynamicShortcutCount: number;
   profileIdCollision: boolean;
   profileNameCollision: boolean;
   resourceIdCollisions: string[];
   targetIdCollisions: string[];
   resourceConflicts: ProfileResourceConflictPreview[];
+  smartCollectionIdCollisions: string[];
+  smartCollectionNameCollisions: string[];
+  dynamicShortcutIdCollisions: string[];
+  dynamicShortcutNameCollisions: string[];
   assetCount: number;
 }
 
@@ -239,9 +255,12 @@ export interface CommandMap {
   smart_collection_list: { args: { profileId: string }; result: SmartCollection[] };
   smart_collection_save: { args: { collection: SmartCollection }; result: SmartCollection };
   smart_collection_delete: { args: { profileId: string; id: string }; result: void };
+  dynamic_shortcut_list: { args: { profileId: string }; result: DynamicShortcut[] };
+  dynamic_shortcut_save: { args: { shortcut: DynamicShortcut }; result: DynamicShortcut };
+  dynamic_shortcut_delete: { args: { profileId: string; id: string }; result: void };
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
-  profile_import_preview: { args: { packagePath: string }; result: ProfileImportPreview };
+  profile_import_preview: { args: { packagePath: string; targetProfileId?: string }; result: ProfileImportPreview };
   profile_import_commit: { args: { packagePath: string; strategy: ProfileImportStrategy; targetProfileId?: string; packageSha256: string; previewToken: string }; result: ProfileImportResult };
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };

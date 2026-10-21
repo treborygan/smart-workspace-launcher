@@ -158,6 +158,21 @@
           }
         }
       }
+    },
+    "dynamic_shortcuts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "resource_id"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "resource_id": { "type": "string", "format": "uuid" },
+          "target_id": { "type": "string", "format": "uuid" }
+        }
+      }
     }
   }
 }

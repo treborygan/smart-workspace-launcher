@@ -3,6 +3,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{
+    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent, ShortcutState,
+};
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
@@ -179,6 +182,71 @@ pub struct DashboardLayout {
 }
 
 pub struct AppState(pub Mutex<Connection>);
+
+pub struct HotkeyStatusState(pub Mutex<QuickLaunchHotkeyStatus>);
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickLaunchHotkeyStatus {
+    pub registered: bool,
+    pub shortcut: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+const QUICK_LAUNCH_HOTKEY_SPEC: &str = "ALT+SPACE";
+const QUICK_LAUNCH_HOTKEY_LABEL: &str = "Alt+Space";
+
+fn hotkey_error_code(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if [
+        "already registered",
+        "already in use",
+        "conflict",
+        "occupied",
+        "busy",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+    {
+        "hotkey_conflict"
+    } else {
+        "hotkey_registration_failed"
+    }
+}
+
+fn quick_launch_toggle_pressed(shortcut: &Shortcut, event: &ShortcutEvent) -> bool {
+    shortcut.matches(Modifiers::ALT, Code::Space) && event.state() == ShortcutState::Pressed
+}
+
+fn toggle_quick_launch(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("quick-launch") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.hide();
+        return;
+    }
+    if window.show().is_ok() {
+        let _ = window.set_focus();
+        let _ = window.emit("quick-launch-toggle", ());
+    }
+}
+
+fn hotkey_status(result: Result<(), String>) -> QuickLaunchHotkeyStatus {
+    match result {
+        Ok(()) => QuickLaunchHotkeyStatus {
+            registered: true,
+            shortcut: QUICK_LAUNCH_HOTKEY_LABEL.into(),
+            error_code: None,
+        },
+        Err(message) => QuickLaunchHotkeyStatus {
+            registered: false,
+            shortcut: QUICK_LAUNCH_HOTKEY_LABEL.into(),
+            error_code: Some(hotkey_error_code(&message).into()),
+        },
+    }
+}
 
 const MIGRATION: &str = r#"
 PRAGMA foreign_keys = ON;
@@ -1011,6 +1079,15 @@ where
 }
 
 #[tauri::command]
+fn quick_launch_hotkey_status(state: State<'_, HotkeyStatusState>) -> QuickLaunchHotkeyStatus {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+#[tauri::command]
 fn analytics_query(
     state: State<'_, AppState>,
     profile_id: Option<String>,
@@ -1116,11 +1193,32 @@ fn launch_target(_app: &tauri::AppHandle, _target: &ResourceTarget) -> Result<()
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if quick_launch_toggle_pressed(shortcut, &event) {
+                        toggle_quick_launch(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             let path = app.path().app_local_data_dir()?.join("launcher.sqlite3");
             let conn = open_database(&path).map_err(|e| std::io::Error::other(e.to_string()))?;
             app.manage(AppState(Mutex::new(conn)));
+
+            let registration = app.global_shortcut().register(QUICK_LAUNCH_HOTKEY_SPEC);
+            let status = hotkey_status(registration.map_err(|error| error.to_string()));
+            if !status.registered {
+                eprintln!(
+                    "Global shortcut {} failed: {}",
+                    status.shortcut,
+                    status.error_code.as_deref().unwrap_or("unknown")
+                );
+            }
+            app.manage(HotkeyStatusState(Mutex::new(status.clone())));
+            let _ = app.emit("quick-launch-hotkey-status", status);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1135,10 +1233,35 @@ pub fn run() {
             profile_switch,
             layout_get,
             layout_save,
+            quick_launch_hotkey_status,
             analytics_query
-        ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Smart Workspace Launcher");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("failed to build Smart Workspace Launcher");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            let registered = handle
+                .try_state::<HotkeyStatusState>()
+                .map(|state| {
+                    state
+                        .0
+                        .lock()
+                        .map(|status| status.registered)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if registered {
+                if let Err(error) = handle
+                    .global_shortcut()
+                    .unregister(QUICK_LAUNCH_HOTKEY_SPEC)
+                {
+                    eprintln!("Global shortcut cleanup failed: {error}");
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1663,6 +1786,40 @@ mod tests {
         )
         .unwrap();
         assert!(layout_get_from_conn(&conn, &valid.profile_id, "dock").is_err());
+    }
+
+    #[test]
+    fn quick_launch_hotkey_uses_alt_space_and_only_toggles_on_press() {
+        let shortcut: Shortcut = QUICK_LAUNCH_HOTKEY_SPEC.parse().unwrap();
+        assert!(shortcut.matches(Modifiers::ALT, Code::Space));
+        let pressed = ShortcutEvent {
+            id: shortcut.id(),
+            state: ShortcutState::Pressed,
+        };
+        let released = ShortcutEvent {
+            id: shortcut.id(),
+            state: ShortcutState::Released,
+        };
+        assert!(quick_launch_toggle_pressed(&shortcut, &pressed));
+        assert!(!quick_launch_toggle_pressed(&shortcut, &released));
+        let other = Shortcut::new(Some(Modifiers::ALT), Code::KeyA);
+        assert!(!quick_launch_toggle_pressed(&other, &pressed));
+    }
+
+    #[test]
+    fn quick_launch_hotkey_status_reports_success_and_conflict() {
+        let success = hotkey_status(Ok(()));
+        assert!(success.registered);
+        assert_eq!(success.shortcut, "Alt+Space");
+        assert_eq!(success.error_code, None);
+        let conflict = hotkey_status(Err("hotkey already registered by another app".into()));
+        assert!(!conflict.registered);
+        assert_eq!(conflict.error_code.as_deref(), Some("hotkey_conflict"));
+        let failure = hotkey_status(Err("native backend failed".into()));
+        assert_eq!(
+            failure.error_code.as_deref(),
+            Some("hotkey_registration_failed")
+        );
     }
 
     #[test]

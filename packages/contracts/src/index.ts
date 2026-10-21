@@ -143,6 +143,8 @@ export interface DashboardLayout {
 export type ProfileImportStrategy = "duplicate" | "merge" | "replace";
 
 export interface ProfileImportPreview {
+  packageSha256: string;
+  previewToken: string;
   profileId: string;
   profileName: string;
   resourceCount: number;
@@ -152,7 +154,36 @@ export interface ProfileImportPreview {
   profileNameCollision: boolean;
   resourceIdCollisions: string[];
   targetIdCollisions: string[];
+  resourceConflicts: ProfileResourceConflictPreview[];
   assetCount: number;
+}
+
+export interface ProfileTargetSnapshot {
+  id: string;
+  kind: TargetKind;
+  value: string;
+  priority: number;
+  arguments: string[];
+  workingDirectory?: string | null;
+  active: boolean;
+}
+
+export interface ProfileResourceSnapshot {
+  id: string;
+  name: string;
+  resourceType: ResourceType;
+  description?: string | null;
+  icon?: string | null;
+  tags: string[];
+  aliases: string[];
+  targets: ProfileTargetSnapshot[];
+}
+
+export interface ProfileResourceConflictPreview {
+  resolution: "reuse_existing" | "import_as_new";
+  imported: ProfileResourceSnapshot;
+  existing: ProfileResourceSnapshot;
+  proposed: ProfileResourceSnapshot;
 }
 
 export interface ProfileImportResult {
@@ -184,7 +215,7 @@ export interface CommandMap {
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
   profile_import_preview: { args: { packagePath: string }; result: ProfileImportPreview };
-  profile_import_commit: { args: { packagePath: string; strategy: ProfileImportStrategy; targetProfileId?: string }; result: ProfileImportResult };
+  profile_import_commit: { args: { packagePath: string; strategy: ProfileImportStrategy; targetProfileId?: string; packageSha256: string; previewToken: string }; result: ProfileImportResult };
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };

@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
@@ -326,6 +326,8 @@ struct ValidatedProfilePackage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileImportPreview {
+    pub package_sha256: String,
+    pub preview_token: String,
     pub profile_id: String,
     pub profile_name: String,
     pub resource_count: usize,
@@ -335,7 +337,42 @@ pub struct ProfileImportPreview {
     pub profile_name_collision: bool,
     pub resource_id_collisions: Vec<String>,
     pub target_id_collisions: Vec<String>,
+    pub resource_conflicts: Vec<ProfileResourceConflictPreview>,
     pub asset_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileResourceConflictPreview {
+    pub resolution: String,
+    pub imported: ProfileResourceSnapshot,
+    pub existing: ProfileResourceSnapshot,
+    pub proposed: ProfileResourceSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileResourceSnapshot {
+    pub id: String,
+    pub name: String,
+    pub resource_type: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
+    pub targets: Vec<ProfileTargetSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileTargetSnapshot {
+    pub id: String,
+    pub kind: String,
+    pub value: String,
+    pub priority: i64,
+    pub arguments: Vec<String>,
+    pub working_directory: Option<String>,
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -657,6 +694,12 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
 }
 
 fn read_profile_package(path: &Path) -> Result<ValidatedProfilePackage, AppError> {
+    read_profile_package_with_digest(path).map(|(package, _)| package)
+}
+
+fn read_profile_package_with_digest(
+    path: &Path,
+) -> Result<(ValidatedProfilePackage, String), AppError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| package_error(format!("cannot inspect package: {error}")))?;
     if !metadata.is_file()
@@ -669,8 +712,16 @@ fn read_profile_package(path: &Path) -> Result<ValidatedProfilePackage, AppError
     }
     let file =
         File::open(path).map_err(|error| package_error(format!("cannot open package: {error}")))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|_| package_error("not a valid ZIP profile package"))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(PROFILE_ARCHIVE_MAX_COMPRESSED + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| package_error(format!("cannot read package: {error}")))?;
+    if bytes.len() as u64 > PROFILE_ARCHIVE_MAX_COMPRESSED {
+        return Err(package_error("package exceeds the compressed size limit"));
+    }
+    let package_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|_| package_error("not a valid ZIP profile package"))?;
     if archive.len() > PROFILE_ARCHIVE_MAX_ENTRIES {
         return Err(package_error("archive contains too many entries"));
     }
@@ -815,7 +866,7 @@ fn read_profile_package(path: &Path) -> Result<ValidatedProfilePackage, AppError
         history,
     };
     validate_package_fields(&package)?;
-    Ok(package)
+    Ok((package, package_sha256))
 }
 
 fn valid_asset_name(name: &str) -> bool {
@@ -1181,6 +1232,7 @@ fn export_profile_to_path(
 fn profile_import_preview_from_conn(
     conn: &Connection,
     package: &ValidatedProfilePackage,
+    package_sha256: &str,
 ) -> Result<ProfileImportPreview, AppError> {
     let profile_id_collision = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
@@ -1194,6 +1246,7 @@ fn profile_import_preview_from_conn(
     )? != 0;
     let mut resource_id_collisions = Vec::new();
     let mut target_id_collisions = Vec::new();
+    let mut resource_conflicts = Vec::new();
     for resource in &package.resources.resources {
         if conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM resources WHERE id=?1)",
@@ -1202,6 +1255,25 @@ fn profile_import_preview_from_conn(
         )? != 0
         {
             resource_id_collisions.push(resource.id.clone());
+            let imported = imported_resource_snapshot(resource);
+            if let Some(existing) = existing_resource_snapshot(conn, &resource.id)? {
+                let matches_existing = resources_equivalent(&imported, &existing);
+                let proposed = if matches_existing {
+                    existing.clone()
+                } else {
+                    proposed_import_snapshot(imported.clone())
+                };
+                resource_conflicts.push(ProfileResourceConflictPreview {
+                    resolution: if matches_existing {
+                        "reuse_existing".into()
+                    } else {
+                        "import_as_new".into()
+                    },
+                    imported,
+                    existing,
+                    proposed,
+                });
+            }
         }
         for target in &resource.targets {
             if conn.query_row(
@@ -1214,7 +1286,9 @@ fn profile_import_preview_from_conn(
             }
         }
     }
-    Ok(ProfileImportPreview {
+    let mut preview = ProfileImportPreview {
+        package_sha256: package_sha256.into(),
+        preview_token: String::new(),
         profile_id: package.profile.id.clone(),
         profile_name: package.profile.name.clone(),
         resource_count: package.resources.resources.len(),
@@ -1227,8 +1301,134 @@ fn profile_import_preview_from_conn(
         profile_name_collision,
         resource_id_collisions,
         target_id_collisions,
+        resource_conflicts,
         asset_count: package.manifest.assets.len(),
-    })
+    };
+    preview.preview_token = profile_preview_token(&preview)?;
+    Ok(preview)
+}
+
+fn imported_resource_snapshot(resource: &ProfilePackageResource) -> ProfileResourceSnapshot {
+    ProfileResourceSnapshot {
+        id: resource.id.clone(),
+        name: resource.name.clone(),
+        resource_type: resource.resource_type.clone(),
+        description: resource.description.clone(),
+        icon: resource.icon.clone(),
+        tags: resource.tags.clone(),
+        aliases: resource.aliases.clone(),
+        targets: resource
+            .targets
+            .iter()
+            .map(|target| ProfileTargetSnapshot {
+                id: target.id.clone(),
+                kind: target.kind.clone(),
+                value: target.value.clone(),
+                priority: target.priority,
+                arguments: target.argv.clone(),
+                working_directory: target.working_directory.clone(),
+                active: target.active,
+            })
+            .collect(),
+    }
+}
+
+fn proposed_import_snapshot(mut imported: ProfileResourceSnapshot) -> ProfileResourceSnapshot {
+    for target in &mut imported.targets {
+        if ["app", "shortcut"].contains(&target.kind.as_str()) {
+            target.active = false;
+        }
+    }
+    imported
+}
+
+fn existing_resource_snapshot(
+    conn: &Connection,
+    resource_id: &str,
+) -> Result<Option<ProfileResourceSnapshot>, AppError> {
+    let mut resource: Option<Resource> = conn.query_row(
+        "SELECT id,resource_type,display_name,description,icon,default_action,created_utc,updated_utc FROM resources WHERE id=?1",
+        [resource_id], resource_from_row,
+    ).optional()?;
+    let Some(mut resource) = resource.take() else {
+        return Ok(None);
+    };
+    load_resource_details(conn, &mut resource, None)?;
+    Ok(Some(ProfileResourceSnapshot {
+        id: resource.id,
+        name: resource.display_name,
+        resource_type: resource.resource_type,
+        description: resource.description,
+        icon: resource.icon,
+        tags: resource.tags,
+        aliases: resource.aliases,
+        targets: resource
+            .targets
+            .into_iter()
+            .map(|target| ProfileTargetSnapshot {
+                id: target.id,
+                kind: target.kind,
+                value: target.canonical_uri,
+                priority: target.priority,
+                arguments: target.arguments,
+                working_directory: target.working_directory,
+                active: target.active,
+            })
+            .collect(),
+    }))
+}
+
+fn resources_equivalent(
+    imported: &ProfileResourceSnapshot,
+    existing: &ProfileResourceSnapshot,
+) -> bool {
+    let mut imported_tags = imported.tags.clone();
+    let mut existing_tags = existing.tags.clone();
+    let mut imported_aliases = imported.aliases.clone();
+    let mut existing_aliases = existing.aliases.clone();
+    imported_tags.sort();
+    existing_tags.sort();
+    imported_aliases.sort();
+    existing_aliases.sort();
+    let mut unmatched = existing.targets.iter().collect::<Vec<_>>();
+    imported.name == existing.name
+        && imported.resource_type == existing.resource_type
+        && imported.description == existing.description
+        && imported.icon == existing.icon
+        && imported_tags == existing_tags
+        && imported_aliases == existing_aliases
+        && imported.targets.len() == existing.targets.len()
+        && imported.targets.iter().all(|target| {
+            let Some(index) = unmatched
+                .iter()
+                .position(|other| targets_equivalent(target, other))
+            else {
+                return false;
+            };
+            unmatched.remove(index);
+            true
+        })
+}
+
+fn targets_equivalent(imported: &ProfileTargetSnapshot, existing: &ProfileTargetSnapshot) -> bool {
+    let expected_active = imported.active && !["app", "shortcut"].contains(&imported.kind.as_str());
+    imported.kind == existing.kind
+        && imported.value == existing.value
+        && imported.priority == existing.priority
+        && imported.arguments == existing.arguments
+        && imported.working_directory == existing.working_directory
+        && expected_active == existing.active
+}
+
+fn profile_preview_token(preview: &ProfileImportPreview) -> Result<String, AppError> {
+    let mut stable_preview = preview.clone();
+    stable_preview.preview_token.clear();
+    let serialized = serde_json::to_vec(&stable_preview)?;
+    let mut hasher = Sha256::new();
+    hasher.update(preview.package_sha256.as_bytes());
+    hasher.update([0]);
+    hasher.update(serialized);
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn profile_import_name(conn: &Connection, preferred: &str) -> Result<String, AppError> {
@@ -1382,18 +1582,23 @@ fn import_profile_package(
             |row| row.get::<_, i64>(0),
         )? != 0;
         if strategy == "merge" && existing_resource {
-            resource_map.insert(resource.id.clone(), resource.id.clone());
-            reused_resources += 1;
-            let mut stmt = tx.prepare("SELECT id FROM resource_targets WHERE resource_id=?1")?;
-            let existing_targets = stmt
-                .query_map([&resource.id], |row| row.get::<_, String>(0))?
-                .collect::<Result<std::collections::HashSet<_>, _>>()?;
-            for target in &resource.targets {
-                if existing_targets.contains(&target.id) {
-                    target_map.insert(target.id.clone(), target.id.clone());
+            let existing = existing_resource_snapshot(&tx, &resource.id)?
+                .ok_or_else(|| package_error("resource collision disappeared during merge"))?;
+            let imported = imported_resource_snapshot(resource);
+            if resources_equivalent(&imported, &existing) {
+                resource_map.insert(resource.id.clone(), resource.id.clone());
+                let mut unmatched_targets = existing.targets.iter().collect::<Vec<_>>();
+                for source_target in &imported.targets {
+                    let target_index = unmatched_targets
+                        .iter()
+                        .position(|candidate| targets_equivalent(source_target, candidate))
+                        .ok_or_else(|| package_error("matching target disappeared during merge"))?;
+                    let existing_target = unmatched_targets.remove(target_index);
+                    target_map.insert(source_target.id.clone(), existing_target.id.clone());
                 }
+                reused_resources += 1;
+                continue;
             }
-            continue;
         }
         let new_id = if duplicate_all || existing_resource {
             Uuid::new_v4().to_string()
@@ -1514,6 +1719,29 @@ fn import_profile_package(
         imported_layouts,
         imported_history_events,
     })
+}
+
+fn import_profile_package_from_path(
+    conn: &mut Connection,
+    package_path: &Path,
+    strategy: &str,
+    target_profile_id: Option<&str>,
+    expected_package_sha256: &str,
+    expected_preview_token: &str,
+) -> Result<ProfileImportResult, AppError> {
+    let (package, package_sha256) = read_profile_package_with_digest(package_path)?;
+    if package_sha256 != expected_package_sha256 {
+        return Err(package_error(
+            "profile package changed after preview; preview it again",
+        ));
+    }
+    let preview = profile_import_preview_from_conn(conn, &package, &package_sha256)?;
+    if preview.preview_token != expected_preview_token {
+        return Err(package_error(
+            "workspace changed after preview; review the updated preview",
+        ));
+    }
+    import_profile_package(conn, &package, strategy, target_profile_id)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2852,9 +3080,9 @@ fn profile_import_preview(
     state: State<'_, AppState>,
     package_path: String,
 ) -> Result<ProfileImportPreview, AppError> {
-    let package = read_profile_package(Path::new(&package_path))?;
+    let (package, package_sha256) = read_profile_package_with_digest(Path::new(&package_path))?;
     let conn = lock(&state)?;
-    profile_import_preview_from_conn(&conn, &package)
+    profile_import_preview_from_conn(&conn, &package, &package_sha256)
 }
 
 #[tauri::command]
@@ -2863,11 +3091,18 @@ fn profile_import_commit(
     package_path: String,
     strategy: String,
     target_profile_id: Option<String>,
+    package_sha256: String,
+    preview_token: String,
 ) -> Result<ProfileImportResult, AppError> {
-    // Re-read and fully validate at commit time; preview is advisory and is never trusted as authorization.
-    let package = read_profile_package(Path::new(&package_path))?;
     let mut conn = lock(&state)?;
-    import_profile_package(&mut conn, &package, &strategy, target_profile_id.as_deref())
+    import_profile_package_from_path(
+        &mut conn,
+        Path::new(&package_path),
+        &strategy,
+        target_profile_id.as_deref(),
+        &package_sha256,
+        &preview_token,
+    )
 }
 
 #[tauri::command]
@@ -3583,6 +3818,7 @@ fn launch_target(_app: &tauri::AppHandle, _target: &ResourceTarget) -> Result<()
 
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -4044,6 +4280,109 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn profile_import_merge_remaps_differing_resource_collision_and_previews_values() {
+        let mut conn = database();
+        let package = package("url");
+        let target_profile = profile(&conn);
+        install_package_resource(&mut conn, &package, &target_profile);
+        conn.execute(
+            "UPDATE resources SET display_name='Local Calculator' WHERE id=?1",
+            [&package.resources.resources[0].id],
+        )
+        .unwrap();
+        let preview =
+            profile_import_preview_from_conn(&conn, &package, "a".repeat(64).as_str()).unwrap();
+        assert_eq!(preview.resource_conflicts.len(), 1);
+        let conflict = &preview.resource_conflicts[0];
+        assert_eq!(conflict.resolution, "import_as_new");
+        assert_eq!(conflict.imported.name, "Calculator");
+        assert_eq!(conflict.existing.name, "Local Calculator");
+        assert_eq!(conflict.proposed.name, "Calculator");
+
+        let result =
+            import_profile_package(&mut conn, &package, "merge", Some(&target_profile)).unwrap();
+        assert_eq!(result.reused_resources, 0);
+        assert_eq!(result.imported_resources, 1);
+        let imported_id: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1 AND resource_id<>?2",
+                params![target_profile, package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(imported_id, package.resources.resources[0].id);
+        let old_name: String = conn
+            .query_row(
+                "SELECT display_name FROM resources WHERE id=?1",
+                [&package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_name, "Local Calculator");
+    }
+
+    #[test]
+    fn profile_import_commit_rejects_changed_package_or_workspace_after_preview() {
+        let mut conn = database();
+        let mut package = package("url");
+        let mut archive_entries = serialized_documents(&package);
+        let path = write_test_archive(
+            &archive_entries
+                .iter()
+                .map(|(name, bytes)| (*name, bytes.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let (parsed, digest) = read_profile_package_with_digest(&path).unwrap();
+        let preview = profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+
+        let local_profile = Uuid::new_v4().to_string();
+        let timestamp = now_utc();
+        conn.execute(
+            "INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,?2,'system','{}',?3,?3)",
+            params![local_profile, package.profile.name, timestamp],
+        ).unwrap();
+        assert!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "duplicate",
+                None,
+                &preview.package_sha256,
+                &preview.preview_token,
+            )
+            .is_err(),
+            "workspace changed after preview must reject commit"
+        );
+
+        let preview_after_workspace_change =
+            profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+        package.profile.name = "Changed package after preview".into();
+        archive_entries = serialized_documents(&package);
+        let changed_path = write_test_archive(
+            &archive_entries
+                .iter()
+                .map(|(name, bytes)| (*name, bytes.clone()))
+                .collect::<Vec<_>>(),
+        );
+        std::fs::copy(changed_path, &path).unwrap();
+        assert!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "duplicate",
+                None,
+                &preview_after_workspace_change.package_sha256,
+                &preview_after_workspace_change.preview_token,
+            )
+            .is_err(),
+            "package digest mismatch must reject commit"
+        );
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(changed_path);
+        let _ = conn.execute("DELETE FROM profiles WHERE id=?1", [&local_profile]);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T19:30:00Z",
+  "updated_at_utc": "2026-10-21T19:35:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,7 +13,7 @@
     "number": 26,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/26",
     "state": "DRAFT",
-    "head_commit": "de654bc3e0655c9511c77a333488875e759e7560"
+    "head_commit": "458b0d3"
   },
   "subagent_limit": 3,
   "agents": [
@@ -21,12 +21,12 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-003",
       "branch": "feature/sw-001-core",
-      "commit": "60968dd",
+      "commit": "bd08148",
       "pr": null,
-      "task": "Backend follow-up: align DTOs, event analytics, CRUD/search tests and launch idempotence"
+      "task": "SW-003 backend follow-up integrated: DTO fields, migration v2, CRUD/search/profile membership, launch history/analytics and Rust tests; native compile blocked by platform/toolchain prerequisites"
     },
     {
       "role": "ui",
@@ -78,24 +78,20 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T19:30:00Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable",
+    "at_utc": "2026-10-21T19:35:00Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable; Chromium Linux browser preview",
     "results": [
       {
-        "command": "python scripts/verify_handoff.py",
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
         "result": "PASS"
       },
       {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS (11 tests; archive contract/fixture QA only)"
-      },
-      {
-        "command": "npm ci",
-        "result": "PASS (88 packages installed from lockfile)"
-      },
-      {
-        "command": "npm run typecheck",
+        "command": "git diff --check",
         "result": "PASS"
+      },
+      {
+        "command": "npm run lint",
+        "result": "PASS (TypeScript check)"
       },
       {
         "command": "npm test",
@@ -106,23 +102,27 @@
         "result": "PASS"
       },
       {
-        "command": "npm run tauri -- info",
-        "result": "PASS config inspection; Linux WebKitGTK/rsvg2 prerequisites absent"
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS (11 archive contract tests only)"
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS; no compiled app or Windows runtime tests"
       },
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "result": "BLOCKED: missing glib-2.0/GTK development libraries"
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
-        "result": "FAIL: initial Core source requires rustfmt; Core follow-up is assigned to format and recheck"
+        "result": "BLOCKED by missing glib-2.0/GTK development libraries"
       },
       {
         "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu",
-        "result": "BLOCKED: missing x86_64-w64-mingw32-gcc"
+        "result": "BLOCKED: cross-target check exposed E0255 duplicate Tauri generated command macros with Rust 1.99.0; Windows linker toolchain also unavailable"
+      },
+      {
+        "command": "Playwright Chromium dashboard capture",
+        "result": "PASS Linux browser preview saved to artifacts/screenshots/dashboard-linux-preview.png; synthetic demo content, not native app evidence"
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Integrate and verify Core DTO/event behavior; finish native layouts, global hotkey, metadata and safe import/export; then pursue actual Windows 11 x64 acceptance."
+  "next_action": "Resolve Rust/Tauri macro compile issue on supported toolchain; expand production import/export, layouts, hotkey, metadata and UI; obtain provisioned Windows 11 x64 host before V1 acceptance."
 }

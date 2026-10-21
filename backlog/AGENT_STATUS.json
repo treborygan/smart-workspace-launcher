@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T21:21:00Z",
+  "updated_at_utc": "2026-10-21T21:26:34Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -9,7 +9,7 @@
     "state": "ACTIVE",
     "branch": "coordinator/current-main"
   },
-  "active_pull_request": null,
+  "active_pull_request": 35,
   "subagent_limit": 3,
   "agents": [
     {
@@ -31,19 +31,19 @@
       "issue": "SW-010 Resource Explorer, Inspector, themes",
       "branch": "feature/sw-010-ui",
       "commit": "773ede220e4b992af76c2ec0cd7945c4d1773d0c",
-      "pr": null,
-      "task": "SW-010 follow-up committed: target priority/args/workdir edit, NUL/priority validation, whitespace-prefixed CSV formula defense, theme profile switch/system change tests. 56 frontend tests pass; QA final re-review pending."
+      "pr": 35,
+      "task": "SW-010 code complete at 773ede2 and ready for review in draft PR #35; docs checkpoint/sync commits follow. 56 frontend tests pass. Remaining scope gaps are declared in PR."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-010 final review",
       "branch": "shared-checkout",
       "commit": "773ede2",
-      "pr": null,
-      "task": "Re-review SW-010 follow-up at 773ede2: target fields, CSV formula hardening, theme persistence/system preference tests. Also reviewed SW-011 b42ff26; only residual inactive-target idempotency behavior noted."
+      "pr": 35,
+      "task": "SW-010 review passed at code head 773ede2: API contract/profile theme integration, Explorer, CSV, editor, multi-target Inspector, layout changes reviewed. Typecheck, 56 tests, build and diff pass. SW-011 b42ff26 replay guards reviewed; inactive-target idempotency caveat recorded."
     },
     {
       "role": "research",
@@ -183,7 +183,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Re-review final SW-010 head 773ede2. Then update docs, push branch, create PR linked to issue #9 with exact test results and remaining gaps. Merge SW-010 before SW-011.",
+  "next_action": "Draft PR #35 contains SW-010 code and current-main/docs checkpoint; await required review/merge. After merge, rebase/merge SW-011 backend hardening onto updated main and open PR in dependency order. V1 remains blocked pending Windows.",
   "recent_merges": [
     {
       "number": 32,
@@ -221,5 +221,19 @@
       "scope": "SW-008 safe profile archive import/export with native dialogs, preview-bound commit and strategy-aware UI"
     }
   ],
-  "open_pull_requests": []
+  "open_pull_requests": [
+    {
+      "number": 35,
+      "title": "feat(SW-010): improve Explorer, themes, and responsive dashboard",
+      "state": "DRAFT",
+      "head": "feature/sw-010-ui",
+      "sha": "pending docs sync commit",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/35",
+      "blockers": [
+        "Bulk delete/duplicate and draggable/resizable/reorderable columns remain out of scope",
+        "Rust tests blocked by missing Linux GLib/GObject 2.70 packages",
+        "No Windows 11 host or DPI/native acceptance"
+      ]
+    }
+  ]
 }

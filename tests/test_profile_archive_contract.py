@@ -70,6 +70,48 @@ class ProfileArchiveContractTests(unittest.TestCase):
         result = validate_profile_archive(VALID)
         self.assertEqual(result["manifest.json"]["format"], "swprofile")
 
+    def test_valid_workspace_sequence_is_accepted_and_inert(self):
+        profile = json.loads(zipfile.ZipFile(VALID).read("profile.json"))
+        resources = json.loads(zipfile.ZipFile(VALID).read("resources.json"))["resources"]
+        resource = resources[0]
+        target = resource["targets"][0]
+        profile["workspace_sequences"] = [{
+            "id": "398cfc89-8589-42d7-9e45-4c683c38a119",
+            "name": "Morning workspace",
+            "steps": [{
+                "id": "fcd5981a-b4ee-4bf8-80e7-4f7cde1dd340",
+                "resource_id": resource["id"],
+                "target_id": target["id"],
+            }],
+        }]
+        package = make_package(changes={"profile.json": profile})
+        try:
+            result = validate_profile_archive(package)
+            self.assertEqual(result["profile.json"]["workspace_sequences"], profile["workspace_sequences"])
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_workspace_sequence_rejects_nonmember_resource(self):
+        profile = json.loads(zipfile.ZipFile(VALID).read("profile.json"))
+        profile["workspace_sequences"] = [{"id": "398cfc89-8589-42d7-9e45-4c683c38a119", "name": "Bad", "steps": [{"id": "fcd5981a-b4ee-4bf8-80e7-4f7cde1dd340", "resource_id": "fd8526bf-7a24-441e-a52f-1f12af461a33"}]}]
+        package = make_package(changes={"profile.json": profile})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "not a profile member"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_workspace_sequence_rejects_target_from_another_resource(self):
+        profile = json.loads(zipfile.ZipFile(VALID).read("profile.json"))
+        resources = json.loads(zipfile.ZipFile(VALID).read("resources.json"))["resources"]
+        profile["workspace_sequences"] = [{"id": "398cfc89-8589-42d7-9e45-4c683c38a119", "name": "Bad target", "steps": [{"id": "fcd5981a-b4ee-4bf8-80e7-4f7cde1dd340", "resource_id": resources[0]["id"], "target_id": "c4b43a0a-bc04-412b-91ad-74cb51ee4873"}]}]
+        package = make_package(changes={"profile.json": profile})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "not active on its resource"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
     def test_checked_in_zip_slip_fixture_is_rejected(self):
         with self.assertRaisesRegex(ProfileArchiveError, "unsafe member path"):
             validate_profile_archive(BAD_TRAVERSAL)

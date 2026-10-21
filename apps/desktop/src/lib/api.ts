@@ -72,6 +72,16 @@ export const api = {
     if (isNative()) return invokeTyped("quick_launch_hotkey_status");
     return { registered: true, shortcut: "Alt+Space" };
   },
+  async setQuickLaunchHotkey(profileId: string, shortcut: string): Promise<QuickLaunchHotkeyStatus> {
+    if (isNative()) return invokeTyped("quick_launch_hotkey_set", { profileId, shortcut });
+    const status = { registered: true, shortcut };
+    localStorage.setItem(`swl-hotkey-${profileId}`, shortcut);
+    return status;
+  },
+  async switchProfile(profileId: string): Promise<Profile> {
+    if (isNative()) return invokeTyped("profile_switch", { profileId });
+    return (await api.profiles()).find((profile) => profile.id === profileId) || (await api.profiles())[0];
+  },
   async hideCurrentWindow(): Promise<void> {
     if (!isNative()) return;
     const { getCurrentWindow } = await import("@tauri-apps/api/window");

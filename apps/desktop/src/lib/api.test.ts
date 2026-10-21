@@ -67,4 +67,15 @@ describe("layout API", () => {
     expect(await api.quickLaunchHotkeyStatus()).toEqual(status);
     expect(invokeTyped).toHaveBeenCalledWith("quick_launch_hotkey_status");
   });
+
+  it("sets the profile shortcut and switches profiles through typed commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const status = { registered: true, shortcut: "Ctrl+Alt+Space" };
+    const profile = { id: "profile-work", name: "Work" };
+    invokeTyped.mockResolvedValueOnce(status).mockResolvedValueOnce(profile);
+    expect(await api.setQuickLaunchHotkey("profile-work", "Ctrl+Alt+Space")).toEqual(status);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "quick_launch_hotkey_set", { profileId: "profile-work", shortcut: "Ctrl+Alt+Space" });
+    expect(await api.switchProfile("profile-work")).toEqual(profile);
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "profile_switch", { profileId: "profile-work" });
+  });
 });

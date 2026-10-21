@@ -68,11 +68,15 @@ export default function App() {
   const [hotkeyStatus, setHotkeyStatus] = useState<QuickLaunchHotkeyStatus | null>(null);
   const [nativeWindowLabel, setNativeWindowLabel] = useState<string | null>(null);
   const [quickLaunchSignal, setQuickLaunchSignal] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutDraft, setShortcutDraft] = useState("Alt+Space");
+  const [shortcutSaving, setShortcutSaving] = useState(false);
 
   const loadProfile = async (preferredProfileId?: string) => {
     const availableProfiles = await api.profiles();
     const rememberedProfile = preferredProfileId || localStorage.getItem("swl-active-profile");
     const profile = availableProfiles.find((item) => item.id === rememberedProfile) || availableProfiles[0];
+    if (profile) await api.switchProfile(profile.id);
     const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
     const restored = restoreLayout(items, layout);
     setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
@@ -138,13 +142,35 @@ export default function App() {
     try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
   };
-  const launch = async (resource: Resource, source: "dashboard" | "quick_launch" = "dashboard") => {
+  const launch = async (resource: Resource, source: "dashboard" | "quick_launch" = "dashboard"): Promise<string | null> => {
     try {
       const result = await api.launch(resource.id, source, activeProfileId);
-      if (result.status === "failed") throw new Error(result.errorCode || "The system could not hand off this resource.");
+      if (result.status === "failed") {
+        const code = result.errorCode || "launch_failed";
+        const guidance = code === "target_not_found" || code === "file_not_found"
+          ? "The saved target could not be found. Update its location in Explorer and try again."
+          : code === "access_denied"
+            ? "Windows denied access. Check the file or application permissions and try again."
+            : `Windows could not open this resource (${code}). Verify its saved location and permissions, then try again.`;
+        throw new Error(guidance);
+      }
+      if (source === "quick_launch" && result.status !== "handed_off") return "Windows has not confirmed the handoff yet. Check that the target is available, then try again.";
       setResources((current) => current.map((r) => r.id === resource.id ? { ...r, launchCount: (r.launchCount || 0) + 1, lastLaunchedUtc: result.launchedAtUtc } : r));
       setNotice(result.status === "handed_off" ? `Windows accepted the launch request for ${resource.displayName}.` : "Launch request sent.");
-    } catch (e) { setNotice(e instanceof Error ? e.message : "Launch failed."); }
+      return null;
+    } catch (e) { const message = e instanceof Error ? e.message : "Launch failed."; setNotice(message); return message; }
+  };
+  const saveShortcut = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!activeProfileId || !shortcutDraft.trim()) return;
+    setShortcutSaving(true);
+    try {
+      const status = await api.setQuickLaunchHotkey(activeProfileId, shortcutDraft.trim());
+      setHotkeyStatus(status);
+      if (!status.registered) setNotice(`${status.shortcut} could not be registered. ${status.activeShortcut ? `${status.activeShortcut} remains active.` : "The previous shortcut remains active."}`);
+      else setNotice(`Quick Launch shortcut set to ${status.shortcut}.`);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Could not update the Quick Launch shortcut."); }
+    finally { setShortcutSaving(false); }
   };
   const remove = async (resource: Resource) => {
     if (!window.confirm(`Remove “${resource.displayName}” from this workspace?`)) return;
@@ -179,7 +205,7 @@ export default function App() {
   };
 
   if (nativeWindowLabel === "quick-launch") return quickLaunchOpen
-    ? <QuickLaunchOverlay key={quickLaunchSignal} presentation="window" resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => void launch(resource, "quick_launch")} />
+    ? <QuickLaunchOverlay key={quickLaunchSignal} presentation="window" resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => launch(resource, "quick_launch")} />
     : <div className="quick-launch-window" />;
 
   return <div className="app-shell">
@@ -190,13 +216,13 @@ export default function App() {
       <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => item.label === "Quick Launch" ? setQuickLaunchOpen(true) : setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
       <div className="nav-label collections-label">COLLECTIONS <button className="tiny-plus" onClick={() => setShowAdd(true)} aria-label="Add collection"><Icon name="plus" size={14} /></button></div>
       {["All resources", "Favorites", "Work", "Web", "Apps"].map((item, index) => <button key={item} className={`collection ${category === item ? "selected" : ""}`} onClick={() => { setCategory(item); setSection("Dashboard"); }}><span className={`collection-dot d${index}`} />{item}<span className="collection-count">{item === "Favorites" ? resources.filter((r) => r.favorite).length : item === "All resources" ? resources.length : resources.filter((r) => r.category === item).length}</span></button>)}
-      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item"><Icon name="settings" size={18} />Settings</button><div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
+      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item" aria-expanded={settingsOpen} onClick={() => { setShortcutDraft(hotkeyStatus?.activeShortcut || hotkeyStatus?.shortcut || "Alt+Space"); setSettingsOpen((open) => !open); }}><Icon name="settings" size={18} />Settings</button>{settingsOpen && <form className="shortcut-settings" onSubmit={(event) => void saveShortcut(event)}><label htmlFor="quick-launch-shortcut">Quick Launch shortcut</label><input id="quick-launch-shortcut" value={shortcutDraft} onChange={(event) => setShortcutDraft(event.target.value)} placeholder="Alt+Space" /><small>Use modifiers such as Ctrl, Alt, or Shift.</small><button className="button primary" disabled={shortcutSaving || !activeProfileId}>{shortcutSaving ? "Saving…" : "Save shortcut"}</button></form>}<div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
     </aside>
 
     <main className="main-area">
       <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={13} /><b>{section}</b></div><div className="top-actions"><button className="button quiet" onClick={() => setDark(!dark)} aria-label="Toggle theme"><Icon name="moon" size={16} /></button><button className="help-button" aria-label="Help">?</button><button className="profile-chip"><span className="user-avatar mini">A</span><span>Alex</span><Icon name="chevron" size={13} /></button></div></header>
       <div className="content-wrap">
-        {hotkeyStatus && !hotkeyStatus.registered && <div className="hotkey-registration-warning" role="status">{hotkeyStatus.shortcut} could not be registered. Use the Quick Launch button in the sidebar instead.{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
+        {hotkeyStatus && !hotkeyStatus.registered && <div className="hotkey-registration-warning" role="status">{hotkeyStatus.shortcut} could not be registered. {hotkeyStatus.activeShortcut ? `${hotkeyStatus.activeShortcut} remains active.` : "Use the Quick Launch button in the sidebar instead."}{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
         {section === "Analytics" ? <Analytics resources={resources} /> : section === "Explorer" ? <Explorer resources={filtered} onSelect={(r) => setSelectedId(r.id)} query={query} setQuery={setQuery} onAdd={() => setShowAdd(true)} /> : <>
           <div className="welcome-row"><div><h1>{section === "Quick Launch" ? "Quick Launch" : greeting()}</h1><p>{section === "Quick Launch" ? "Find a resource and open it in its default app." : "Everything you need, right where you left it."}</p></div><button className="button primary add-button" onClick={() => setShowAdd(true)}><Icon name="plus" size={17} /> Add resource</button></div>
           <div className={`search-box ${section === "Quick Launch" ? "command-search" : ""}`}><Icon name="search" size={19} /><input id="global-search" placeholder={section === "Quick Launch" ? "Search resources, aliases, tags…" : "Search your workspace"} value={query} onChange={(e) => setQuery(e.target.value)} /><span className="search-shortcut">{section === "Quick Launch" ? "ESC to close" : "⌘ K"}</span></div>
@@ -219,7 +245,7 @@ export default function App() {
       {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div><div className="location-value">{selected.targets[0]?.canonicalUri || "No location available"}</div><button className="subtle-action" onClick={() => navigator.clipboard?.writeText(selected.targets[0]?.canonicalUri || "")}>Copy location</button></div><div className="inspector-section"><div className="inspector-label">CARD SIZE</div><div className="size-options" role="group" aria-label="Dashboard card size">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last opened" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><div className="inspector-label">AVAILABILITY</div><div className="availability"><span className="availability-dot" /><span>Not checked</span><small>Metadata is collected in the desktop app</small></div><p className="provenance">File availability and metadata are inspected locally. No background drive scan.</p></div><div className="inspector-footer"><button className="subtle-action" onClick={() => { const name = window.prompt("Resource name", selected.displayName); if (name?.trim()) void update(selected.id, { displayName: name.trim() }); }}>Rename</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
     </aside>
     {showAdd && <AddResourceDialog profileId={activeProfileId} onClose={() => setShowAdd(false)} onCreate={(resource) => { const next = [...resources, resource]; setResources(next); setSelectedId(resource.id); void persistLayout(next, cardWidths); setNotice(`${resource.displayName} added to your workspace.`); }} />}
-    {quickLaunchOpen && <QuickLaunchOverlay key={quickLaunchSignal} resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => void launch(resource, "quick_launch")} />}
+    {quickLaunchOpen && <QuickLaunchOverlay key={quickLaunchSignal} resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => launch(resource, "quick_launch")} />}
   </div>;
 }
 

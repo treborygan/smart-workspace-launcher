@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
 }));
 vi.mock("./lib/api", () => ({ api }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: "quick-launch", onFocusChanged: async () => () => undefined }) }));
@@ -64,11 +64,33 @@ describe("workspace dashboard", () => {
     expect(host.querySelector(".quick-launch")).toBeNull();
   });
 
+  it("keeps Quick Launch open and shows an actionable error when launch fails", async () => {
+    api.launch.mockRejectedValue(new Error("The target file was not found. Check its location and try again."));
+    await act(async () => { root.render(createElement(App)); });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const input = host.querySelector<HTMLInputElement>(".quick-launch-search input")!;
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(host.querySelector(".quick-launch")).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("target file was not found");
+  });
+
   it("shows a clear warning when native hotkey registration fails", async () => {
     api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: false, shortcut: "Alt+Space", errorCode: "hotkey_conflict" });
     await act(async () => { root.render(createElement(App)); });
     await act(async () => { await Promise.resolve(); });
     expect(host.textContent).toContain("Alt+Space could not be registered");
+  });
+
+  it("configures a profile Quick Launch shortcut from Settings", async () => {
+    api.setQuickLaunchHotkey.mockResolvedValue({ registered: true, shortcut: "Ctrl+Shift+Space", activeShortcut: "Ctrl+Shift+Space" });
+    await act(async () => { root.render(createElement(App)); });
+    const settings = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Settings"))!;
+    await act(async () => { settings.click(); });
+    const input = host.querySelector<HTMLInputElement>("#quick-launch-shortcut")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Ctrl+Shift+Space"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { host.querySelector<HTMLFormElement>(".shortcut-settings")!.requestSubmit(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(api.setQuickLaunchHotkey).toHaveBeenCalledWith("p1", "Ctrl+Shift+Space");
+    expect(host.textContent).toContain("Quick Launch shortcut set to Ctrl+Shift+Space");
   });
 
   it("renders only the standalone quick-launch window and resets it from the native event", async () => {
@@ -99,5 +121,7 @@ describe("workspace dashboard", () => {
     expect(host.querySelector(".resource-card h3")?.textContent).toBe("Calendar");
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p1"); selector.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(host.querySelector(".resource-card h3")?.textContent).toBe("Roadmap.xlsx");
+    expect(api.switchProfile).toHaveBeenCalledWith("p1");
+    expect(api.switchProfile).toHaveBeenCalledWith("p2");
   });
 });

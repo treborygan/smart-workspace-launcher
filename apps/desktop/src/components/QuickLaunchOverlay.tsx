@@ -11,7 +11,7 @@ type Props = {
   hotkeyStatus: QuickLaunchHotkeyStatus | null;
   presentation?: "overlay" | "window";
   onClose: () => void;
-  onLaunch: (resource: Resource) => void;
+  onLaunch: (resource: Resource) => Promise<string | null>;
 };
 
 export function QuickLaunchOverlay({ resources, profileId, hotkeyStatus, presentation = "overlay", onClose, onLaunch }: Props) {
@@ -22,6 +22,8 @@ export function QuickLaunchOverlay({ resources, profileId, hotkeyStatus, present
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [launchError, setLaunchError] = useState("");
+  const [launching, setLaunching] = useState(false);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => {
@@ -51,26 +53,36 @@ export function QuickLaunchOverlay({ resources, profileId, hotkeyStatus, present
     return () => window.clearTimeout(timer);
   }, [query, profileId, resources]);
 
+  const launchSelected = async (resource: Resource) => {
+    if (launching) return;
+    setLaunching(true); setLaunchError("");
+    try {
+      const failure = await onLaunch(resource);
+      if (failure) setLaunchError(failure); else onClose();
+    } catch (cause) { setLaunchError(cause instanceof Error ? cause.message : "Could not hand off this resource. Check that its target still exists and try again."); }
+    finally { setLaunching(false); }
+  };
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") { event.preventDefault(); setSelectedIndex((index) => Math.min(index + 1, Math.max(0, results.length - 1))); }
     if (event.key === "ArrowUp") { event.preventDefault(); setSelectedIndex((index) => Math.max(0, index - 1)); }
-    if (event.key === "Enter" && results[selectedIndex]) { event.preventDefault(); onLaunch(results[selectedIndex]); onClose(); }
+    if (event.key === "Enter" && results[selectedIndex]) { event.preventDefault(); void launchSelected(results[selectedIndex]); }
     if (event.key === "Escape") { event.preventDefault(); onClose(); }
   };
 
   return <div className={presentation === "window" ? "quick-launch-window" : "quick-launch-backdrop"} role="presentation" onMouseDown={(event) => presentation === "overlay" && event.target === event.currentTarget && onClose()}>
     <section className={`quick-launch ${presentation === "window" ? "in-window" : ""}`} role="dialog" aria-modal="true" aria-label="Quick Launch">
       <div className="quick-launch-search"><Icon name="search" size={20} /><input ref={inputRef} aria-label="Search resources" placeholder="Search resources, aliases, tags…" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={handleKeyDown} /><kbd>ESC</kbd></div>
-      {hotkeyStatus && !hotkeyStatus.registered && <div className="quick-launch-warning" role="status">{hotkeyStatus.shortcut} could not be registered. Open Quick Launch from the sidebar instead.{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
+      {hotkeyStatus && !hotkeyStatus.registered && <div className="quick-launch-warning" role="status">{hotkeyStatus.shortcut} could not be registered. {hotkeyStatus.activeShortcut ? `${hotkeyStatus.activeShortcut} remains active.` : "Open Quick Launch from the sidebar instead."}{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
+      {launchError && <div className="quick-launch-warning launch-error" role="alert">{launchError}</div>}
       <div className="quick-launch-results" role="listbox" aria-label="Search results" aria-busy={loading}>
         {loading && <div className="quick-launch-state">Searching your workspace…</div>}
         {!loading && error && <div className="quick-launch-state error" role="alert">{error}</div>}
         {!loading && !error && results.length === 0 && <div className="quick-launch-state">No matching resources. Try another name, tag, or location.</div>}
-        {!loading && !error && results.map((resource, index) => <button key={resource.id} role="option" aria-selected={index === selectedIndex} className={`quick-launch-result ${index === selectedIndex ? "active" : ""}`} onMouseEnter={() => setSelectedIndex(index)} onClick={() => { onLaunch(resource); onClose(); }}>
+        {!loading && results.map((resource, index) => <button key={resource.id} role="option" aria-selected={index === selectedIndex} className={`quick-launch-result ${index === selectedIndex ? "active" : ""}`} disabled={launching} onMouseEnter={() => setSelectedIndex(index)} onClick={() => void launchSelected(resource)}>
           <span className={`resource-mark ${resource.resourceType === "folder" ? "folder" : resource.resourceType === "url" ? "web" : "app"}`}>{resource.resourceType === "folder" ? "▱" : resource.resourceType === "url" ? "◎" : resource.displayName.slice(0, 1).toUpperCase()}</span><span className="quick-launch-copy"><b>{resource.displayName}</b><small>{resource.targets[0]?.canonicalUri || resource.description || "No location set"}</small></span><span className="quick-launch-enter">↵</span>
         </button>)}
       </div>
-      <footer className="quick-launch-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span><span><kbd>↵</kbd> to open</span><span>Search stays on this device</span></footer>
+      <footer className="quick-launch-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span><span>{launching ? "Opening…" : <><kbd>↵</kbd> to open</>}</span><span>Search stays on this device</span></footer>
     </section>
   </div>;
 }

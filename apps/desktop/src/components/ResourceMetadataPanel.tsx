@@ -4,6 +4,7 @@ import type { ResourceMetadata } from "@sw/contracts";
 import { api } from "../lib/api";
 
 export function ResourceMetadataPanel({ resource }: { resource: Resource }) {
+  const targetKey = JSON.stringify(resource.targets.map(({ id, canonicalUri, active }) => ({ id, canonicalUri, active })));
   const [records, setRecords] = useState<ResourceMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -16,7 +17,7 @@ export function ResourceMetadataPanel({ resource }: { resource: Resource }) {
       .catch((reason: unknown) => { if (current) setError(reason instanceof Error ? reason.message : "Metadata inspection failed."); })
       .finally(() => { if (current) { setLoading(false); setRefreshing(false); } });
     return () => { current = false; };
-  }, [resource.id, version]);
+  }, [resource.id, targetKey, version]);
   const refresh = () => { setRefreshing(true); setVersion((value) => value + 1); };
   const byTarget = new Map(records.map((item) => [item.targetId, item]));
   return <div className="metadata-panel" aria-live="polite">

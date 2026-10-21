@@ -70,7 +70,7 @@ jobs:
         if: always()
         run: |
           "## Windows CI (hosted Windows Server x64)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          "Revision: \`${{ github.sha }}\`" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "Revision: ${{ github.sha }}" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
           "Automated tests only. This job does not qualify W-001..W-014 or establish V1 READY." | Add-Content -Path $env:GITHUB_STEP_SUMMARY
       - name: Upload verification logs
         if: always()

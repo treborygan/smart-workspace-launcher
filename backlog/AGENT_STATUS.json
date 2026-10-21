@@ -1,12 +1,19 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": null,
-  "overall_status": "AWAITING_CODEX_ENVIRONMENT",
+  "updated_at_utc": "2026-10-21T19:44:00Z",
+  "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
-    "state": "NOT_RUNNING"
+    "state": "ACTIVE",
+    "branch": "feature/sw-001-bootstrap"
+  },
+  "active_pull_request": {
+    "number": 26,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/26",
+    "state": "DRAFT",
+    "head_commit": "a4285cb"
   },
   "subagent_limit": 3,
   "agents": [
@@ -14,28 +21,34 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "COMPLETE",
+      "issue": "SW-002/SW-003/SW-004",
+      "branch": "feature/sw-001-core",
+      "commit": "7ffcdef",
+      "pr": null,
+      "task": "Resource/profile persistence, launch analytics, Tauri macro fix, SQLite layouts with validation and test coverage; Windows-target Rust tests type-checked with compiler shims, not built/run"
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "COMPLETE",
+      "issue": "SW-006/SW-010/SW-004",
+      "branch": "feature/sw-002-ui",
+      "commit": "0a8cdd1",
+      "pr": null,
+      "task": "Dashboard/Explorer/Inspector and profile-scoped layout persistence using native commands with browser fallback; five UI tests"
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "COMPLETE",
+      "issue": "SW-008/SW-004",
+      "branch": "shared-checkout",
+      "commit": null,
+      "pr": null,
+      "task": "11 archive contract tests and independent SW-004 layout review; verified Core fixes, no blocking findings; notes raw IPC cap remains host-controlled"
     },
     {
       "role": "research",
@@ -50,20 +63,70 @@
       "role": "release",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
+      "state": "BLOCKED_NO_WINDOWS_HOST",
+      "issue": "SW-012",
       "branch": null,
       "pr": null
     }
   ],
   "milestones": {
-    "V1.0": "NOT_STARTED",
+    "V1.0": "IN_PROGRESS",
     "V1.1": "NOT_STARTED",
     "V1.2": "NOT_STARTED",
     "V2.0": "NOT_STARTED"
   },
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
-  "last_test_run": null,
-  "next_action": "Connect a capable Codex environment and run CODEX_KICKOFF.md"
+  "last_test_run": {
+    "at_utc": "2026-10-21T19:44:00Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable; Chromium Linux browser preview",
+    "results": [
+      {
+        "command": "npm run lint",
+        "result": "PASS (TypeScript check)"
+      },
+      {
+        "command": "npm test",
+        "result": "PASS (5 UI/API tests)"
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS"
+      },
+      {
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS (11 profile archive contract harness tests only)"
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS (no binary or Windows runtime assertion)"
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
+        "result": "PASS"
+      },
+      {
+        "command": "git diff --check",
+        "result": "PASS"
+      },
+      {
+        "command": "env CC_x86_64_pc_windows_gnu=cc CC_x86_64-pc-windows-gnu=cc RC_x86_64_pc_windows_gnu=/tmp/windres cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --tests",
+        "result": "PASS Rust type-check including test code using host cc, fake windres and ephemeral placeholder icon; not a Windows build and did not run tests"
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+        "result": "BLOCKED: Debian GTK/GLib development libraries are unavailable"
+      },
+      {
+        "command": "python scripts/check_release_gate.py",
+        "result": "BLOCKED as expected (exit 2); no real Windows 11 verification"
+      },
+      {
+        "command": "Playwright Chromium dashboard screenshot",
+        "result": "PASS Linux browser preview at artifacts/screenshots/dashboard-linux-preview.png; synthetic demo data only"
+      }
+    ]
+  },
+  "windows_verification": "NOT_AVAILABLE",
+  "next_action": "Implement SW-005 true OS global hotkey/search; SW-007 bounded metadata and analytics; production SW-008 importer/exporter with preview and transaction rollback; then SW-009 Dock/SW-011 integration, and obtain a Windows 11 x64 acceptance host for SW-012. V1 remains BLOCKED."
 }

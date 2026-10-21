@@ -1,0 +1,82 @@
+name: Windows CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Native Windows automated tests (x64)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Set up Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Capture Windows runner environment
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/verification | Out-Null
+          $os = Get-CimInstance Win32_OperatingSystem
+          [ordered]@{
+            sha = "${{ github.sha }}"
+            runner = "${{ runner.os }}"
+            os_caption = $os.Caption
+            os_build = $os.BuildNumber
+            architecture = $env:PROCESSOR_ARCHITECTURE
+            node = (node --version)
+            npm = (npm --version)
+            rust = (rustc --version)
+            cargo = (cargo --version)
+            python = (python --version)
+            acceptance = "GitHub-hosted Windows Server automated tests only; W-001..W-014 require separate native Windows 11 evidence"
+          } | ConvertTo-Json | Set-Content artifacts/verification/runner-environment.json -Encoding UTF8
+      - name: Run project verification and Rust tests
+        run: |
+          .\scripts\verify.ps1
+      - name: Compile production frontend
+        run: npm run frontend:build
+      - name: Post CI report
+        if: always()
+        run: |
+          "## Windows CI (hosted Windows Server x64)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "Revision: \`${{ github.sha }}\`" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "Automated tests only. This job does not qualify W-001..W-014 or establish V1 READY." | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+      - name: Upload verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/verification/
+          if-no-files-found: warn
+          retention-days: 14

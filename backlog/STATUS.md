@@ -13,3 +13,10 @@ Status as of initial GitHub setup: **handoff documentation in progress. Applicat
 | Codex subagents | NOT RUNNING | No connected Codex Tasks environment verified |
 
 After each PR/milestone, root updates exact SHA, issue, branch/PR, tests and outcomes, timestamp, blocker and next executable step. Never invent test results.
+
+## GitHub handoff bootstrap completed
+- Repository: main, 53 handoff files committed.
+- Issue queue: 25 unique issues SW-001..SW-025 created.
+- App implementation not started; native Windows QA and V1 gate NOT_RUN/BLOCKED.
+- Codex Tasks environments: 0 registered at setup check; agents are CONFIGURED, not RUNNING.
+- Next: connect an approved Codex development environment and invoke CODEX_KICKOFF.md.

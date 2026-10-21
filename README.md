@@ -66,3 +66,10 @@ This archive contains no runnable EXE and no fabricated passing app tests. Codex
 ## Important deployment notes
 
 Unsigned portable programs can still be blocked by corporate AppLocker/WDAC/Defender policy. WebView2 existence and permitted execution must be checked on the target Windows device; do not assume portability bypasses enterprise policies. Do not upload employer data, actual credentials, or confidential corporate filenames to a public repository.
+## GitHub setup state — 2026-10-21
+
+- Repository initialized on `main` with 53 version-controlled handoff files, including five configured Luna subagent roles.
+- [25 GitHub implementation issues](https://github.com/treborygan/smart-workspace-launcher/issues) created for SW-001 through SW-025.
+- No GitHub Actions, live app code, downloadable EXE or release assertions exist yet.
+- No active Codex Tasks environment was registered at verification. **Codex must be connected to this repository and invoked using `CODEX_KICKOFF.md` to begin actual development.**
+- V1 availability is independently checked by the release watch only after an actual Windows-tested GitHub release.

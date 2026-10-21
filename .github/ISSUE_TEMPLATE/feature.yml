@@ -1,6 +1,6 @@
 name: Implementation task
 description: Use for a tracked Smart Workspace issue
-labels: [v1]
+labels: [enhancement]
 body:
   - type: input
     id: requirement

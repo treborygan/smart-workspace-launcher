@@ -137,6 +137,7 @@ export interface CommandMap {
 export interface AppEventMap {
   "quick-launch-toggle": undefined;
   "quick-launch-hotkey-status": QuickLaunchHotkeyStatus;
+  "workspace-state-changed": { profileId: string };
 }
 
 /** The only frontend entry point for invoking native commands. */
@@ -156,4 +157,13 @@ export async function listenTyped<K extends keyof AppEventMap>(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<AppEventMap[K]>(event, (message) => handler(message.payload));
+}
+
+/** The only frontend entry point for emitting shared workspace events. */
+export async function emitTyped<K extends keyof AppEventMap>(
+  event: K,
+  payload: AppEventMap[K],
+): Promise<void> {
+  const { emit } = await import("@tauri-apps/api/event");
+  return emit(event, payload);
 }

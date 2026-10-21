@@ -6,9 +6,13 @@ import { DockWindow } from "./components/DockWindow";
 import { ResourceMetadataPanel } from "./components/ResourceMetadataPanel";
 import { AnalyticsView } from "./components/AnalyticsView";
 import { ProfileArchiveControls } from "./components/ProfileArchiveControls";
+import { ResourceExplorer } from "./components/ResourceExplorer";
+import { ResourceEditorForm } from "./components/ResourceEditorForm";
+import { ProfileThemeSettings } from "./components/ProfileThemeSettings";
 import { api } from "./lib/api";
 import type { DashboardLayout, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
+import { DEFAULT_THEME, resolveAppearance, themeForProfile } from "./lib/profileTheme";
 import "./styles.css";
 
 type Section = "Dashboard" | "Quick Launch" | "Explorer" | "Analytics" | "Dock";
@@ -61,6 +65,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState(() => localStorage.getItem("swl-active-profile") || "default");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingResource, setEditingResource] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("Dashboard");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All resources");
@@ -69,8 +74,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dragId, setDragId] = useState<string | null>(null);
   const [cardWidths, setCardWidths] = useState<Record<string, number>>({});
+  const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
+  const [gridColumns, setGridColumns] = useState(() => columnsForViewport(window.innerWidth));
   const [dockLayout, setDockLayout] = useState<DashboardLayout | null>(null);
-  const [dark, setDark] = useState(false);
+  const [themePreference, setThemePreference] = useState(DEFAULT_THEME);
   const [quickLaunchOpen, setQuickLaunchOpen] = useState(false);
   const [hotkeyStatus, setHotkeyStatus] = useState<QuickLaunchHotkeyStatus | null>(null);
   const [nativeWindowLabel, setNativeWindowLabel] = useState<string | null>(null);
@@ -92,10 +99,11 @@ export default function App() {
       let configured = "Alt+Space";
       try { configured = JSON.parse(profile.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
       setShortcutDrafts((current) => current[profile.id] ? current : { ...current, [profile.id]: { value: configured, dirty: false } });
+      setThemePreference(themeForProfile(profile));
     }
     const [items, layout, dock] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null), profile ? api.layout(profile.id, "dock") : Promise.resolve(null)]);
     const restored = restoreLayout(items, layout);
-    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setDockLayout(dock);
+    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setCardHeights(restored.heights); setDockLayout(dock);
     if (profile) localStorage.setItem("swl-active-profile", profile.id);
     setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
     return profile?.id || "";
@@ -106,6 +114,10 @@ export default function App() {
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
+  useEffect(() => {
+    const resize = () => setGridColumns(columnsForViewport(window.innerWidth));
+    window.addEventListener("resize", resize); return () => window.removeEventListener("resize", resize);
+  }, []);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) { setNativeWindowLabel("browser"); return; }
     let cancelled = false;
@@ -170,7 +182,18 @@ export default function App() {
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten(); };
   }, [nativeWindowLabel, activeProfileId, profiles]);
-  useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const root = document.documentElement;
+      root.dataset.theme = resolveAppearance(themePreference.mode, media?.matches ?? false);
+      root.dataset.density = themePreference.density;
+      root.style.setProperty("--accent", themePreference.accent);
+      root.style.setProperty("--accent-soft", `color-mix(in srgb, ${themePreference.accent} 12%, transparent)`);
+    };
+    apply(); media?.addEventListener("change", apply);
+    return () => media?.removeEventListener("change", apply);
+  }, [themePreference]);
 
   const filtered = useMemo(() => resources.filter((resource) => {
     const haystack = [resource.displayName, resource.description, resource.category, ...(resource.tags || []), ...resource.targets.map((t) => t.canonicalUri)].join(" ").toLowerCase();
@@ -181,8 +204,8 @@ export default function App() {
   const selected = resources.find((resource) => resource.id === selectedId) ?? null;
 
   const update = async (id: string, patch: ResourcePatch) => {
-    try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
-    catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
+    try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); return true; }
+    catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); return false; }
   };
   const toggleDockPin = async (resource: Resource) => {
     if (!activeProfileId) return;
@@ -225,6 +248,13 @@ export default function App() {
     } catch (e) { setNotice(e instanceof Error ? e.message : "Could not update the Quick Launch shortcut."); }
     finally { setShortcutSaving(false); }
   };
+  const saveTheme = async (theme: typeof DEFAULT_THEME) => {
+    if (!activeProfileId) throw new Error("Select a profile before changing its appearance.");
+    const changed = await api.setProfileTheme(activeProfileId, theme);
+    setProfiles((current) => current.map((profile) => profile.id === changed.id ? changed : profile));
+    setThemePreference(themeForProfile(changed));
+    setNotice(`Appearance saved for ${changed.name}.`);
+  };
   const remove = async (resource: Resource) => {
     if (!window.confirm(`Remove “${resource.displayName}” from this workspace?`)) return;
     try {
@@ -243,8 +273,16 @@ export default function App() {
     const [moved] = next.splice(from, 1); next.splice(to, 0, moved); setResources(next); setDragId(null);
     void persistLayout(next, cardWidths);
   };
+  const moveCard = (id: string, offset: number) => {
+    const from = resources.findIndex((resource) => resource.id === id); const to = Math.max(0, Math.min(resources.length - 1, from + offset));
+    if (from < 0 || from === to) return;
+    const next = [...resources]; const [item] = next.splice(from, 1); next.splice(to, 0, item); setResources(next); void persistLayout(next, cardWidths);
+  };
   const resizeCard = (id: string, width: number) => {
     const next = { ...cardWidths, [id]: width }; setCardWidths(next); void persistLayout(resources, next);
+  };
+  const resizeCardHeight = (id: string, height: number) => {
+    const next = { ...cardHeights, [id]: height }; setCardHeights(next); void persistLayout(resources, cardWidths, next);
   };
   const openDock = async () => {
     try { await api.setDockVisibility(true); }
@@ -257,9 +295,9 @@ export default function App() {
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
     finally { setLoading(false); }
   };
-  const persistLayout = async (items: Resource[], widths: Record<string, number>) => {
+  const persistLayout = async (items: Resource[], widths: Record<string, number>, heights: Record<string, number> = cardHeights) => {
     if (!activeProfileId) return;
-    try { await api.saveLayout(makeLayout(activeProfileId, items, widths)); }
+    try { await api.saveLayout(makeLayout(activeProfileId, items, widths, heights)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not save dashboard layout."); }
   };
 
@@ -282,21 +320,21 @@ export default function App() {
       <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => item.label === "Quick Launch" ? setQuickLaunchOpen(true) : setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
       <div className="nav-label collections-label">COLLECTIONS <button className="tiny-plus" onClick={() => setShowAdd(true)} aria-label="Add collection"><Icon name="plus" size={14} /></button></div>
       {["All resources", "Favorites", "Work", "Web", "Apps"].map((item, index) => <button key={item} className={`collection ${category === item ? "selected" : ""}`} onClick={() => { setCategory(item); setSection("Dashboard"); }}><span className={`collection-dot d${index}`} />{item}<span className="collection-count">{item === "Favorites" ? resources.filter((r) => r.favorite).length : item === "All resources" ? resources.length : resources.filter((r) => r.category === item).length}</span></button>)}
-      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Icon name="settings" size={18} />Settings</button>{settingsOpen && <><form className="shortcut-settings" onSubmit={(event) => void saveShortcut(event)}><label htmlFor="quick-launch-shortcut">Quick Launch shortcut · {selectedProfile?.name || "Profile"}</label><input id="quick-launch-shortcut" value={shortcutDraft} onChange={(event) => setShortcutDrafts((current) => ({ ...current, [activeProfileId]: { value: event.target.value, dirty: true } }))} placeholder="Alt+Space" /><small>Use modifiers such as Ctrl, Alt, or Shift.</small><button className="button primary" disabled={shortcutSaving || !activeProfileId}>{shortcutSaving ? "Saving…" : "Save shortcut"}</button></form><ProfileArchiveControls profiles={profiles} activeProfileId={activeProfileId} onImported={(id) => { void loadProfile(id); }} /></>}<div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
+      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setSettingsOpen(true)}><Icon name="moon" size={18} />Appearance</button><button className="nav-item" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Icon name="settings" size={18} />Settings</button>{settingsOpen && <><ProfileThemeSettings value={themePreference} onSave={saveTheme} /><form className="shortcut-settings" onSubmit={(event) => void saveShortcut(event)}><label htmlFor="quick-launch-shortcut">Quick Launch shortcut · {selectedProfile?.name || "Profile"}</label><input id="quick-launch-shortcut" value={shortcutDraft} onChange={(event) => setShortcutDrafts((current) => ({ ...current, [activeProfileId]: { value: event.target.value, dirty: true } }))} placeholder="Alt+Space" /><small>Use modifiers such as Ctrl, Alt, or Shift.</small><button className="button primary" disabled={shortcutSaving || !activeProfileId}>{shortcutSaving ? "Saving…" : "Save shortcut"}</button></form><ProfileArchiveControls profiles={profiles} activeProfileId={activeProfileId} onImported={(id) => { void loadProfile(id); }} /></>}<div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={13} /><b>{section}</b></div><div className="top-actions"><button className="button quiet" onClick={() => setDark(!dark)} aria-label="Toggle theme"><Icon name="moon" size={16} /></button><button className="help-button" aria-label="Help">?</button><button className="profile-chip"><span className="user-avatar mini">A</span><span>Alex</span><Icon name="chevron" size={13} /></button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={13} /><b>{section}</b></div><div className="top-actions"><button className="button quiet" onClick={() => setSettingsOpen(true)} aria-label="Open appearance settings" title="Appearance settings"><Icon name="moon" size={16} /></button><button className="help-button" aria-label="Help">?</button><button className="profile-chip"><span className="user-avatar mini">A</span><span>Alex</span><Icon name="chevron" size={13} /></button></div></header>
       <div className="content-wrap">
         {hotkeyStatus && !hotkeyStatus.registered && <div className="hotkey-registration-warning" role="status">{hotkeyStatus.shortcut} could not be registered. {hotkeyStatus.activeShortcut ? `${hotkeyStatus.activeShortcut} remains active.` : "Use the Quick Launch button in the sidebar instead."}{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
-{section === "Analytics" ? <AnalyticsView profileId={activeProfileId} /> : section === "Explorer" ? <Explorer resources={filtered} onSelect={(r) => setSelectedId(r.id)} query={query} setQuery={setQuery} onAdd={() => setShowAdd(true)} /> : section === "Dock" ? <section className="dock-manager"><div className="welcome-row"><div><h1>Workspace Dock</h1><p>Choose the resources pinned in the independent floating Dock.</p></div><button className="button primary" onClick={() => void openDock()}>Open Dock</button></div><div className="dock-manager-list">{resources.map((resource) => { const pinned = dockLayout?.cards.some((card) => card.resourceId === resource.id) || false; return <label className="dock-manager-row" key={resource.id}><input type="checkbox" checked={pinned} onChange={() => void toggleDockPin(resource)} /><span><b>{resource.displayName}</b><small>{resource.targets[0]?.canonicalUri || resource.description}</small></span><em>{resource.resourceType}</em></label>; })}{resources.length === 0 && <p className="empty-state">Add resources before pinning them to the Dock.</p>}</div></section> : <>
+{section === "Analytics" ? <AnalyticsView profileId={activeProfileId} /> : section === "Explorer" ? <ResourceExplorer resources={resources} onSelect={(resource) => setSelectedId(resource.id)} onAdd={() => setShowAdd(true)} onUpdate={update} /> : section === "Dock" ? <section className="dock-manager"><div className="welcome-row"><div><h1>Workspace Dock</h1><p>Choose the resources pinned in the independent floating Dock.</p></div><button className="button primary" onClick={() => void openDock()}>Open Dock</button></div><div className="dock-manager-list">{resources.map((resource) => { const pinned = dockLayout?.cards.some((card) => card.resourceId === resource.id) || false; return <label className="dock-manager-row" key={resource.id}><input type="checkbox" checked={pinned} onChange={() => void toggleDockPin(resource)} /><span><b>{resource.displayName}</b><small>{resource.targets[0]?.canonicalUri || resource.description}</small></span><em>{resource.resourceType}</em></label>; })}{resources.length === 0 && <p className="empty-state">Add resources before pinning them to the Dock.</p>}</div></section> : <>
           <div className="welcome-row"><div><h1>{section === "Quick Launch" ? "Quick Launch" : greeting()}</h1><p>{section === "Quick Launch" ? "Find a resource and open it in its default app." : "Everything you need, right where you left it."}</p></div><button className="button primary add-button" onClick={() => setShowAdd(true)}><Icon name="plus" size={17} /> Add resource</button></div>
           <div className={`search-box ${section === "Quick Launch" ? "command-search" : ""}`}><Icon name="search" size={19} /><input id="global-search" placeholder={section === "Quick Launch" ? "Search resources, aliases, tags…" : "Search your workspace"} value={query} onChange={(e) => setQuery(e.target.value)} /><span className="search-shortcut">{section === "Quick Launch" ? "ESC to close" : "⌘ K"}</span></div>
           <div className="section-heading"><div><h2>{query ? "Search results" : category === "Favorites" ? "Favorites" : "Pinned resources"}</h2><span>{filtered.length} {filtered.length === 1 ? "resource" : "resources"}</span></div><button className="text-button" onClick={() => { setSection("Explorer"); setCategory("All resources"); }}>View all <Icon name="arrow" size={15} /></button></div>
           {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice("")} aria-label="Dismiss"><Icon name="close" size={15} /></button></div>}
           {loading ? <div className="loading-state">Loading your workspace…</div> : filtered.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="folder" size={24} /></span><h3>{query ? "No matching resources" : "Your workspace is ready"}</h3><p>{query ? "Try another name, type, tag or location." : "Add a file, folder, app or secure web link to get started."}</p>{!query && <button className="button primary" onClick={() => setShowAdd(true)}><Icon name="plus" size={16} /> Add your first resource</button>}</div> : <div className="resource-grid" aria-label="Resources">
-            {filtered.map((resource) => <article key={resource.id} style={{ gridColumn: `span ${cardWidths[resource.id] || 4}` }} className={`resource-card ${selectedId === resource.id ? "selected" : ""}`} draggable onDragStart={() => setDragId(resource.id)} onDragOver={(e) => e.preventDefault()} onDrop={() => reorder(resource.id)} onClick={() => setSelectedId(resource.id)} onDoubleClick={() => void launch(resource)}>
-              <div className="card-top"><ResourceMark resource={resource} /><button className={`favorite-button ${resource.favorite ? "is-favorite" : ""}`} title={resource.favorite ? "Remove from favorites" : "Add to favorites"} aria-label={resource.favorite ? `Remove ${resource.displayName} from favorites` : `Add ${resource.displayName} to favorites`} onClick={(e) => { e.stopPropagation(); void update(resource.id, { favorite: !resource.favorite }); }}><Icon name="star" size={16} /></button></div>
+            {filtered.map((resource) => <article key={resource.id} style={{ gridColumn: `span ${Math.min(cardWidths[resource.id] || 4, gridColumns)}`, gridRow: `span ${Math.max(1, Math.min(3, cardHeights[resource.id] || 1))}` }} className={`resource-card ${selectedId === resource.id ? "selected" : ""}`} draggable onDragStart={() => setDragId(resource.id)} onDragOver={(e) => e.preventDefault()} onDrop={() => reorder(resource.id)} onClick={() => setSelectedId(resource.id)} onDoubleClick={() => void launch(resource)}>
+              <div className="card-top"><ResourceMark resource={resource} /><div className="card-controls"><button className="move-card" aria-label={`Move ${resource.displayName} earlier`} title="Move earlier" disabled={resources[0]?.id === resource.id} onClick={(e) => { e.stopPropagation(); moveCard(resource.id, -1); }}>↑</button><button className="move-card" aria-label={`Move ${resource.displayName} later`} title="Move later" disabled={resources[resources.length - 1]?.id === resource.id} onClick={(e) => { e.stopPropagation(); moveCard(resource.id, 1); }}>↓</button><button className={`favorite-button ${resource.favorite ? "is-favorite" : ""}`} title={resource.favorite ? "Remove from favorites" : "Add to favorites"} aria-label={resource.favorite ? `Remove ${resource.displayName} from favorites` : `Add ${resource.displayName} to favorites`} onClick={(e) => { e.stopPropagation(); void update(resource.id, { favorite: !resource.favorite }); }}><Icon name="star" size={16} /></button></div></div>
               <div className="card-copy"><h3 title={resource.displayName}>{resource.displayName}</h3><p>{resource.description || resource.targets[0]?.canonicalUri || "No location set"}</p></div>
               <div className="card-footer"><span className="type-label">{resource.category || resource.resourceType}</span><button className="launch-button" aria-label={`Open ${resource.displayName}`} onClick={(e) => { e.stopPropagation(); void launch(resource); }}>Open <Icon name="arrow" size={13} /></button></div>
             </article>)}
@@ -308,7 +346,7 @@ export default function App() {
       </div>
     </main>
     <aside className="inspector"><div className="inspector-head"><h2>Inspector</h2><button className="icon-button" aria-label="More inspector options"><Icon name="more" /></button></div>
-      {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div><div className="location-value">{selected.targets[0]?.canonicalUri || "No location available"}</div><button className="subtle-action" onClick={() => navigator.clipboard?.writeText(selected.targets[0]?.canonicalUri || "")}>Copy location</button></div><div className="inspector-section"><div className="inspector-label">CARD SIZE</div><div className="size-options" role="group" aria-label="Dashboard card size">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last launched" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><ResourceMetadataPanel resource={selected} /></div><div className="inspector-footer"><button className="subtle-action" onClick={() => { const name = window.prompt("Resource name", selected.displayName); if (name?.trim()) void update(selected.id, { displayName: name.trim() }); }}>Rename</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
+      {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div>{editingResource === selected.id && <ResourceEditorForm key={selected.id} resource={selected} onCancel={() => setEditingResource(null)} onSave={async (patch) => { const changed = await api.update(selected.id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((item) => item.id === selected.id ? changed : item)); }} />}{selected.targets.length ? selected.targets.map((target) => <div className="inspector-target" key={target.id}><span className="target-type">{target.kind}{target.active ? " · active" : " · inactive"}</span><div className="location-value">{target.canonicalUri}</div><button className="subtle-action" onClick={() => void navigator.clipboard?.writeText(target.canonicalUri)}>Copy target path</button></div>) : <div className="location-value">No location available</div>}</div><div className="inspector-section"><div className="inspector-label">CARD WIDTH</div><div className="size-options" role="group" aria-label="Dashboard card width">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div><div className="inspector-label card-height-label">CARD HEIGHT</div><div className="size-options" role="group" aria-label="Dashboard card height">{[{ value: 1, label: "Short" }, { value: 2, label: "Tall" }, { value: 3, label: "Extra tall" }].map((item) => <button key={item.value} className={(cardHeights[selected.id] || 1) === item.value ? "chosen" : ""} onClick={() => resizeCardHeight(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last launched" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><ResourceMetadataPanel resource={selected} /></div><div className="inspector-footer"><button className="subtle-action" aria-expanded={editingResource === selected.id} onClick={() => setEditingResource((current) => current === selected.id ? null : selected.id)}>{editingResource === selected.id ? "Close editor" : "Edit details"}</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
     </aside>
     {showAdd && <AddResourceDialog profileId={activeProfileId} onClose={() => setShowAdd(false)} onCreate={(resource) => { const next = [...resources, resource]; setResources(next); setSelectedId(resource.id); void persistLayout(next, cardWidths); setNotice(`${resource.displayName} added to your workspace.`); }} />}
     {quickLaunchOpen && <QuickLaunchOverlay key={quickLaunchSignal} resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => launch(resource, "quick_launch")} />}
@@ -318,19 +356,21 @@ export default function App() {
 function greeting() { const hour = new Date().getHours(); return hour < 12 ? "Good morning, Alex" : hour < 18 ? "Good afternoon, Alex" : "Good evening, Alex"; }
 function relativeTime(value: string) { const elapsed = Math.max(0, Date.now() - new Date(value).getTime()); const minutes = Math.floor(elapsed / 60000); if (minutes < 1) return "Just now"; if (minutes < 60) return `${minutes} min ago`; const hours = Math.floor(minutes / 60); return hours < 24 ? `${hours} hr ago` : `${Math.floor(hours / 24)} days ago`; }
 function restoreLayout(resources: Resource[], layout: DashboardLayout | null) {
-  if (!layout || layout.surface !== "dashboard") return { resources, widths: {} as Record<string, number> };
+  if (!layout || layout.surface !== "dashboard") return { resources, widths: {} as Record<string, number>, heights: {} as Record<string, number> };
   const cards = [...layout.cards].sort((a, b) => a.y - b.y || a.x - b.x);
   const rank = new Map(cards.map((card, index) => [card.resourceId, index]));
   const ordered = [...resources].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   const widths = Object.fromEntries(cards.map((card) => [card.resourceId, Math.max(3, Math.min(8, card.w))]));
-  return { resources: ordered, widths };
+  const heights = Object.fromEntries(cards.map((card) => [card.resourceId, Math.max(1, Math.min(3, card.h))]));
+  return { resources: ordered, widths, heights };
 }
-function makeLayout(profileId: string, resources: Resource[], widths: Record<string, number>): DashboardLayout {
+function makeLayout(profileId: string, resources: Resource[], widths: Record<string, number>, heights: Record<string, number> = {}): DashboardLayout {
   let x = 0; let y = 0;
   const cards = resources.map((resource) => {
     const w = Math.max(3, Math.min(8, widths[resource.id] || 4));
     if (x + w > 12) { x = 0; y += 1; }
-    const card = { resourceId: resource.id, x, y, w, h: 1, type: (w < 4 ? "compact" : w > 4 ? "info" : "icon") as "compact" | "info" | "icon" };
+    const h = Math.max(1, Math.min(3, heights[resource.id] || 1));
+    const card = { resourceId: resource.id, x, y, w, h, type: (w < 4 ? "compact" : w > 4 ? "info" : "icon") as "compact" | "info" | "icon" };
     x += w;
     if (x >= 12) { x = 0; y += 1; }
     return card;
@@ -338,4 +378,4 @@ function makeLayout(profileId: string, resources: Resource[], widths: Record<str
   return { profileId, surface: "dashboard", version: 1, cards };
 }
 function InfoRow({ label, value }: { label: string; value: string }) { return <div className="info-row"><span>{label}</span><b>{value}</b></div>; }
-function Explorer({ resources, onSelect, query, setQuery, onAdd }: { resources: Resource[]; onSelect: (r: Resource) => void; query: string; setQuery: (q: string) => void; onAdd: () => void }) { return <><div className="welcome-row"><div><h1>Resource Explorer</h1><p>Browse and organize your workspace resources.</p></div><button className="button primary" onClick={onAdd}><Icon name="plus" size={16}/> Add resource</button></div><div className="search-box explorer-search"><Icon name="search" size={18}/><input placeholder="Search by name or location" value={query} onChange={(e)=>setQuery(e.target.value)}/></div><div className="table-shell"><table><thead><tr><th>NAME</th><th>TYPE</th><th>COLLECTION</th><th>LOCATION</th><th>LAUNCHES</th></tr></thead><tbody>{resources.map((r)=><tr key={r.id} onClick={()=>onSelect(r)} tabIndex={0} onKeyDown={(e)=>e.key==="Enter"&&onSelect(r)}><td><span className="table-name"><ResourceMark resource={r}/><b>{r.displayName}</b></span></td><td>{r.resourceType}</td><td>{r.category || "—"}</td><td className="table-location">{r.targets[0]?.canonicalUri}</td><td>{r.launchCount || 0}</td></tr>)}</tbody></table>{resources.length===0&&<div className="table-empty">No resources match your search.</div>}</div></> }
+export function columnsForViewport(width: number) { return width <= 760 ? 4 : width <= 1180 ? 6 : 12; }

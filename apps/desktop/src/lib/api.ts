@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -27,6 +27,24 @@ function readDemo(): Resource[] {
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
 
 export const api = {
+  async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
+    if (isNative()) {
+      const updated = await invokeTyped("profile_theme_set", { profileId, theme });
+      await notifyWorkspaceChanged(profileId);
+      return updated;
+    }
+    const profile = (await api.profiles()).find((item) => item.id === profileId);
+    if (!profile) throw new Error("Workspace profile was not found.");
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(profile.settingsJson || "{}") as Record<string, unknown>; } catch { /* replace malformed demo settings */ }
+    const nextSettings: Record<string, unknown> = { ...settings, accent: theme.accent };
+    if (theme.density) nextSettings.density = theme.density;
+    else delete nextSettings.density;
+    const settingsJson = JSON.stringify(nextSettings);
+    const updated = { ...profile, themeId: theme.mode, settingsJson };
+    localStorage.setItem(`swl-profile-theme-${profileId}`, JSON.stringify(updated));
+    return updated;
+  },
   async exportProfile(profileId: string, outputPath: string, includeHistory = false): Promise<ProfileExportResult> {
     if (!isNative()) throw new Error("Profile export is available in the Windows desktop app.");
     return invokeTyped("profile_export", { profileId, outputPath, includeHistory });
@@ -131,7 +149,8 @@ export const api = {
   },
   async profiles(): Promise<Profile[]> {
     if (isNative()) return invokeTyped("profile_list");
-    return [{ id: "default", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: now, updatedUtc: now }];
+    const profile: Profile = { id: "default", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: now, updatedUtc: now };
+    try { const saved = localStorage.getItem("swl-profile-theme-default"); return [saved ? { ...profile, ...JSON.parse(saved) as Profile } : profile]; } catch { return [profile]; }
   },
   async layout(profileId: string, surface: "dashboard" | "dock" = "dashboard"): Promise<DashboardLayout | null> {
     if (isNative()) return invokeTyped("layout_get", { profileId, surface });

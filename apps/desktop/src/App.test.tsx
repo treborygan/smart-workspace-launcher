@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api, windowState } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
   windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: windowState.label, onFocusChanged: async () => () => undefined }) }));
-import App from "./App";
+import App, { columnsForViewport } from "./App";
 
 const timestamp = "2026-10-21T10:00:00.000Z";
 const resources: Resource[] = [
@@ -25,6 +25,7 @@ let host: HTMLDivElement;
 
 beforeEach(() => {
   api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false);
+  api.setProfileTheme.mockImplementation(async (id: string, theme: { mode: string; accent: string; density: string }) => ({ ...profiles.find((profile) => profile.id === id)!, themeId: theme.mode, settingsJson: JSON.stringify({ ...JSON.parse(profiles.find((profile) => profile.id === id)!.settingsJson), accent: theme.accent, density: theme.density }) }));
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
   windowState.label = "quick-launch";
@@ -35,6 +36,28 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(window, "__TAURI_INTERNALS__"); vi.clearAllMocks(); });
 
 describe("workspace dashboard", () => {
+  it("chooses grid spans that fit each responsive breakpoint", () => {
+    expect(columnsForViewport(1440)).toBe(12);
+    expect(columnsForViewport(1024)).toBe(6);
+    expect(columnsForViewport(390)).toBe(4);
+  });
+
+  it("offers keyboard card reordering and persists card height", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    windowState.label = "main";
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const moveEarlier = [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "Move Calendar earlier")!;
+    await act(async () => { moveEarlier.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    let saved = api.saveLayout.mock.calls.at(-1)?.[0];
+    expect(saved.cards[0].resourceId).toBe("r2");
+    const calendar = [...host.querySelectorAll<HTMLElement>(".resource-card")].find((card) => card.textContent?.includes("Calendar"))!;
+    await act(async () => { calendar.click(); });
+    const tall = [...host.querySelectorAll("button")].find((button) => button.textContent === "Tall")!;
+    await act(async () => { tall.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    saved = api.saveLayout.mock.calls.at(-1)?.[0];
+    expect(saved.cards.find((card: { resourceId: string }) => card.resourceId === "r2").h).toBe(2);
+  });
+
   it("loads the saved resources and exposes the inspector", async () => {
     await act(async () => { root.render(createElement(App)); });
     expect(host.textContent).toContain("Roadmap.xlsx");
@@ -75,7 +98,7 @@ describe("workspace dashboard", () => {
   it("uses Alt+Space as a browser fallback and launches the keyboard selection", async () => {
     api.launch.mockResolvedValue({ requestId: "launch-1", status: "handed_off", launchedAtUtc: timestamp });
     await act(async () => { root.render(createElement(App)); });
-    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", key: " ", altKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", key: " ", altKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 100)); });
     const input = host.querySelector<HTMLInputElement>(".quick-launch-search input")!;
     expect(document.activeElement).toBe(input);
     await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
@@ -111,6 +134,22 @@ describe("workspace dashboard", () => {
     await act(async () => { host.querySelector<HTMLFormElement>(".shortcut-settings")!.requestSubmit(); await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(api.setQuickLaunchHotkey).toHaveBeenCalledWith("p1", "Ctrl+Shift+Space");
     expect(host.textContent).toContain("Quick Launch shortcut set to Ctrl+Shift+Space");
+  });
+
+  it("saves light/dark/system mode, custom accent and density to the active profile", async () => {
+    windowState.label = "browser";
+    await act(async () => { root.render(createElement(App)); });
+    const settings = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Settings"))!;
+    await act(async () => { settings.click(); });
+    const mode = host.querySelector<HTMLSelectElement>('[aria-label="Theme mode"]')!;
+    await act(async () => { mode.value = "dark"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    const color = host.querySelector<HTMLInputElement>('[aria-label="Custom accent color"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(color, "#1188aa"); color.dispatchEvent(new Event("input", { bubbles: true })); });
+    const density = host.querySelector<HTMLSelectElement>('[aria-label="Density"]')!;
+    await act(async () => { density.value = "comfortable"; density.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Save appearance"))!.click(); await Promise.resolve(); });
+    expect(api.setProfileTheme).toHaveBeenCalledWith("p1", { mode: "dark", accent: "#1188aa", density: "comfortable" });
+    expect(host.textContent).toContain("Appearance saved for Personal");
   });
 
   it("shows each profile's requested shortcut after conflicts and preserves another profile's unsaved draft", async () => {

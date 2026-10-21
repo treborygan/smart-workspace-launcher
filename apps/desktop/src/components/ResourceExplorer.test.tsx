@@ -50,10 +50,15 @@ describe("ResourceExplorer", () => {
     expect(host.textContent).toContain("1 selected");
   });
   it("exports quoted CSV and prevents formula execution", () => {
-    const csv = buildResourceCsv([{ ...resources[0], displayName: "=HYPERLINK(\"x\")", description: 'say "hi"' }], ["name", "location"]);
+    const csv = buildResourceCsv([{ ...resources[0], displayName: "  =HYPERLINK(\"x\")", description: 'say "hi"' }], ["name", "location"]);
     expect(csv).toContain("\"Name\",\"Location\"");
-    expect(csv).toContain('"\'=HYPERLINK(""x"")"');
+    expect(csv).toContain('"\'  =HYPERLINK(""x"")"');
     expect(csv).toContain("C:\\Zeta.xlsx");
+  });
+  it("quotes commas, quotes and newlines in exported cells while protecting spaced formulas", () => {
+    const csv = buildResourceCsv([{ ...resources[0], displayName: " \t+SUM(1,2)", category: 'Work, "Shared"\nTeam' }], ["name", "category"]);
+    expect(csv).toContain('"\' \t+SUM(1,2)"');
+    expect(csv).toContain('"Work, ""Shared""\nTeam"');
   });
   it("supports keyboard selection and column visibility", async () => {
     await render();

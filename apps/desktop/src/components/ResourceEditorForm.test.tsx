@@ -23,8 +23,31 @@ describe("ResourceEditorForm", () => {
     await act(async () => root.render(createElement(ResourceEditorForm, { resource, onCancel, onSave })));
     const target = host.querySelector<HTMLInputElement>('[aria-label="Target 1 location"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(target, " "); target.dispatchEvent(new Event("input", { bubbles: true })); });
-    await act(async () => { host.querySelector("form")!.requestSubmit(); });
+    await act(async () => { host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(onSave).not.toHaveBeenCalled();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Each saved target needs a location");
+  });
+  it("edits target priority, process arguments and working directory", async () => {
+    await act(async () => root.render(createElement(ResourceEditorForm, { resource, onCancel, onSave })));
+    const setValue = async (selector: string, value: string, prototype: typeof HTMLInputElement | typeof HTMLTextAreaElement = HTMLInputElement) => {
+      const field = host.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement;
+      await act(async () => { Object.getOwnPropertyDescriptor(prototype.prototype, "value")!.set!.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); });
+    };
+    await setValue('[aria-label="Target 1 priority"]', "4");
+    await setValue('[aria-label="Target 1 arguments"]', "--profile\nwork", HTMLTextAreaElement);
+    await setValue('[aria-label="Target 1 working directory"]', "C:\\Workspace");
+    await act(async () => { host.querySelector("form")!.requestSubmit(); await Promise.resolve(); });
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ targets: [
+      expect.objectContaining({ id: "t1", priority: 4, arguments: ["--profile", "work"], workingDirectory: "C:\\Workspace" }),
+      expect.objectContaining({ id: "t2", priority: 1, arguments: [] }),
+    ] }));
+  });
+  it("rejects invalid target priorities", async () => {
+    await act(async () => root.render(createElement(ResourceEditorForm, { resource, onCancel, onSave })));
+    const priority = host.querySelector<HTMLInputElement>('[aria-label="Target 1 priority"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(priority, "-1"); priority.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Target priority must be a whole number");
   });
 });

@@ -33,7 +33,7 @@ beforeEach(() => {
   api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: true, shortcut: "Alt+Space" });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(window, "__TAURI_INTERNALS__"); vi.clearAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(window, "__TAURI_INTERNALS__"); Reflect.deleteProperty(window, "matchMedia"); vi.clearAllMocks(); });
 
 describe("workspace dashboard", () => {
   it("chooses grid spans that fit each responsive breakpoint", () => {
@@ -152,6 +152,45 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Appearance saved for Personal");
   });
 
+  it("restores each profile's saved theme and follows system appearance changes", async () => {
+    let savedProfiles = profiles.map((profile, index) => index === 1
+      ? { ...profile, themeId: "dark", settingsJson: JSON.stringify({ accent: "#224466", density: "compact" }) }
+      : { ...profile, themeId: "system", settingsJson: JSON.stringify({ accent: "#116677", density: "balanced" }) });
+    api.profiles.mockImplementation(async () => savedProfiles);
+    api.setProfileTheme.mockImplementation(async (id: string, theme: { mode: string; accent: string; density?: string }) => {
+      const previous = savedProfiles.find((profile) => profile.id === id)!;
+      const updated = { ...previous, themeId: theme.mode, settingsJson: JSON.stringify({ ...JSON.parse(previous.settingsJson), accent: theme.accent, ...(theme.density ? { density: theme.density } : {}) }) };
+      savedProfiles = savedProfiles.map((profile) => profile.id === id ? updated : profile);
+      return updated;
+    });
+    let mediaListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const mediaQuery = { matches: false, addEventListener: (_event: string, listener: (event: MediaQueryListEvent) => void) => { mediaListener = listener; }, removeEventListener: vi.fn() };
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => mediaQuery) });
+    windowState.label = "browser";
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#116677");
+    mediaQuery.matches = true;
+    await act(async () => { mediaListener?.({ matches: true } as MediaQueryListEvent); });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    const settings = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Settings"))!;
+    await act(async () => { settings.click(); });
+    const mode = host.querySelector<HTMLSelectElement>('[aria-label="Theme mode"]')!;
+    await act(async () => { mode.value = "dark"; mode.dispatchEvent(new Event("change", { bubbles: true })); });
+    const accent = host.querySelector<HTMLInputElement>('[aria-label="Custom accent color"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(accent, "#aa3344"); accent.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Save appearance"))!.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+
+    const selector = host.querySelector<HTMLSelectElement>(".profile-switch")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p2"); selector.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#224466");
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p1"); selector.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#aa3344");
+    expect(themePreferenceFrom(savedProfiles, "p1")).toMatchObject({ mode: "dark", accent: "#aa3344" });
+  });
+
   it("shows each profile's requested shortcut after conflicts and preserves another profile's unsaved draft", async () => {
     let selectedProfileId = "p1";
     api.profiles.mockResolvedValue(profiles.map((profile) => profile.id === "p2" ? { ...profile, settingsJson: JSON.stringify({ quickLaunchShortcut: "Ctrl+Space" }) } : profile));
@@ -203,3 +242,8 @@ describe("workspace dashboard", () => {
     expect(api.switchProfile).toHaveBeenCalledWith("p2");
   });
 });
+
+function themePreferenceFrom(items: Profile[], profileId: string) {
+  const profile = items.find((item) => item.id === profileId)!;
+  return { mode: profile.themeId, ...JSON.parse(profile.settingsJson) };
+}

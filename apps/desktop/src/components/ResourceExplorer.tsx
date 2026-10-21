@@ -10,7 +10,7 @@ export function buildResourceCsv(resources: Resource[], visible: SortKey[]) {
   const selectedColumns = columns.filter((column) => visible.includes(column.key));
   const cell = (value: unknown) => {
     let text = String(value ?? "");
-    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+    if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
     return `"${text.replaceAll('"', '""')}"`;
   };
   return [selectedColumns.map((column) => cell(column.label)).join(","), ...resources.map((resource) => selectedColumns.map(({ key }) => cell(valueFor(resource, key))).join(","))].join("\r\n");

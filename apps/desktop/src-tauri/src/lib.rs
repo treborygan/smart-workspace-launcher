@@ -605,8 +605,30 @@ fn load_resource_details(
     resource: &mut Resource,
     profile_id: Option<&str>,
 ) -> Result<(), AppError> {
+    load_resource_details_with_limits(conn, resource, profile_id, false)
+}
+
+fn load_resource_details_bounded(
+    conn: &Connection,
+    resource: &mut Resource,
+    profile_id: Option<&str>,
+) -> Result<(), AppError> {
+    load_resource_details_with_limits(conn, resource, profile_id, true)
+}
+
+fn load_resource_details_with_limits(
+    conn: &Connection,
+    resource: &mut Resource,
+    profile_id: Option<&str>,
+    bounded: bool,
+) -> Result<(), AppError> {
     load_targets(conn, resource)?;
-    let mut stmt=conn.prepare("SELECT kind,value FROM resource_terms WHERE resource_id=?1 ORDER BY kind,value COLLATE NOCASE")?;
+    let query = if bounded {
+        "SELECT kind,value FROM (SELECT kind,value FROM (SELECT kind,value FROM resource_terms WHERE resource_id=?1 AND kind='tag' ORDER BY value COLLATE NOCASE LIMIT 32) UNION ALL SELECT kind,value FROM (SELECT kind,value FROM resource_terms WHERE resource_id=?1 AND kind='alias' ORDER BY value COLLATE NOCASE LIMIT 32))"
+    } else {
+        "SELECT kind,value FROM resource_terms WHERE resource_id=?1 ORDER BY kind,value COLLATE NOCASE"
+    };
+    let mut stmt = conn.prepare(query)?;
     for term in stmt.query_map([&resource.id], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })? {
@@ -912,6 +934,7 @@ fn resource_search(
     profile_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<Resource>, AppError> {
+    validate_search_query(&query)?;
     let is_favorite = query
         .split_whitespace()
         .any(|part| part.eq_ignore_ascii_case("is:favorite"));
@@ -930,6 +953,21 @@ fn resource_search(
     )
 }
 
+const MAX_SEARCH_QUERY_BYTES: usize = 512;
+const MAX_SEARCH_QUERY_CHARS: usize = 128;
+const MAX_SEARCH_CANDIDATES: usize = 250;
+const MAX_SEARCH_FIELD_CHARS: usize = 256;
+const MAX_SEARCH_ALIAS_OR_TAG_FIELDS: usize = 32;
+
+fn validate_search_query(query: &str) -> Result<(), AppError> {
+    if query.len() > MAX_SEARCH_QUERY_BYTES || query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+        return Err(AppError::Invalid(format!(
+            "search query exceeds {MAX_SEARCH_QUERY_CHARS} characters or {MAX_SEARCH_QUERY_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct TextMatch {
     quality: u8, // exact, prefix, substring, then edit-distance match
@@ -937,24 +975,46 @@ struct TextMatch {
     distance: usize,
 }
 
-fn edit_distance(left: &str, right: &str) -> usize {
+fn edit_distance_at_most(left: &str, right: &str, max_distance: usize) -> Option<usize> {
+    let left: Vec<char> = left.chars().collect();
     let right: Vec<char> = right.chars().collect();
-    let mut previous: Vec<usize> = (0..=right.len()).collect();
-    for (i, left_char) in left.chars().enumerate() {
-        let mut current = vec![i + 1; right.len() + 1];
-        for (j, right_char) in right.iter().enumerate() {
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(previous[j] + usize::from(left_char != *right_char));
+    if left.len().abs_diff(right.len()) > max_distance {
+        return None;
+    }
+    let cap = max_distance + 1;
+    let mut previous: Vec<usize> = (0..=right.len())
+        .map(|index| if index <= max_distance { index } else { cap })
+        .collect();
+    for (i, left_char) in left.iter().enumerate() {
+        let row = i + 1;
+        let mut current = vec![cap; right.len() + 1];
+        if row <= max_distance {
+            current[0] = row;
+        }
+        let start = row.saturating_sub(max_distance).max(1);
+        let end = (row + max_distance).min(right.len());
+        let mut row_min = current[0];
+        for col in start..=end {
+            current[col] = (previous[col] + 1)
+                .min(current[col - 1] + 1)
+                .min(previous[col - 1] + usize::from(*left_char != right[col - 1]));
+            row_min = row_min.min(current[col]);
+        }
+        if row_min > max_distance {
+            return None;
         }
         previous = current;
     }
-    previous[right.len()]
+    (previous[right.len()] <= max_distance).then_some(previous[right.len()])
 }
 
 fn best_field_match(query: &str, value: &str, field: u8) -> Option<TextMatch> {
     let query = query.to_lowercase();
-    let value = value.to_lowercase();
+    let value = value
+        .chars()
+        .take(MAX_SEARCH_FIELD_CHARS)
+        .collect::<String>()
+        .to_lowercase();
     if query.is_empty() {
         return None;
     }
@@ -993,7 +1053,7 @@ fn best_field_match(query: &str, value: &str, field: u8) -> Option<TextMatch> {
     let distance = value
         .split(|ch: char| !ch.is_alphanumeric())
         .filter(|word| !word.is_empty())
-        .map(|word| edit_distance(&query, word))
+        .filter_map(|word| edit_distance_at_most(&query, word, max_distance))
         .min()?;
     (distance <= max_distance).then_some(TextMatch {
         quality: 3,
@@ -1004,13 +1064,13 @@ fn best_field_match(query: &str, value: &str, field: u8) -> Option<TextMatch> {
 
 fn resource_match(query: &str, resource: &Resource) -> Option<TextMatch> {
     let mut best = best_field_match(query, &resource.display_name, 0);
-    for alias in &resource.aliases {
+    for alias in resource.aliases.iter().take(MAX_SEARCH_ALIAS_OR_TAG_FIELDS) {
         best = best
             .into_iter()
             .chain(best_field_match(query, alias, 1))
             .min();
     }
-    for tag in &resource.tags {
+    for tag in resource.tags.iter().take(MAX_SEARCH_ALIAS_OR_TAG_FIELDS) {
         best = best
             .into_iter()
             .chain(best_field_match(query, tag, 2))
@@ -1042,15 +1102,26 @@ fn search_resources(
     limit: usize,
 ) -> Result<Vec<Resource>, AppError> {
     let query = q.trim();
-    let mut stmt = conn.prepare("SELECT r.id,r.resource_type,r.display_name,r.description,r.icon,r.default_action,r.created_utc,r.updated_utc FROM resources r WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND pr.profile_id=?1)) AND (?2=0 OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND (?1 IS NULL OR pr.profile_id=?1) AND pr.favorite=1))")?;
+    validate_search_query(query)?;
+    let lowered = query.to_lowercase();
+    let prefix = format!("{lowered}%");
+    let contains = format!("%{lowered}%");
+    let mut stmt = conn.prepare("SELECT r.id,r.resource_type,r.display_name,r.description,r.icon,r.default_action,r.created_utc,r.updated_utc FROM resources r WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND pr.profile_id=?1)) AND (?2=0 OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND (?1 IS NULL OR pr.profile_id=?1) AND pr.favorite=1)) ORDER BY CASE WHEN lower(r.display_name)=?3 THEN 0 WHEN lower(r.display_name) LIKE ?4 THEN 1 WHEN lower(r.display_name) LIKE ?5 THEN 2 WHEN EXISTS(SELECT 1 FROM resource_terms a WHERE a.resource_id=r.id AND a.kind='alias' AND lower(a.value) LIKE ?5) OR EXISTS(SELECT 1 FROM resource_terms t WHERE t.resource_id=r.id AND t.kind='tag' AND lower(t.value) LIKE ?5) THEN 3 ELSE 4 END, r.display_name COLLATE NOCASE LIMIT ?6")?;
     let rows = stmt.query_map(
-        params![profile_id, if is_favorite { 1i64 } else { 0i64 }],
+        params![
+            profile_id,
+            if is_favorite { 1i64 } else { 0i64 },
+            lowered,
+            prefix,
+            contains,
+            MAX_SEARCH_CANDIDATES as i64
+        ],
         resource_from_row,
     )?;
     let mut ranked = Vec::new();
     for row in rows {
         let mut resource = row?;
-        load_resource_details(conn, &mut resource, profile_id)?;
+        load_resource_details_bounded(conn, &mut resource, profile_id)?;
         let text_match = if query.is_empty() {
             Some(TextMatch {
                 quality: 4,
@@ -1850,6 +1921,37 @@ mod tests {
         assert!(typo
             .iter()
             .any(|resource| resource.display_name == "Calendar"));
+    }
+
+    #[test]
+    fn search_rejects_queries_over_byte_or_character_caps() {
+        assert!(validate_search_query(&"x".repeat(MAX_SEARCH_QUERY_CHARS + 1)).is_err());
+        assert!(validate_search_query(&"é".repeat(MAX_SEARCH_QUERY_BYTES / 2 + 1)).is_err());
+        assert!(validate_search_query(&"é".repeat(MAX_SEARCH_QUERY_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn search_candidate_cap_bounds_scoring_but_keeps_requested_output_limit() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        for index in (0..MAX_SEARCH_CANDIDATES + 5).rev() {
+            let resource = resource(&format!("Work item {index:04}"));
+            persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        }
+        let results = search_resources(&conn, "work", Some(&pid), false, 500).unwrap();
+        assert_eq!(results.len(), MAX_SEARCH_CANDIDATES);
+        assert_eq!(results[0].display_name, "Work item 0000");
+        assert_eq!(results.last().unwrap().display_name, "Work item 0249");
+        let limited = search_resources(&conn, "work", Some(&pid), false, 3).unwrap();
+        assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn bounded_edit_distance_handles_typo_threshold_and_long_mismatch() {
+        assert_eq!(edit_distance_at_most("calender", "calendar", 2), Some(1));
+        assert_eq!(edit_distance_at_most("calendar", "calendars", 1), Some(1));
+        assert_eq!(edit_distance_at_most("calendar", "unrelated", 2), None);
+        assert_eq!(edit_distance_at_most("a", &"b".repeat(300), 2), None);
     }
 
     #[test]

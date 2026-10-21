@@ -1,0 +1,5 @@
+# Restart Codex development from GitHub state
+
+Resume `treborygan/smart-workspace-launcher` as coordinator with the active `.codex/config.toml` (Luna Medium root, max 3 Luna subagents). Read `AGENTS.md`, `CODEX_KICKOFF.md`, `docs/MULTI_AGENT_WORKFLOW.md`, `docs/NOTIFICATIONS_AND_RELEASE_GATES.md`, `backlog/ROADMAP.md`, `backlog/STATUS.md`, `backlog/AGENT_STATUS.json`, all active PRs/issues, and latest commits. Reconcile reported status with actual branches and test logs; no guessing.
+
+Pick highest-priority unblocked item according to dependency graph. Explicitly spawn Core/UI/QA subagents as described when independent work exists, each on its own worktree/branch. Continue implementing, testing, reviewing and merging; V1 is an intermediate distribution milestone and project completion requires SW-013..SW-025. If V1 release is verified but not notified, perform one accurate notification including tested binary URL and SHA. Do not claim persistent execution after the Codex session ends; commit a detailed restartable next-step queue and report blockers.

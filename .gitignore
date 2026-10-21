@@ -1,0 +1,42 @@
+# Tauri / Rust / JS builds
+node_modules/
+target/
+dist/
+*.exe
+*.msi
+*.msix
+*.pdb
+*.log
+.vite/
+coverage/
+*.tsbuildinfo
+
+# SQLite runtime and real user data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+user-data/
+*.swprofile
+!fixtures/valid/example.swprofile
+
+# Secrets and local setup
+.env
+.env.*
+!.env.example
+*.pfx
+*.key
+*.pem
+*.p12
+.vscode/
+.idea/
+
+# OS / Python scratch
+.DS_Store
+Thumbs.db
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc

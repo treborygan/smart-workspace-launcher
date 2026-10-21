@@ -1,0 +1,30 @@
+# Project-local Codex defaults. The signed-in client must support gpt-6-luna.
+# Main/orchestrator remains on Luna Medium to protect integration quality.
+model = "gpt-6-luna"
+model_reasoning_effort = "medium"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-6-luna"
+default_subagent_reasoning_effort = "low"
+
+[agents.core]
+description = "Backend/Rust/SQLite/Windows Shell integration and security-critical domain behavior."
+config_file = "agents/core.toml"
+
+[agents.ui]
+description = "React/Tauri dashboard, global search UI, dock, explorer, themes and accessibility."
+config_file = "agents/ui.toml"
+
+[agents.qa]
+description = "Independent tests, reviews, performance, security, Windows acceptance and release checks."
+config_file = "agents/qa.toml"
+
+[agents.research]
+description = "Bounded read-only investigation of current documentation, libraries and integration options."
+config_file = "agents/research.toml"
+
+[agents.release]
+description = "Windows-native packaging, smoke tests, SBOM/checksums and verifiable release evidence."
+config_file = "agents/release.toml"

@@ -1,0 +1,29 @@
+name: Implementation task
+description: Use for a tracked Smart Workspace issue
+labels: [v1]
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: Requirement ID
+      placeholder: SW-001 / FR-001
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and boundaries
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Testable acceptance criteria
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification plan / Windows dependencies
+    validations:
+      required: true

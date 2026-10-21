@@ -1,55 +1,49 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T20:11:40Z",
+  "updated_at_utc": "2026-10-21T21:13:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-005-quick-launch"
+    "branch": "coordinator/current-main"
   },
-  "active_pull_request": {
-    "number": 27,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/27",
-    "state": "DRAFT",
-    "base_pr": 26,
-    "head_commit": "bb54896"
-  },
+  "active_pull_request": 34,
   "subagent_limit": 3,
   "agents": [
     {
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
-      "issue": "SW-007",
-      "branch": "feature/sw-007-metadata",
-      "commit": "2b05fba",
-      "pr": 27,
-      "task": "Implementing bounded local metadata cache/health and analytics summaries from issue #18; typed API frozen by coordinator, tests and Windows-only limitations to be recorded."
+      "state": "COMPLETE",
+      "issue": "SW-008 secure profile archive import/export",
+      "branch": "feature/sw-008-profile-archive",
+      "commit": "adaab02f6115582719d0facbc0721ec362a115cb",
+      "pr": 34,
+      "task": "Backend implemented and QA-approved: package digest/token binding, collision snapshots, safe differing-content remap, Tauri dialog plugin."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
-      "issue": "SW-009",
-      "branch": "feature/sw-009-dock",
-      "commit": "57bce73",
-      "pr": 27,
-      "task": "Implementing independent Dock and shared profile/resource state from issue #8, based on SW-005; Windows positioning/autohide remains unverified."
+      "state": "COMPLETE",
+      "issue": "SW-008 profile archive UI",
+      "branch": "feature/sw-008-profile-ui",
+      "commit": "1c97563483c829ced6460b1148d1d5798e420626",
+      "pr": 34,
+      "task": "Native archive open/save, preview with imported/existing/proposed snapshots, strategy-aware Duplicate/Merge/Replace, explicit confirmation, hash/token-bound commit. Cherry-picked into PR #34 integration commit 6a02e59."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-005",
+      "issue": "SW-008 backend/UI review",
       "branch": "shared-checkout",
-      "commit": null,
-      "pr": 27,
-      "task": "Reviewed integrated hotkey/search/profile settings/launch failure flows; draft conflict bug fixed and re-reviewed; no remaining blocker in review scope."
+      "commit": "6a02e59",
+      "pr": 34,
+      "task": "Backend re-review approved digest binding and differing-content merge behavior. UI re-review approved strategy-aware conflicts and API token flow; no integration blocker. Independent test run reported typecheck/build/diff pass; tests were initially blocked by concurrent node_modules corruption, then coordinator reran all checks cleanly."
     },
     {
       "role": "research",
@@ -79,51 +73,125 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T20:08:10Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows or PowerShell host",
+    "at_utc": "2026-10-21T21:13:00Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows/PowerShell host",
     "results": [
       {
-        "command": "npm run lint",
-        "result": "PASS (TypeScript check)"
+        "command": "npm ci && npm run typecheck && npm test && npm run frontend:build && git diff --check",
+        "result": "PASS on SW-007 UI integration branch (npm ci: 88 packages; 4 files/31 tests; production build succeeded). QA independently ran typecheck/tests/build/diff check and confirmed no blocking issue."
       },
       {
-        "command": "npm test",
-        "result": "PASS (15 frontend tests)"
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS after PR #26/#27/#29/#30/#33 merges; reports no compiled app or Windows runtime tests."
       },
       {
-        "command": "npm run frontend:build",
-        "result": "PASS"
+        "command": "python scripts/check_release_gate.py",
+        "result": "BLOCKED as expected; no real Windows 11 verification."
+      },
+      {
+        "command": "npm run lint && npm test && npm run frontend:build && git diff --check",
+        "result": "PASS on integrated SW-009 + SW-007 backend branch; 23 frontend tests; production build succeeded"
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
         "result": "PASS"
       },
       {
-        "command": "git diff --check",
-        "result": "PASS"
+        "command": "Windows GNU target cargo check --tests (with host cc, fake windres and temporary icon)",
+        "result": "PASS type-check only on SW-007 backend commit; no Windows binary or test execution"
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "BLOCKED before test compilation: glib-2.0 >= 2.70 development package missing"
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
+        "result": "PASS on corrective commit 80d797c"
       },
       {
         "command": "python -m unittest discover -s tests -v",
-        "result": "PASS (11 archive QA harness tests; production importer is not implemented)"
+        "result": "PASS (11 profile archive QA harness tests; no production importer yet)"
       },
       {
         "command": "python scripts/verify_handoff.py",
         "result": "PASS (handoff/schema/fixture checks only)"
       },
       {
-        "command": "env CC_x86_64_pc_windows_gnu=cc CC_x86_64-pc-windows-gnu=cc RC_x86_64_pc_windows_gnu=/tmp/windres cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --tests",
-        "result": "PASS Rust type-check only using Linux host cc, fake windres and temporary placeholder icon; produced no Windows binary and ran no tests"
-      },
-      {
-        "command": "cargo test --lib --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "result": "BLOCKED before test execution: Linux host lacks glib-2.0 >= 2.70 / GTK development libraries"
-      },
-      {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED as expected (exit 2); no real Windows 11 verification"
+        "result": "BLOCKED as expected; no real Windows 11 verification"
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check",
+        "result": "PASS on SW-008 backend head adaab02; independently re-run by QA."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "BLOCKED before test compilation: glib-sys cannot find glib-2.0 >=2.70 / glib-2.0.pc."
+      },
+      {
+        "command": "cargo check --target x86_64-pc-windows-gnu --tests",
+        "result": "BLOCKED: x86_64-w64-mingw32-gcc is not installed; no Windows binary or tests."
+      },
+      {
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS: 11 profile archive QA fixture/helper tests."
+      },
+      {
+        "command": "npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check",
+        "result": "PASS on SW-008 integration at 6a02e59: 89 packages installed; typecheck passes; 5 files/38 tests pass; production build passes; diff check passes. Vite reports one non-failing ineffective dynamic import warning."
+      },
+      {
+        "command": "QA review of SW-008 backend and UI",
+        "result": "PASS with no blocking issues. QA separately confirmed digest/token binding, safe merge collision behavior, strategy-aware UI, and API commit token propagation."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "In parallel implement SW-007 metadata/analytics and SW-009 independent Dock on feature branches based on feature/sw-005-quick-launch (head bb54896). Then implement SW-008 production transactional .swprofile import/export, SW-010 completion and SW-011 hardening. Obtain a Windows 11 x64 host for SW-012; V1 remains BLOCKED and SW-013..SW-025 remain required after V1."
+  "next_action": "PR #34 now includes QA-approved SW-008 backend and UI. Durable status/docs are being committed with exact frontend checks. Next complete SW-010/SW-011, then Windows 11 acceptance; V1 remains blocked without Windows.",
+  "recent_merges": [
+    {
+      "number": 32,
+      "sha": "078f5160254cd81533230c9392f092a2dc6a0a5b",
+      "scope": "SW-001 atomic update corrective fix into bootstrap feature branch"
+    },
+    {
+      "number": 26,
+      "sha": "28685a99664dcaab98273fb79ac8a5bd544722cf",
+      "scope": "SW-001..SW-004 foundation into main"
+    },
+    {
+      "number": 27,
+      "sha": "b1121427072a7e446859eb0a9c39dafae2407fc2",
+      "scope": "SW-005 Quick Launch"
+    },
+    {
+      "number": 29,
+      "sha": "ee3e8fb3eaef08168f3bf1c3f7301c6268175b21",
+      "scope": "SW-009 Dock"
+    },
+    {
+      "number": 30,
+      "sha": "bbc098a7051ab3d612efce911a460fedd800a8dd",
+      "scope": "SW-007 metadata/analytics backend"
+    },
+    {
+      "number": 33,
+      "sha": "4873414e1fb1c2e096fedd3d7b44b576831434f4",
+      "scope": "SW-007 Inspector and Analytics UI integration"
+    }
+  ],
+  "open_pull_requests": [
+    {
+      "number": 34,
+      "title": "feat(SW-008): secure profile archive import and export",
+      "state": "DRAFT",
+      "head": "feature/sw-008-profile-archive",
+      "sha": "6a02e59 (UI integrated; status docs pending)",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/34",
+      "blockers": [
+        "Rust unit tests cannot execute on current Linux host (missing GLib >=2.70)",
+        "No real Windows 11 x64 host; V1 release gate remains blocked"
+      ]
+    }
+  ]
 }

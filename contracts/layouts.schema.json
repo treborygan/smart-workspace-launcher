@@ -21,6 +21,9 @@
           "cards"
         ],
         "properties": {
+          "surface": {
+            "enum": ["dashboard", "dock"]
+          },
           "breakpoint": {
             "enum": [
               "desktop",

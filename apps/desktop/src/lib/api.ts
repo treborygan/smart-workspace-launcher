@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, LaunchEvent, LaunchSource, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -27,6 +27,20 @@ function readDemo(): Resource[] {
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
 
 export const api = {
+  async exportProfile(profileId: string, outputPath: string, includeHistory = false): Promise<ProfileExportResult> {
+    if (!isNative()) throw new Error("Profile export is available in the Windows desktop app.");
+    return invokeTyped("profile_export", { profileId, outputPath, includeHistory });
+  },
+  async previewProfileImport(packagePath: string): Promise<ProfileImportPreview> {
+    if (!isNative()) throw new Error("Profile import is available in the Windows desktop app.");
+    return invokeTyped("profile_import_preview", { packagePath });
+  },
+  async commitProfileImport(packagePath: string, strategy: ProfileImportStrategy, targetProfileId: string | undefined, packageSha256: string, previewToken: string): Promise<ProfileImportResult> {
+    if (!isNative()) throw new Error("Profile import is available in the Windows desktop app.");
+    const result = await invokeTyped("profile_import_commit", { packagePath, strategy, targetProfileId, packageSha256, previewToken });
+    await notifyWorkspaceChanged(result.profileId);
+    return result;
+  },
   isNativeApp(): boolean { return isNative(); },
   async inspect(resourceId: string, forceRefresh = false): Promise<ResourceMetadata[]> {
     if (isNative()) return invokeTyped("resource_inspect", { resourceId, forceRefresh });

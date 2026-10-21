@@ -126,6 +126,10 @@
                 "working_directory": {
                   "type": "string",
                   "maxLength": 4096
+                },
+                "active": {
+                  "type": "boolean",
+                  "default": true
                 }
               }
             }

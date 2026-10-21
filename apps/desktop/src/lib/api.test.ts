@@ -131,3 +131,28 @@ describe("metadata and analytics API", () => {
     expect(invokeTyped).not.toHaveBeenCalled();
   });
 });
+
+describe("profile archive API", () => {
+  it("uses the frozen typed preview, export and commit boundaries", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const preview = { profileId: "p", profileName: "Work", packageSha256: "sha256", previewToken: "preview-token", resourceCount: 3, layoutCount: 1, historyEventCount: 2, profileIdCollision: true, profileNameCollision: true, resourceIdCollisions: ["r1"], targetIdCollisions: [], resourceConflicts: [], assetCount: 0 };
+    const exported = { path: "C:\\Work.swprofile", profileName: "Work", resourceCount: 3, historyEventCount: 2 };
+    const imported = { profileId: "p2", profileName: "Work (2)", importedResources: 3, reusedResources: 0, importedLayouts: 1, importedHistoryEvents: 2 };
+    invokeTyped.mockResolvedValueOnce(exported).mockResolvedValueOnce(preview).mockResolvedValueOnce(imported);
+    expect(await api.exportProfile("p", exported.path, true)).toEqual(exported);
+    expect(await api.previewProfileImport(exported.path)).toEqual(preview);
+    expect(await api.commitProfileImport(exported.path, "replace", "p", preview.packageSha256, preview.previewToken)).toEqual(imported);
+    expect(emitTyped).toHaveBeenCalledWith("workspace-state-changed", { profileId: "p2" });
+    expect(invokeTyped.mock.calls).toEqual([
+      ["profile_export", { profileId: "p", outputPath: exported.path, includeHistory: true }],
+      ["profile_import_preview", { packagePath: exported.path }],
+      ["profile_import_commit", { packagePath: exported.path, strategy: "replace", targetProfileId: "p", packageSha256: "sha256", previewToken: "preview-token" }],
+    ]);
+  });
+  it("does not emulate filesystem import/export in the browser preview", async () => {
+    await expect(api.exportProfile("p", "out.swprofile")).rejects.toThrow("Windows desktop app");
+    await expect(api.previewProfileImport("in.swprofile")).rejects.toThrow("Windows desktop app");
+    await expect(api.commitProfileImport("in.swprofile", "duplicate", undefined, "sha", "token")).rejects.toThrow("Windows desktop app");
+    expect(invokeTyped).not.toHaveBeenCalled();
+  });
+});

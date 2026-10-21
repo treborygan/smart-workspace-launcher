@@ -1,9 +1,12 @@
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
-    path::Path,
+    fs::{File, OpenOptions},
+    io::{Cursor, Read, Write},
+    path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
         atomic::{AtomicUsize, Ordering},
@@ -16,6 +19,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -29,6 +33,8 @@ pub enum AppError {
     Launch(String),
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("profile package error: {0}")]
+    Package(String),
 }
 
 impl Serialize for AppError {
@@ -140,6 +146,1602 @@ pub struct Profile {
     pub settings_json: String,
     pub created_utc: String,
     pub updated_utc: String,
+}
+
+const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
+const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
+const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
+const PROFILE_ARCHIVE_MAX_RATIO: u64 = 100;
+const PROFILE_ARCHIVE_MAX_ENTRIES: usize = 2503;
+const PROFILE_REQUIRED_MEMBERS: [&str; 4] = [
+    "manifest.json",
+    "profile.json",
+    "resources.json",
+    "layouts.json",
+];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageManifest {
+    format: String,
+    schema_version: u32,
+    exported_at_utc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_version: Option<String>,
+    profile_file: String,
+    resources_file: String,
+    layouts_file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_file: Option<String>,
+    #[serde(default)]
+    include_history: bool,
+    #[serde(default)]
+    assets: Vec<ProfilePackageAsset>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageAsset {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageDocument {
+    schema_version: u32,
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    theme: ProfilePackageTheme,
+    settings: serde_json::Value,
+    memberships: Vec<String>,
+    #[serde(default)]
+    membership_details: Vec<ProfilePackageMembership>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageTheme {
+    mode: String,
+    accent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    density: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageMembership {
+    resource_id: String,
+    favorite: bool,
+    category: Option<String>,
+    sort_position: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileResourcesDocument {
+    schema_version: u32,
+    resources: Vec<ProfilePackageResource>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageResource {
+    schema_version: u32,
+    id: String,
+    name: String,
+    #[serde(rename = "type")]
+    resource_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+    targets: Vec<ProfilePackageTarget>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageTarget {
+    id: String,
+    kind: String,
+    value: String,
+    priority: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_label: Option<String>,
+    #[serde(default)]
+    argv: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    working_directory: Option<String>,
+    #[serde(default = "default_active")]
+    active: bool,
+}
+
+fn default_active() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileLayoutsDocument {
+    schema_version: u32,
+    layouts: Vec<ProfilePackageLayout>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageLayout {
+    #[serde(default)]
+    surface: Option<String>,
+    breakpoint: String,
+    cards: Vec<ProfilePackageLayoutCard>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageLayoutCard {
+    resource_id: String,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+    #[serde(rename = "type")]
+    card_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileHistoryDocument {
+    schema_version: u32,
+    events: Vec<ProfilePackageHistoryEvent>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageHistoryEvent {
+    request_id: String,
+    resource_id: String,
+    target_id: Option<String>,
+    source: String,
+    status: String,
+    launched_at_utc: String,
+    error_code: Option<String>,
+    message: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+struct ValidatedProfilePackage {
+    manifest: ProfilePackageManifest,
+    profile: ProfilePackageDocument,
+    resources: ProfileResourcesDocument,
+    layouts: ProfileLayoutsDocument,
+    history: Option<ProfileHistoryDocument>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileImportPreview {
+    pub package_sha256: String,
+    pub preview_token: String,
+    pub profile_id: String,
+    pub profile_name: String,
+    pub resource_count: usize,
+    pub layout_count: usize,
+    pub history_event_count: usize,
+    pub profile_id_collision: bool,
+    pub profile_name_collision: bool,
+    pub resource_id_collisions: Vec<String>,
+    pub target_id_collisions: Vec<String>,
+    pub resource_conflicts: Vec<ProfileResourceConflictPreview>,
+    pub asset_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileResourceConflictPreview {
+    pub resolution: String,
+    pub imported: ProfileResourceSnapshot,
+    pub existing: ProfileResourceSnapshot,
+    pub proposed: ProfileResourceSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileResourceSnapshot {
+    pub id: String,
+    pub name: String,
+    pub resource_type: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
+    pub targets: Vec<ProfileTargetSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileTargetSnapshot {
+    pub id: String,
+    pub kind: String,
+    pub value: String,
+    pub priority: i64,
+    pub arguments: Vec<String>,
+    pub working_directory: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileImportResult {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub imported_resources: usize,
+    pub reused_resources: usize,
+    pub imported_layouts: usize,
+    pub imported_history_events: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileExportResult {
+    pub path: String,
+    pub profile_name: String,
+    pub resource_count: usize,
+    pub history_event_count: usize,
+}
+
+fn package_error(message: impl Into<String>) -> AppError {
+    AppError::Package(message.into())
+}
+
+fn safe_archive_path(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('\\')
+        && !name.starts_with('/')
+        && !name.starts_with('~')
+        && !name.contains(':')
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn read_zip_member<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<Vec<u8>, AppError> {
+    let mut member = archive
+        .by_name(name)
+        .map_err(|_| package_error(format!("missing or unreadable ZIP member: {name}")))?;
+    if member.size() > PROFILE_ARCHIVE_MAX_ENTRY {
+        return Err(package_error(format!(
+            "ZIP member exceeds size limit: {name}"
+        )));
+    }
+    let mut bytes = Vec::with_capacity(member.size() as usize);
+    member
+        .take(PROFILE_ARCHIVE_MAX_ENTRY + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| package_error(format!("could not read ZIP member: {name}")))?;
+    if bytes.len() as u64 > PROFILE_ARCHIVE_MAX_ENTRY {
+        return Err(package_error(format!(
+            "ZIP member exceeds size limit: {name}"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn parse_package_json<T: for<'de> Deserialize<'de>>(
+    bytes: &[u8],
+    name: &str,
+) -> Result<T, AppError> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        package_error(format!("{name} does not match the package schema: {error}"))
+    })
+}
+
+fn valid_uuid(value: &str, field: &str) -> Result<(), AppError> {
+    Uuid::parse_str(value)
+        .map(|_| ())
+        .map_err(|_| package_error(format!("{field} must be a UUID")))
+}
+
+fn valid_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.starts_with('#')
+        && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppError> {
+    let manifest = &package.manifest;
+    if manifest.format != "swprofile"
+        || manifest.schema_version != 1
+        || manifest.profile_file != "profile.json"
+        || manifest.resources_file != "resources.json"
+        || manifest.layouts_file != "layouts.json"
+        || manifest
+            .history_file
+            .as_deref()
+            .is_some_and(|name| name != "history.json")
+        || manifest.include_history != package.history.is_some()
+    {
+        return Err(package_error("unsupported profile package manifest"));
+    }
+    if chrono::DateTime::parse_from_rfc3339(&manifest.exported_at_utc).is_err() {
+        return Err(package_error("invalid package export timestamp"));
+    }
+    if package.profile.schema_version != 1
+        || package.resources.schema_version != 1
+        || package.layouts.schema_version != 1
+        || package
+            .history
+            .as_ref()
+            .is_some_and(|history| history.schema_version != 1)
+    {
+        return Err(package_error("unsupported profile package schema version"));
+    }
+    valid_uuid(&package.profile.id, "profile id")?;
+    if package.profile.name.trim().is_empty() || package.profile.name.chars().count() > 80 {
+        return Err(package_error(
+            "profile name must contain 1 to 80 characters",
+        ));
+    }
+    if package
+        .profile
+        .description
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 1024)
+    {
+        return Err(package_error("profile description exceeds 1024 characters"));
+    }
+    if !["light", "dark", "system"].contains(&package.profile.theme.mode.as_str())
+        || !valid_hex_color(&package.profile.theme.accent)
+        || package
+            .profile
+            .theme
+            .density
+            .as_ref()
+            .is_some_and(|density| {
+                !["compact", "balanced", "comfortable"].contains(&density.as_str())
+            })
+    {
+        return Err(package_error("invalid profile theme"));
+    }
+    if !package.profile.settings.is_object()
+        || package
+            .profile
+            .settings
+            .as_object()
+            .is_some_and(|map| map.len() > 50)
+    {
+        return Err(package_error(
+            "profile settings must be an object with at most 50 properties",
+        ));
+    }
+    if package.resources.resources.len() > 10_000
+        || package.profile.memberships.len() > 10_000
+        || package.layouts.layouts.len() > 25
+    {
+        return Err(package_error("package exceeds item count limit"));
+    }
+    let mut resource_ids = std::collections::HashSet::new();
+    let mut target_ids = std::collections::HashSet::new();
+    for resource in &package.resources.resources {
+        valid_uuid(&resource.id, "resource id")?;
+        if !resource_ids.insert(resource.id.clone()) {
+            return Err(package_error("resource IDs must be unique"));
+        }
+        if resource.schema_version != 1
+            || resource.name.trim().is_empty()
+            || resource.name.chars().count() > 256
+            || resource
+                .description
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > 4096)
+            || !["file", "folder", "app", "shortcut", "url"]
+                .contains(&resource.resource_type.as_str())
+            || resource.targets.is_empty()
+            || resource.targets.len() > 8
+            || resource.tags.len() > 64
+            || resource.aliases.len() > 32
+        {
+            return Err(package_error("invalid resource fields or limits"));
+        }
+        for (field, values, limit) in [
+            ("tag", &resource.tags, 80usize),
+            ("alias", &resource.aliases, 80usize),
+        ] {
+            let mut unique = std::collections::HashSet::new();
+            if values
+                .iter()
+                .any(|value| value.chars().count() > limit || !unique.insert(value.to_lowercase()))
+            {
+                return Err(package_error(format!(
+                    "invalid or duplicate resource {field}"
+                )));
+            }
+        }
+        for target in &resource.targets {
+            valid_uuid(&target.id, "target id")?;
+            if !target_ids.insert(target.id.clone()) {
+                return Err(package_error("target IDs must be unique"));
+            }
+            if !["file", "folder", "app", "shortcut", "url"].contains(&target.kind.as_str())
+                || target.value.trim().is_empty()
+                || target.value.chars().count() > 4096
+                || !(0..=1000).contains(&target.priority)
+                || target.argv.len() > 64
+                || target.argv.iter().any(|arg| arg.chars().count() > 4096)
+                || target
+                    .working_directory
+                    .as_ref()
+                    .is_some_and(|value| value.chars().count() > 4096)
+                || target
+                    .device_label
+                    .as_ref()
+                    .is_some_and(|value| value.chars().count() > 128)
+            {
+                return Err(package_error("invalid target fields or limits"));
+            }
+            if target.kind == "url" {
+                let parsed =
+                    Url::parse(&target.value).map_err(|_| package_error("invalid URL target"))?;
+                if parsed.scheme() != "https" || parsed.host_str().is_none() {
+                    return Err(package_error("only HTTPS URL targets are allowed"));
+                }
+            }
+        }
+    }
+    if resource_ids.iter().any(|id| target_ids.contains(id)) {
+        return Err(package_error(
+            "resource and target IDs must be globally unique",
+        ));
+    }
+    let known_resources: std::collections::HashSet<String> = resource_ids.clone();
+    let mut membership_ids = std::collections::HashSet::new();
+    for id in &package.profile.memberships {
+        valid_uuid(id, "membership resource id")?;
+        if !known_resources.contains(id) || !membership_ids.insert(id.clone()) {
+            return Err(package_error(
+                "profile memberships must be unique known resources",
+            ));
+        }
+    }
+    let mut details = std::collections::HashSet::new();
+    for membership in &package.profile.membership_details {
+        valid_uuid(&membership.resource_id, "membership resource id")?;
+        if !known_resources.contains(&membership.resource_id)
+            || !membership_ids.contains(&membership.resource_id)
+            || !details.insert(membership.resource_id.clone())
+            || !(0..=1_000_000).contains(&membership.sort_position)
+            || membership
+                .category
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > 80)
+        {
+            return Err(package_error("invalid membership metadata"));
+        }
+    }
+    for layout in &package.layouts.layouts {
+        if !["desktop", "tablet", "compact"].contains(&layout.breakpoint.as_str())
+            || layout
+                .surface
+                .as_ref()
+                .is_some_and(|surface| !["dashboard", "dock"].contains(&surface.as_str()))
+            || layout.cards.len() > 10_000
+        {
+            return Err(package_error("invalid layout fields or limits"));
+        }
+        for card in &layout.cards {
+            valid_uuid(&card.resource_id, "layout resource id")?;
+            if !known_resources.contains(&card.resource_id)
+                || !membership_ids.contains(&card.resource_id)
+                || !(0..=11).contains(&card.x)
+                || !(0..=9999).contains(&card.y)
+                || !(1..=12).contains(&card.w)
+                || card.x + card.w > 12
+                || !(1..=100).contains(&card.h)
+                || !["icon", "compact", "info", "group"].contains(&card.card_type.as_str())
+            {
+                return Err(package_error("invalid layout card"));
+            }
+        }
+    }
+    if let Some(history) = &package.history {
+        if history.events.len() > 100_000 {
+            return Err(package_error("history exceeds item count limit"));
+        }
+        let mut request_ids = std::collections::HashSet::new();
+        for event in &history.events {
+            valid_uuid(&event.request_id, "history request id")?;
+            valid_uuid(&event.resource_id, "history resource id")?;
+            if let Some(target_id) = event.target_id.as_deref() {
+                valid_uuid(target_id, "history target id")?;
+            }
+            if chrono::DateTime::parse_from_rfc3339(&event.launched_at_utc).is_err() {
+                return Err(package_error("invalid history event timestamp"));
+            }
+            if !known_resources.contains(&event.resource_id)
+                || !request_ids.insert(event.request_id.clone())
+                || event
+                    .target_id
+                    .as_deref()
+                    .is_some_and(|id| !target_ids.contains(id))
+                || !["dashboard", "quick_launch", "dock", "explorer", "other"]
+                    .contains(&event.source.as_str())
+                || !["requested", "handed_off", "failed"].contains(&event.status.as_str())
+                || event
+                    .error_code
+                    .as_ref()
+                    .is_some_and(|value| value.len() > 128)
+                || event
+                    .message
+                    .as_ref()
+                    .is_some_and(|value| value.chars().count() > 1024)
+                || event
+                    .duration_ms
+                    .is_some_and(|value| !(0..=3_600_000).contains(&value))
+            {
+                return Err(package_error("invalid history event"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_profile_package(path: &Path) -> Result<ValidatedProfilePackage, AppError> {
+    read_profile_package_with_digest(path).map(|(package, _)| package)
+}
+
+fn read_profile_package_with_digest(
+    path: &Path,
+) -> Result<(ValidatedProfilePackage, String), AppError> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| package_error(format!("cannot inspect package: {error}")))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > PROFILE_ARCHIVE_MAX_COMPRESSED
+    {
+        return Err(package_error(
+            "package must be a regular file under the compressed size limit",
+        ));
+    }
+    let file =
+        File::open(path).map_err(|error| package_error(format!("cannot open package: {error}")))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(PROFILE_ARCHIVE_MAX_COMPRESSED + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| package_error(format!("cannot read package: {error}")))?;
+    if bytes.len() as u64 > PROFILE_ARCHIVE_MAX_COMPRESSED {
+        return Err(package_error("package exceeds the compressed size limit"));
+    }
+    let package_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|_| package_error("not a valid ZIP profile package"))?;
+    if archive.len() > PROFILE_ARCHIVE_MAX_ENTRIES {
+        return Err(package_error("archive contains too many entries"));
+    }
+    let mut names = std::collections::HashSet::new();
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|_| package_error("invalid ZIP directory"))?;
+        let name = entry.name().to_owned();
+        if !safe_archive_path(&name) || !names.insert(name) {
+            return Err(package_error(
+                "archive contains an unsafe or duplicate member path",
+            ));
+        }
+        if entry.encrypted()
+            || !matches!(
+                entry.compression(),
+                CompressionMethod::Stored | CompressionMethod::Deflated
+            )
+        {
+            return Err(package_error(
+                "encrypted or unsupported compression ZIP member",
+            ));
+        }
+        if [
+            ".bat", ".cmd", ".com", ".dll", ".exe", ".js", ".msi", ".ps1", ".py", ".scr", ".sh",
+            ".vbs", ".wsf",
+        ]
+        .iter()
+        .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+        {
+            return Err(package_error("executable archive members are not allowed"));
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(package_error(
+                "symbolic link archive members are not allowed",
+            ));
+        }
+        if entry.size() > PROFILE_ARCHIVE_MAX_ENTRY {
+            return Err(package_error(
+                "archive member exceeds the uncompressed size limit",
+            ));
+        }
+        if entry.size() > 0 && entry.compressed_size() == 0 {
+            return Err(package_error("archive member has invalid compressed size"));
+        }
+        if entry.size()
+            > entry
+                .compressed_size()
+                .saturating_mul(PROFILE_ARCHIVE_MAX_RATIO)
+        {
+            return Err(package_error("archive compression ratio exceeds the limit"));
+        }
+        total = total
+            .checked_add(entry.size())
+            .ok_or_else(|| package_error("archive size overflow"))?;
+        if total > PROFILE_ARCHIVE_MAX_TOTAL {
+            return Err(package_error(
+                "archive exceeds total uncompressed size limit",
+            ));
+        }
+    }
+    for required in PROFILE_REQUIRED_MEMBERS {
+        if !names.contains(required) {
+            return Err(package_error("archive is missing a required JSON document"));
+        }
+    }
+    let manifest: ProfilePackageManifest = parse_package_json(
+        &read_zip_member(&mut archive, "manifest.json")?,
+        "manifest.json",
+    )?;
+    if manifest.include_history != manifest.history_file.is_some() {
+        return Err(package_error(
+            "history flag and history file declaration do not match",
+        ));
+    }
+    let mut expected_names: std::collections::HashSet<String> = PROFILE_REQUIRED_MEMBERS
+        .iter()
+        .map(|value| value.to_string())
+        .collect();
+    if manifest.include_history {
+        expected_names.insert("history.json".into());
+    }
+    if manifest.assets.len() > 2500 {
+        return Err(package_error("too many package assets"));
+    }
+    let mut asset_paths = std::collections::HashSet::new();
+    for asset in &manifest.assets {
+        if !valid_asset_name(&asset.path)
+            || !asset_paths.insert(asset.path.as_str())
+            || asset.sha256.len() != 64
+            || !asset
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(package_error("invalid package asset declaration"));
+        }
+        expected_names.insert(asset.path.clone());
+    }
+    if names != expected_names {
+        return Err(package_error("archive members do not match the manifest"));
+    }
+    for asset in &manifest.assets {
+        let bytes = read_zip_member(&mut archive, &asset.path)?;
+        if format!("{:x}", Sha256::digest(bytes)) != asset.sha256 {
+            return Err(package_error(format!(
+                "asset checksum mismatch: {}",
+                asset.path
+            )));
+        }
+    }
+    let profile = parse_package_json(
+        &read_zip_member(&mut archive, "profile.json")?,
+        "profile.json",
+    )?;
+    let resources = parse_package_json(
+        &read_zip_member(&mut archive, "resources.json")?,
+        "resources.json",
+    )?;
+    let layouts = parse_package_json(
+        &read_zip_member(&mut archive, "layouts.json")?,
+        "layouts.json",
+    )?;
+    let history = if manifest.include_history {
+        Some(parse_package_json(
+            &read_zip_member(&mut archive, "history.json")?,
+            "history.json",
+        )?)
+    } else {
+        None
+    };
+    let package = ValidatedProfilePackage {
+        manifest,
+        profile,
+        resources,
+        layouts,
+        history,
+    };
+    validate_package_fields(&package)?;
+    Ok((package, package_sha256))
+}
+
+fn valid_asset_name(name: &str) -> bool {
+    safe_archive_path(name)
+        && (name.starts_with("assets/icons/") && (name.ends_with(".png") || name.ends_with(".ico")))
+        && name.rsplit('/').next().is_some_and(|file| {
+            file.len() == 68
+                && file.as_bytes().get(64) == Some(&b'.')
+                && file[..64]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+}
+
+fn scrub_secret_settings(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let filtered = object
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
+                    let sensitive = [
+                        "token",
+                        "secret",
+                        "password",
+                        "credential",
+                        "apikey",
+                        "authorization",
+                        "privatekey",
+                    ]
+                    .iter()
+                    .any(|part| normalized.contains(part));
+                    (!sensitive).then(|| (key, scrub_secret_settings(value)))
+                })
+                .collect();
+            serde_json::Value::Object(filtered)
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(scrub_secret_settings).collect())
+        }
+        other => other,
+    }
+}
+
+fn profile_package_from_db(
+    conn: &Connection,
+    profile_id: &str,
+    include_history: bool,
+) -> Result<ValidatedProfilePackage, AppError> {
+    let (name, theme_id, settings_json): (String, String, String) = conn
+        .query_row(
+            "SELECT name,theme_id,settings_json FROM profiles WHERE id=?1",
+            [profile_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    let raw_settings: serde_json::Value = serde_json::from_str(&settings_json)?;
+    let settings = scrub_secret_settings(raw_settings);
+    let settings_map = settings.as_object();
+    let accent = settings_map
+        .and_then(|map| map.get("accent").or_else(|| map.get("accentColor")))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| valid_hex_color(value))
+        .unwrap_or("#6858CE")
+        .to_owned();
+    let density = settings_map
+        .and_then(|map| map.get("density"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| ["compact", "balanced", "comfortable"].contains(value))
+        .map(str::to_owned);
+    let theme = ProfilePackageTheme {
+        mode: if ["light", "dark", "system"].contains(&theme_id.as_str()) {
+            theme_id
+        } else {
+            "system".into()
+        },
+        accent,
+        density,
+    };
+
+    let mut membership_stmt = conn.prepare("SELECT resource_id,favorite,category,sort_position FROM profile_resources WHERE profile_id=?1 ORDER BY sort_position,resource_id")?;
+    let memberships = membership_stmt
+        .query_map([profile_id], |row| {
+            Ok(ProfilePackageMembership {
+                resource_id: row.get(0)?,
+                favorite: row.get::<_, i64>(1)? != 0,
+                category: row.get(2)?,
+                sort_position: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let membership_ids = memberships
+        .iter()
+        .map(|membership| membership.resource_id.clone())
+        .collect::<Vec<_>>();
+    let membership_set: std::collections::HashSet<String> =
+        membership_ids.iter().cloned().collect();
+    let mut resource_stmt = conn.prepare("SELECT r.id,r.resource_type,r.display_name,r.description,r.icon FROM resources r JOIN profile_resources pr ON pr.resource_id=r.id WHERE pr.profile_id=?1 ORDER BY pr.sort_position,r.display_name COLLATE NOCASE")?;
+    let mut resources = Vec::new();
+    for row in resource_stmt.query_map([profile_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })? {
+        let (id, resource_type, name, description, icon) = row?;
+        let mut resource = Resource {
+            id,
+            resource_type,
+            display_name: name,
+            description,
+            icon,
+            default_action: "open".into(),
+            created_utc: String::new(),
+            updated_utc: String::new(),
+            targets: Vec::new(),
+            tags: Vec::new(),
+            aliases: Vec::new(),
+            category: None,
+            favorite: false,
+            launch_count: 0,
+            last_launched_utc: None,
+        };
+        load_resource_details(conn, &mut resource, Some(profile_id))?;
+        let targets = resource
+            .targets
+            .into_iter()
+            .map(|target| ProfilePackageTarget {
+                id: target.id,
+                kind: target.kind,
+                value: target.canonical_uri,
+                priority: target.priority,
+                device_label: None,
+                argv: target.arguments,
+                working_directory: target.working_directory,
+                active: target.active,
+            })
+            .collect();
+        resources.push(ProfilePackageResource {
+            schema_version: 1,
+            id: resource.id,
+            name: resource.display_name,
+            resource_type: resource.resource_type,
+            description: resource.description,
+            tags: resource.tags,
+            aliases: resource.aliases,
+            icon: resource.icon,
+            targets,
+        });
+    }
+    let mut layouts = Vec::new();
+    let mut layout_stmt = conn
+        .prepare("SELECT surface,layout_json FROM layouts WHERE profile_id=?1 ORDER BY surface")?;
+    for row in layout_stmt.query_map([profile_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (surface, json) = row?;
+        let layout: DashboardLayout = serde_json::from_str(&json)?;
+        let cards = layout
+            .cards
+            .into_iter()
+            .filter(|card| membership_set.contains(&card.resource_id))
+            .map(|card| ProfilePackageLayoutCard {
+                resource_id: card.resource_id,
+                x: card.x,
+                y: card.y,
+                w: card.w,
+                h: card.h,
+                card_type: card.card_type,
+            })
+            .collect();
+        layouts.push(ProfilePackageLayout {
+            surface: Some(surface),
+            breakpoint: "desktop".into(),
+            cards,
+        });
+    }
+    let history = if include_history {
+        let mut stmt = conn.prepare("SELECT le.request_id,le.resource_id,le.target_id,le.source,le.status,le.launched_at_utc,le.error_code,NULL,le.duration_ms FROM launch_events le JOIN profile_resources pr ON pr.resource_id=le.resource_id AND pr.profile_id=le.profile_id WHERE le.profile_id=?1 ORDER BY le.launched_at_utc DESC LIMIT 100000")?;
+        let events = stmt
+            .query_map([profile_id], |row| {
+                Ok(ProfilePackageHistoryEvent {
+                    request_id: row.get(0)?,
+                    resource_id: row.get(1)?,
+                    target_id: row.get(2)?,
+                    source: row.get(3)?,
+                    status: row.get(4)?,
+                    launched_at_utc: row.get(5)?,
+                    error_code: row.get(6)?,
+                    message: row.get(7)?,
+                    duration_ms: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Some(ProfileHistoryDocument {
+            schema_version: 1,
+            events,
+        })
+    } else {
+        None
+    };
+    let manifest = ProfilePackageManifest {
+        format: "swprofile".into(),
+        schema_version: 1,
+        exported_at_utc: now_utc(),
+        app_version: Some(env!("CARGO_PKG_VERSION").into()),
+        profile_file: "profile.json".into(),
+        resources_file: "resources.json".into(),
+        layouts_file: "layouts.json".into(),
+        history_file: include_history.then(|| "history.json".into()),
+        include_history,
+        assets: Vec::new(),
+    };
+    let package = ValidatedProfilePackage {
+        manifest,
+        profile: ProfilePackageDocument {
+            schema_version: 1,
+            id: profile_id.into(),
+            name,
+            description: None,
+            theme,
+            settings,
+            memberships: membership_ids,
+            membership_details: memberships,
+        },
+        resources: ProfileResourcesDocument {
+            schema_version: 1,
+            resources,
+        },
+        layouts: ProfileLayoutsDocument {
+            schema_version: 1,
+            layouts,
+        },
+        history,
+    };
+    validate_package_fields(&package)?;
+    Ok(package)
+}
+
+fn write_zip_file<W: Write + std::io::Seek>(
+    writer: &mut ZipWriter<W>,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), AppError> {
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    writer
+        .start_file(name, options)
+        .map_err(|error| package_error(format!("cannot write package member: {error}")))?;
+    writer
+        .write_all(bytes)
+        .map_err(|error| package_error(format!("cannot write package member: {error}")))?;
+    Ok(())
+}
+
+fn finalize_export_no_clobber(temporary: &Path, destination: &Path) -> Result<(), AppError> {
+    // A same-directory hard link is atomic and fails if the destination already exists.
+    // Unlike rename, it never replaces a file created after the earlier existence check.
+    std::fs::hard_link(temporary, destination)
+        .map_err(|error| package_error(format!("cannot finalize export archive: {error}")))?;
+    std::fs::remove_file(temporary)
+        .map_err(|error| package_error(format!("cannot remove export temporary file: {error}")))?;
+    Ok(())
+}
+
+fn export_profile_to_path(
+    conn: &Connection,
+    profile_id: &str,
+    path: &Path,
+    include_history: bool,
+) -> Result<(), AppError> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("swprofile"))
+    {
+        return Err(AppError::Invalid(
+            "export path must end in .swprofile".into(),
+        ));
+    }
+    if path.exists() {
+        return Err(AppError::Invalid(
+            "export destination already exists".into(),
+        ));
+    }
+    let package = profile_package_from_db(conn, profile_id, include_history)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        return Err(AppError::Invalid(
+            "export destination folder does not exist".into(),
+        ));
+    }
+    let temp_path = parent.join(format!(".swprofile-{}.tmp", Uuid::new_v4()));
+    let result = (|| {
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|error| {
+                package_error(format!("cannot create export temporary file: {error}"))
+            })?;
+        let mut archive = ZipWriter::new(file);
+        let manifest = serde_json::to_vec_pretty(&package.manifest)?;
+        let profile = serde_json::to_vec_pretty(&package.profile)?;
+        let resources = serde_json::to_vec_pretty(&package.resources)?;
+        let layouts = serde_json::to_vec_pretty(&package.layouts)?;
+        for (name, bytes) in [
+            ("manifest.json", &manifest),
+            ("profile.json", &profile),
+            ("resources.json", &resources),
+            ("layouts.json", &layouts),
+        ] {
+            if bytes.len() as u64 > PROFILE_ARCHIVE_MAX_ENTRY {
+                return Err(package_error(format!(
+                    "export member exceeds size limit: {name}"
+                )));
+            }
+        }
+        let mut uncompressed_total = manifest.len() as u64
+            + profile.len() as u64
+            + resources.len() as u64
+            + layouts.len() as u64;
+        write_zip_file(&mut archive, "manifest.json", &manifest)?;
+        write_zip_file(&mut archive, "profile.json", &profile)?;
+        write_zip_file(&mut archive, "resources.json", &resources)?;
+        write_zip_file(&mut archive, "layouts.json", &layouts)?;
+        if let Some(history) = &package.history {
+            let bytes = serde_json::to_vec_pretty(history)?;
+            if bytes.len() as u64 > PROFILE_ARCHIVE_MAX_ENTRY {
+                return Err(package_error("export history exceeds member size limit"));
+            }
+            uncompressed_total = uncompressed_total.saturating_add(bytes.len() as u64);
+            write_zip_file(&mut archive, "history.json", &bytes)?;
+        }
+        if uncompressed_total > PROFILE_ARCHIVE_MAX_TOTAL {
+            return Err(package_error(
+                "export exceeds total uncompressed size limit",
+            ));
+        }
+        let file = archive
+            .finish()
+            .map_err(|error| package_error(format!("cannot finish export archive: {error}")))?;
+        file.sync_all()
+            .map_err(|error| package_error(format!("cannot sync export archive: {error}")))?;
+        if file.metadata()?.len() > PROFILE_ARCHIVE_MAX_COMPRESSED {
+            return Err(package_error("export exceeds compressed size limit"));
+        }
+        finalize_export_no_clobber(&temp_path, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn profile_import_preview_from_conn(
+    conn: &Connection,
+    package: &ValidatedProfilePackage,
+    package_sha256: &str,
+) -> Result<ProfileImportPreview, AppError> {
+    let profile_id_collision = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&package.profile.id],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    let profile_name_collision = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE name=?1 COLLATE NOCASE)",
+        [&package.profile.name],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    let mut resource_id_collisions = Vec::new();
+    let mut target_id_collisions = Vec::new();
+    let mut resource_conflicts = Vec::new();
+    for resource in &package.resources.resources {
+        if conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM resources WHERE id=?1)",
+            [&resource.id],
+            |row| row.get::<_, i64>(0),
+        )? != 0
+        {
+            resource_id_collisions.push(resource.id.clone());
+            let imported = imported_resource_snapshot(resource);
+            if let Some(existing) = existing_resource_snapshot(conn, &resource.id)? {
+                let matches_existing = resources_equivalent(&imported, &existing);
+                let proposed = if matches_existing {
+                    existing.clone()
+                } else {
+                    proposed_import_snapshot(imported.clone())
+                };
+                resource_conflicts.push(ProfileResourceConflictPreview {
+                    resolution: if matches_existing {
+                        "reuse_existing".into()
+                    } else {
+                        "import_as_new".into()
+                    },
+                    imported,
+                    existing,
+                    proposed,
+                });
+            }
+        }
+        for target in &resource.targets {
+            if conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1)",
+                [&target.id],
+                |row| row.get::<_, i64>(0),
+            )? != 0
+            {
+                target_id_collisions.push(target.id.clone());
+            }
+        }
+    }
+    let mut preview = ProfileImportPreview {
+        package_sha256: package_sha256.into(),
+        preview_token: String::new(),
+        profile_id: package.profile.id.clone(),
+        profile_name: package.profile.name.clone(),
+        resource_count: package.resources.resources.len(),
+        layout_count: package.layouts.layouts.len(),
+        history_event_count: package
+            .history
+            .as_ref()
+            .map_or(0, |history| history.events.len()),
+        profile_id_collision,
+        profile_name_collision,
+        resource_id_collisions,
+        target_id_collisions,
+        resource_conflicts,
+        asset_count: package.manifest.assets.len(),
+    };
+    preview.preview_token = profile_preview_token(&preview)?;
+    Ok(preview)
+}
+
+fn imported_resource_snapshot(resource: &ProfilePackageResource) -> ProfileResourceSnapshot {
+    ProfileResourceSnapshot {
+        id: resource.id.clone(),
+        name: resource.name.clone(),
+        resource_type: resource.resource_type.clone(),
+        description: resource.description.clone(),
+        icon: resource.icon.clone(),
+        tags: resource.tags.clone(),
+        aliases: resource.aliases.clone(),
+        targets: resource
+            .targets
+            .iter()
+            .map(|target| ProfileTargetSnapshot {
+                id: target.id.clone(),
+                kind: target.kind.clone(),
+                value: target.value.clone(),
+                priority: target.priority,
+                arguments: target.argv.clone(),
+                working_directory: target.working_directory.clone(),
+                active: target.active,
+            })
+            .collect(),
+    }
+}
+
+fn proposed_import_snapshot(mut imported: ProfileResourceSnapshot) -> ProfileResourceSnapshot {
+    for target in &mut imported.targets {
+        if ["app", "shortcut"].contains(&target.kind.as_str()) {
+            target.active = false;
+        }
+    }
+    imported
+}
+
+fn existing_resource_snapshot(
+    conn: &Connection,
+    resource_id: &str,
+) -> Result<Option<ProfileResourceSnapshot>, AppError> {
+    let mut resource: Option<Resource> = conn.query_row(
+        "SELECT id,resource_type,display_name,description,icon,default_action,created_utc,updated_utc FROM resources WHERE id=?1",
+        [resource_id], resource_from_row,
+    ).optional()?;
+    let Some(mut resource) = resource.take() else {
+        return Ok(None);
+    };
+    load_resource_details(conn, &mut resource, None)?;
+    Ok(Some(ProfileResourceSnapshot {
+        id: resource.id,
+        name: resource.display_name,
+        resource_type: resource.resource_type,
+        description: resource.description,
+        icon: resource.icon,
+        tags: resource.tags,
+        aliases: resource.aliases,
+        targets: resource
+            .targets
+            .into_iter()
+            .map(|target| ProfileTargetSnapshot {
+                id: target.id,
+                kind: target.kind,
+                value: target.canonical_uri,
+                priority: target.priority,
+                arguments: target.arguments,
+                working_directory: target.working_directory,
+                active: target.active,
+            })
+            .collect(),
+    }))
+}
+
+fn resources_equivalent(
+    imported: &ProfileResourceSnapshot,
+    existing: &ProfileResourceSnapshot,
+) -> bool {
+    let mut imported_tags = imported.tags.clone();
+    let mut existing_tags = existing.tags.clone();
+    let mut imported_aliases = imported.aliases.clone();
+    let mut existing_aliases = existing.aliases.clone();
+    imported_tags.sort();
+    existing_tags.sort();
+    imported_aliases.sort();
+    existing_aliases.sort();
+    let mut unmatched = existing.targets.iter().collect::<Vec<_>>();
+    imported.name == existing.name
+        && imported.resource_type == existing.resource_type
+        && imported.description == existing.description
+        && imported.icon == existing.icon
+        && imported_tags == existing_tags
+        && imported_aliases == existing_aliases
+        && imported.targets.len() == existing.targets.len()
+        && imported.targets.iter().all(|target| {
+            let Some(index) = unmatched
+                .iter()
+                .position(|other| targets_equivalent(target, other))
+            else {
+                return false;
+            };
+            unmatched.remove(index);
+            true
+        })
+}
+
+fn targets_equivalent(imported: &ProfileTargetSnapshot, existing: &ProfileTargetSnapshot) -> bool {
+    let expected_active = imported.active && !["app", "shortcut"].contains(&imported.kind.as_str());
+    imported.kind == existing.kind
+        && imported.value == existing.value
+        && imported.priority == existing.priority
+        && imported.arguments == existing.arguments
+        && imported.working_directory == existing.working_directory
+        && expected_active == existing.active
+}
+
+fn profile_preview_token(preview: &ProfileImportPreview) -> Result<String, AppError> {
+    let mut stable_preview = preview.clone();
+    stable_preview.preview_token.clear();
+    let serialized = serde_json::to_vec(&stable_preview)?;
+    let mut hasher = Sha256::new();
+    hasher.update(preview.package_sha256.as_bytes());
+    hasher.update([0]);
+    hasher.update(serialized);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn profile_import_name(conn: &Connection, preferred: &str) -> Result<String, AppError> {
+    let base = format!(
+        "{} (Imported)",
+        preferred.trim().chars().take(65).collect::<String>()
+    );
+    for suffix in 0..1000 {
+        let candidate = if suffix == 0 {
+            base.chars().take(80).collect::<String>()
+        } else {
+            let ending = format!(" {suffix}");
+            format!(
+                "{}{}",
+                base.chars()
+                    .take(80 - ending.chars().count())
+                    .collect::<String>(),
+                ending
+            )
+        };
+        let exists = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE name=?1 COLLATE NOCASE)",
+            [&candidate],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(package_error("could not allocate a unique profile name"))
+}
+
+fn safe_import_settings(value: serde_json::Value) -> serde_json::Value {
+    let filtered = scrub_secret_settings(value);
+    let mut object = filtered.as_object().cloned().unwrap_or_default();
+    object.remove("quickLaunchShortcut");
+    serde_json::Value::Object(object)
+}
+
+fn import_profile_package(
+    conn: &mut Connection,
+    package: &ValidatedProfilePackage,
+    strategy: &str,
+    target_profile_id: Option<&str>,
+) -> Result<ProfileImportResult, AppError> {
+    if !["duplicate", "merge", "replace"].contains(&strategy) {
+        return Err(AppError::Invalid(
+            "import strategy must be duplicate, merge or replace".into(),
+        ));
+    }
+    let tx = conn.transaction()?;
+    let target_id = match strategy {
+        "duplicate" => Uuid::new_v4().to_string(),
+        _ => {
+            let requested = target_profile_id.unwrap_or(&package.profile.id);
+            valid_uuid(requested, "target profile id")?;
+            let exists = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+                [requested],
+                |row| row.get::<_, i64>(0),
+            )? != 0;
+            if !exists {
+                return Err(AppError::NotFound);
+            }
+            requested.to_owned()
+        }
+    };
+    let existing_target_name: Option<String> = tx
+        .query_row(
+            "SELECT name FROM profiles WHERE id=?1",
+            [&target_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let profile_name = match strategy {
+        "duplicate" => profile_import_name(&tx, &package.profile.name)?,
+        "merge" => existing_target_name
+            .clone()
+            .unwrap_or_else(|| package.profile.name.clone()),
+        "replace" => {
+            let collides_elsewhere = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profiles WHERE name=?1 COLLATE NOCASE AND id<>?2)",
+                params![package.profile.name, target_id],
+                |row| row.get::<_, i64>(0),
+            )? != 0;
+            if collides_elsewhere {
+                existing_target_name
+                    .clone()
+                    .unwrap_or_else(|| package.profile.name.clone())
+            } else {
+                package.profile.name.clone()
+            }
+        }
+        _ => unreachable!(),
+    };
+    let mut settings = safe_import_settings(package.profile.settings.clone());
+    if let Some(object) = settings.as_object_mut() {
+        object.insert(
+            "accent".into(),
+            serde_json::Value::String(package.profile.theme.accent.clone()),
+        );
+        if let Some(density) = &package.profile.theme.density {
+            object.insert("density".into(), serde_json::Value::String(density.clone()));
+        }
+    }
+    let settings_json = settings.to_string();
+    let now = now_utc();
+    let theme = package.profile.theme.mode.as_str();
+    if strategy == "duplicate" {
+        tx.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?5)", params![target_id, profile_name, theme, settings_json, now])?;
+    } else if strategy == "replace" {
+        tx.execute(
+            "DELETE FROM profile_resources WHERE profile_id=?1",
+            [&target_id],
+        )?;
+        tx.execute("DELETE FROM layouts WHERE profile_id=?1", [&target_id])?;
+        tx.execute(
+            "UPDATE profiles SET name=?2,theme_id=?3,settings_json=?4,updated_utc=?5 WHERE id=?1",
+            params![target_id, profile_name, theme, settings_json, now],
+        )?;
+    } else {
+        let mut current: serde_json::Value = tx
+            .query_row(
+                "SELECT settings_json FROM profiles WHERE id=?1",
+                [&target_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let (Some(current), Some(imported)) = (current.as_object_mut(), settings.as_object()) {
+            for (key, value) in imported {
+                current.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        tx.execute(
+            "UPDATE profiles SET theme_id=?2,settings_json=?3,updated_utc=?4 WHERE id=?1",
+            params![target_id, theme, current.to_string(), now],
+        )?;
+    }
+    let duplicate_all = strategy != "merge";
+    let mut resource_map = std::collections::HashMap::new();
+    let mut target_map = std::collections::HashMap::new();
+    let mut imported_resources = 0usize;
+    let mut reused_resources = 0usize;
+    for resource in &package.resources.resources {
+        let existing_resource = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM resources WHERE id=?1)",
+            [&resource.id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if strategy == "merge" && existing_resource {
+            let existing = existing_resource_snapshot(&tx, &resource.id)?
+                .ok_or_else(|| package_error("resource collision disappeared during merge"))?;
+            let imported = imported_resource_snapshot(resource);
+            if resources_equivalent(&imported, &existing) {
+                resource_map.insert(resource.id.clone(), resource.id.clone());
+                let mut unmatched_targets = existing.targets.iter().collect::<Vec<_>>();
+                for source_target in &imported.targets {
+                    let target_index = unmatched_targets
+                        .iter()
+                        .position(|candidate| targets_equivalent(source_target, candidate))
+                        .ok_or_else(|| package_error("matching target disappeared during merge"))?;
+                    let existing_target = unmatched_targets.remove(target_index);
+                    target_map.insert(source_target.id.clone(), existing_target.id.clone());
+                }
+                reused_resources += 1;
+                continue;
+            }
+        }
+        let new_id = if duplicate_all || existing_resource {
+            Uuid::new_v4().to_string()
+        } else {
+            resource.id.clone()
+        };
+        resource_map.insert(resource.id.clone(), new_id.clone());
+        let mut targets = Vec::with_capacity(resource.targets.len());
+        for target in &resource.targets {
+            let target_exists = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1)",
+                [&target.id],
+                |row| row.get::<_, i64>(0),
+            )? != 0;
+            let target_id = if duplicate_all || target_exists {
+                Uuid::new_v4().to_string()
+            } else {
+                target.id.clone()
+            };
+            target_map.insert(target.id.clone(), target_id.clone());
+            targets.push(ResourceTarget {
+                id: target_id,
+                kind: target.kind.clone(),
+                canonical_uri: target.value.clone(),
+                priority: target.priority,
+                arguments: target.argv.clone(),
+                working_directory: target.working_directory.clone(),
+                active: target.active && !["app", "shortcut"].contains(&target.kind.as_str()),
+            });
+        }
+        let imported = Resource {
+            id: new_id,
+            resource_type: resource.resource_type.clone(),
+            display_name: resource.name.clone(),
+            description: resource.description.clone(),
+            icon: resource.icon.clone(),
+            default_action: "open".into(),
+            created_utc: now.clone(),
+            updated_utc: now.clone(),
+            targets,
+            tags: resource.tags.clone(),
+            aliases: resource.aliases.clone(),
+            category: None,
+            favorite: false,
+            launch_count: 0,
+            last_launched_utc: None,
+        };
+        persist_resource_in_transaction(&tx, &imported, true, None)?;
+        imported_resources += 1;
+    }
+    let membership_by_id: std::collections::HashMap<&str, &ProfilePackageMembership> = package
+        .profile
+        .membership_details
+        .iter()
+        .map(|entry| (entry.resource_id.as_str(), entry))
+        .collect();
+    for source_id in &package.profile.memberships {
+        let imported_id = resource_map
+            .get(source_id)
+            .ok_or_else(|| package_error("membership mapping missing"))?;
+        let detail = membership_by_id.get(source_id.as_str());
+        tx.execute("INSERT INTO profile_resources(profile_id,resource_id,favorite,category,sort_position) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,resource_id) DO UPDATE SET favorite=CASE WHEN ?6 THEN excluded.favorite ELSE profile_resources.favorite END, category=COALESCE(excluded.category,profile_resources.category), sort_position=CASE WHEN ?6 THEN excluded.sort_position ELSE profile_resources.sort_position END",
+            params![target_id, imported_id, detail.is_some_and(|entry| entry.favorite) as i64, detail.and_then(|entry| entry.category.as_deref()), detail.map_or(0, |entry| entry.sort_position), strategy != "merge"])?;
+    }
+    let mut imported_layouts = 0;
+    for layout in &package.layouts.layouts {
+        let surface = layout.surface.as_deref().unwrap_or("dashboard");
+        let cards = layout
+            .cards
+            .iter()
+            .filter_map(|card| {
+                resource_map
+                    .get(&card.resource_id)
+                    .map(|resource_id| LayoutCard {
+                        resource_id: resource_id.clone(),
+                        x: card.x,
+                        y: card.y,
+                        w: card.w,
+                        h: card.h,
+                        card_type: card.card_type.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        let value = DashboardLayout {
+            profile_id: target_id.clone(),
+            surface: surface.into(),
+            version: 1,
+            cards,
+        };
+        let json = serde_json::to_string(&value)?;
+        if strategy == "merge" {
+            tx.execute("INSERT OR IGNORE INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5)", params![target_id, surface, value.version, json, now])?;
+        } else {
+            tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![target_id, surface, value.version, json, now])?;
+        }
+        imported_layouts += 1;
+    }
+    let mut imported_history_events = 0;
+    if let Some(history) = &package.history {
+        for event in &history.events {
+            let Some(resource_id) = resource_map.get(&event.resource_id) else {
+                continue;
+            };
+            let target_id_mapped = event
+                .target_id
+                .as_ref()
+                .and_then(|target_id| target_map.get(target_id));
+            tx.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), resource_id, target_id_mapped, target_id, event.source, event.launched_at_utc, event.status, event.error_code, event.message, event.duration_ms])?;
+            imported_history_events += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(ProfileImportResult {
+        profile_id: target_id,
+        profile_name,
+        imported_resources,
+        reused_resources,
+        imported_layouts,
+        imported_history_events,
+    })
+}
+
+fn import_profile_package_from_path(
+    conn: &mut Connection,
+    package_path: &Path,
+    strategy: &str,
+    target_profile_id: Option<&str>,
+    expected_package_sha256: &str,
+    expected_preview_token: &str,
+) -> Result<ProfileImportResult, AppError> {
+    let (package, package_sha256) = read_profile_package_with_digest(package_path)?;
+    if package_sha256 != expected_package_sha256 {
+        return Err(package_error(
+            "profile package changed after preview; preview it again",
+        ));
+    }
+    let preview = profile_import_preview_from_conn(conn, &package, &package_sha256)?;
+    if preview.preview_token != expected_preview_token {
+        return Err(package_error(
+            "workspace changed after preview; review the updated preview",
+        ));
+    }
+    import_profile_package(conn, &package, strategy, target_profile_id)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1448,6 +3050,62 @@ fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, A
 }
 
 #[tauri::command]
+fn profile_export(
+    state: State<'_, AppState>,
+    profile_id: String,
+    output_path: String,
+    include_history: Option<bool>,
+) -> Result<ProfileExportResult, AppError> {
+    valid_uuid(&profile_id, "profile id")?;
+    let include_history = include_history.unwrap_or(false);
+    let conn = lock(&state)?;
+    let package = profile_package_from_db(&conn, &profile_id, include_history)?;
+    let profile_name = package.profile.name.clone();
+    let resource_count = package.resources.resources.len();
+    let history_event_count = package
+        .history
+        .as_ref()
+        .map_or(0, |history| history.events.len());
+    export_profile_to_path(&conn, &profile_id, Path::new(&output_path), include_history)?;
+    Ok(ProfileExportResult {
+        path: output_path,
+        profile_name,
+        resource_count,
+        history_event_count,
+    })
+}
+
+#[tauri::command]
+fn profile_import_preview(
+    state: State<'_, AppState>,
+    package_path: String,
+) -> Result<ProfileImportPreview, AppError> {
+    let (package, package_sha256) = read_profile_package_with_digest(Path::new(&package_path))?;
+    let conn = lock(&state)?;
+    profile_import_preview_from_conn(&conn, &package, &package_sha256)
+}
+
+#[tauri::command]
+fn profile_import_commit(
+    state: State<'_, AppState>,
+    package_path: String,
+    strategy: String,
+    target_profile_id: Option<String>,
+    package_sha256: String,
+    preview_token: String,
+) -> Result<ProfileImportResult, AppError> {
+    let mut conn = lock(&state)?;
+    import_profile_package_from_path(
+        &mut conn,
+        Path::new(&package_path),
+        &strategy,
+        target_profile_id.as_deref(),
+        &package_sha256,
+        &preview_token,
+    )
+}
+
+#[tauri::command]
 fn profile_switch(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -2160,6 +3818,7 @@ fn launch_target(_app: &tauri::AppHandle, _target: &ResourceTarget) -> Result<()
 
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -2219,6 +3878,9 @@ pub fn run() {
             resource_inspect,
             profile_list,
             profile_create,
+            profile_export,
+            profile_import_preview,
+            profile_import_commit,
             profile_switch,
             layout_get,
             layout_save,
@@ -2266,11 +3928,503 @@ mod tests {
         conn
     }
 
+    #[test]
+    fn profile_archive_rejects_unsafe_paths_and_noncanonical_assets() {
+        for path in [
+            "../profile.json",
+            "a/../../profile.json",
+            "/absolute",
+            "C:/drive",
+            "a\\b",
+            "a//b",
+        ] {
+            assert!(!safe_archive_path(path), "accepted unsafe path: {path}");
+        }
+        assert!(safe_archive_path(
+            "assets/icons/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+        ));
+        assert!(!valid_asset_name(
+            "assets/icons/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.png"
+        ));
+        assert!(!valid_asset_name(
+            "assets/icons/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.exe"
+        ));
+    }
+
+    #[test]
+    fn profile_export_finalization_never_overwrites_existing_destination() {
+        let directory = std::env::temp_dir().join(format!("swprofile-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let temporary = directory.join("temporary");
+        let destination = directory.join("existing.swprofile");
+        std::fs::write(&temporary, b"new archive").unwrap();
+        std::fs::write(&destination, b"existing data").unwrap();
+        assert!(finalize_export_no_clobber(&temporary, &destination).is_err());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"existing data");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn profile_archive_fixture_passes_strict_rust_validation() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/valid/example.swprofile");
+        let package = read_profile_package(&path).expect("approved fixture should parse");
+        assert_eq!(package.profile.name, "Demo Work");
+        assert_eq!(package.resources.resources.len(), 1);
+    }
+
+    fn write_test_archive(entries: &[(&str, Vec<u8>)]) -> PathBuf {
+        write_test_archive_with_compression(entries, CompressionMethod::Stored)
+    }
+
+    fn write_test_archive_with_compression(
+        entries: &[(&str, Vec<u8>)],
+        compression: CompressionMethod,
+    ) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        let file = File::create(&path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        for (name, bytes) in entries {
+            writer
+                .start_file(
+                    *name,
+                    SimpleFileOptions::default().compression_method(compression),
+                )
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        path
+    }
+
+    fn write_duplicate_name_archive(entries: &[(&str, Vec<u8>)]) -> PathBuf {
+        let path = write_test_archive(entries);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let from = b"profile.jsox";
+        let to = b"profile.json";
+        assert_eq!(from.len(), to.len());
+        let mut offset = 0;
+        while let Some(relative) = bytes[offset..]
+            .windows(from.len())
+            .position(|window| window == from)
+        {
+            let start = offset + relative;
+            bytes[start..start + to.len()].copy_from_slice(to);
+            offset = start + to.len();
+        }
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn serialized_documents(package: &ValidatedProfilePackage) -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            (
+                "manifest.json",
+                serde_json::to_vec(&package.manifest).unwrap(),
+            ),
+            (
+                "profile.json",
+                serde_json::to_vec(&package.profile).unwrap(),
+            ),
+            (
+                "resources.json",
+                serde_json::to_vec(&package.resources).unwrap(),
+            ),
+            (
+                "layouts.json",
+                serde_json::to_vec(&package.layouts).unwrap(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn production_zip_reader_rejects_duplicate_and_traversal_members() {
+        let package = package("url");
+        let docs = serialized_documents(&package);
+        let mut duplicate = docs.clone();
+        duplicate.push(("profile.jsox", b"{}".to_vec()));
+        let duplicate_path = write_duplicate_name_archive(&duplicate);
+        assert!(read_profile_package(&duplicate_path).is_err());
+        let _ = std::fs::remove_file(duplicate_path);
+
+        let mut traversal = docs;
+        traversal.push(("../payload", b"ignored".to_vec()));
+        let traversal_path = write_test_archive(&traversal);
+        assert!(read_profile_package(&traversal_path).is_err());
+        let _ = std::fs::remove_file(traversal_path);
+    }
+
+    #[test]
+    fn production_zip_reader_rejects_high_ratio_and_asset_checksum_mismatch() {
+        let package = package("url");
+        let mut high_ratio = serialized_documents(&package);
+        high_ratio.push(("padding.bin", vec![0; 1024 * 1024]));
+        let high_ratio_path =
+            write_test_archive_with_compression(&high_ratio, CompressionMethod::Deflated);
+        assert!(read_profile_package(&high_ratio_path).is_err());
+        let _ = std::fs::remove_file(high_ratio_path);
+
+        let mut package = package("url");
+        let asset_path =
+            "assets/icons/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
+        package.manifest.assets.push(ProfilePackageAsset {
+            path: asset_path.into(),
+            sha256: "0".repeat(64),
+        });
+        let mut mismatch = serialized_documents(&package);
+        mismatch.push((asset_path, b"not-the-declared-hash".to_vec()));
+        let mismatch_path = write_test_archive(&mismatch);
+        assert!(read_profile_package(&mismatch_path).is_err());
+        let _ = std::fs::remove_file(mismatch_path);
+    }
+
+    #[test]
+    fn production_zip_reader_rejects_expanded_member_over_limit_within_archive_limit() {
+        let package = package("url");
+        let mut entries = serialized_documents(&package);
+        let mut payload = Vec::with_capacity(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1);
+        let mut state = 0x9e37_79b9_u32;
+        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize - 1024) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            payload.push(state as u8);
+        }
+        payload.extend(std::iter::repeat_n(0u8, 1025));
+        entries.push(("oversized.bin", payload));
+        let path = write_test_archive_with_compression(&entries, CompressionMethod::Deflated);
+        assert!(std::fs::metadata(&path).unwrap().len() <= PROFILE_ARCHIVE_MAX_COMPRESSED);
+        assert!(read_profile_package(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
     fn profile(conn: &Connection) -> String {
         let id = Uuid::new_v4().to_string();
         let ts = now_utc();
         conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Work','system','{}',?2,?2)",params![id,ts]).unwrap();
         id
+    }
+
+    fn package(kind: &str) -> ValidatedProfilePackage {
+        let profile_id = Uuid::new_v4().to_string();
+        let resource_id = Uuid::new_v4().to_string();
+        let target_id = Uuid::new_v4().to_string();
+        let profile = ProfilePackageDocument {
+            schema_version: 1,
+            id: profile_id,
+            name: "Portable profile".into(),
+            description: None,
+            theme: ProfilePackageTheme {
+                mode: "dark".into(),
+                accent: "#6858CE".into(),
+                density: None,
+            },
+            settings: serde_json::json!({"apiToken": "must-not-export"}),
+            memberships: vec![resource_id.clone()],
+            membership_details: vec![ProfilePackageMembership {
+                resource_id: resource_id.clone(),
+                favorite: true,
+                category: Some("Work".into()),
+                sort_position: 0,
+            }],
+        };
+        let package = ValidatedProfilePackage {
+            manifest: ProfilePackageManifest {
+                format: "swprofile".into(),
+                schema_version: 1,
+                exported_at_utc: now_utc(),
+                app_version: None,
+                profile_file: "profile.json".into(),
+                resources_file: "resources.json".into(),
+                layouts_file: "layouts.json".into(),
+                history_file: None,
+                include_history: false,
+                assets: Vec::new(),
+            },
+            profile,
+            resources: ProfileResourcesDocument {
+                schema_version: 1,
+                resources: vec![ProfilePackageResource {
+                    schema_version: 1,
+                    id: resource_id.clone(),
+                    name: "Calculator".into(),
+                    resource_type: kind.into(),
+                    description: None,
+                    tags: vec!["tools".into()],
+                    aliases: vec![],
+                    icon: None,
+                    targets: vec![ProfilePackageTarget {
+                        id: target_id,
+                        kind: kind.into(),
+                        value: "calc.exe".into(),
+                        priority: 0,
+                        device_label: None,
+                        argv: vec![],
+                        working_directory: None,
+                        active: true,
+                    }],
+                }],
+            },
+            layouts: ProfileLayoutsDocument {
+                schema_version: 1,
+                layouts: vec![ProfilePackageLayout {
+                    surface: Some("dashboard".into()),
+                    breakpoint: "desktop".into(),
+                    cards: vec![ProfilePackageLayoutCard {
+                        resource_id,
+                        x: 0,
+                        y: 0,
+                        w: 2,
+                        h: 2,
+                        card_type: "icon".into(),
+                    }],
+                }],
+            },
+            history: None,
+        };
+        validate_package_fields(&package).unwrap();
+        package
+    }
+
+    fn install_package_resource(
+        conn: &mut Connection,
+        package: &ValidatedProfilePackage,
+        profile_id: &str,
+    ) {
+        let tx = conn.transaction().unwrap();
+        let source = &package.resources.resources[0];
+        let value = Resource {
+            id: source.id.clone(),
+            resource_type: source.resource_type.clone(),
+            display_name: source.name.clone(),
+            description: None,
+            icon: None,
+            default_action: "open".into(),
+            created_utc: now_utc(),
+            updated_utc: now_utc(),
+            targets: source
+                .targets
+                .iter()
+                .map(|target| ResourceTarget {
+                    id: target.id.clone(),
+                    kind: target.kind.clone(),
+                    canonical_uri: target.value.clone(),
+                    priority: target.priority,
+                    arguments: target.argv.clone(),
+                    working_directory: target.working_directory.clone(),
+                    active: target.active,
+                })
+                .collect(),
+            tags: source.tags.clone(),
+            aliases: source.aliases.clone(),
+            category: None,
+            favorite: false,
+            launch_count: 0,
+            last_launched_utc: None,
+        };
+        persist_resource_in_transaction(&tx, &value, true, Some(profile_id)).unwrap();
+        tx.commit().unwrap();
+    }
+
+    #[test]
+    fn profile_import_duplicate_remaps_ids_and_disables_app_target_without_launching() {
+        let mut conn = database();
+        let package = package("app");
+        let result = import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
+        assert_ne!(result.profile_id, package.profile.id);
+        let imported_resource: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1",
+                [&result.profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(imported_resource, package.resources.resources[0].id);
+        let (target_id, active): (String, i64) = conn
+            .query_row(
+                "SELECT id,active FROM resource_targets WHERE resource_id=?1",
+                [&imported_resource],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(target_id, package.resources.resources[0].targets[0].id);
+        assert_eq!(active, 0, "import must not activate application targets");
+        let saved_settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM profiles WHERE id=?1",
+                [&result.profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!saved_settings.contains("apiToken"));
+    }
+
+    #[test]
+    fn profile_import_merge_reuses_resources_and_replace_overwrites_memberships() {
+        let mut conn = database();
+        let package = package("url");
+        let target_profile = profile(&conn);
+        install_package_resource(&mut conn, &package, &target_profile);
+        let merged =
+            import_profile_package(&mut conn, &package, "merge", Some(&target_profile)).unwrap();
+        assert_eq!(merged.reused_resources, 1);
+        assert_eq!(merged.imported_resources, 0);
+        let replaced =
+            import_profile_package(&mut conn, &package, "replace", Some(&target_profile)).unwrap();
+        assert_eq!(replaced.imported_resources, 1);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn profile_import_merge_remaps_differing_resource_collision_and_previews_values() {
+        let mut conn = database();
+        let package = package("url");
+        let target_profile = profile(&conn);
+        install_package_resource(&mut conn, &package, &target_profile);
+        conn.execute(
+            "UPDATE resources SET display_name='Local Calculator' WHERE id=?1",
+            [&package.resources.resources[0].id],
+        )
+        .unwrap();
+        let preview =
+            profile_import_preview_from_conn(&conn, &package, "a".repeat(64).as_str()).unwrap();
+        assert_eq!(preview.resource_conflicts.len(), 1);
+        let conflict = &preview.resource_conflicts[0];
+        assert_eq!(conflict.resolution, "import_as_new");
+        assert_eq!(conflict.imported.name, "Calculator");
+        assert_eq!(conflict.existing.name, "Local Calculator");
+        assert_eq!(conflict.proposed.name, "Calculator");
+
+        let result =
+            import_profile_package(&mut conn, &package, "merge", Some(&target_profile)).unwrap();
+        assert_eq!(result.reused_resources, 0);
+        assert_eq!(result.imported_resources, 1);
+        let imported_id: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1 AND resource_id<>?2",
+                params![target_profile, package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_ne!(imported_id, package.resources.resources[0].id);
+        let old_name: String = conn
+            .query_row(
+                "SELECT display_name FROM resources WHERE id=?1",
+                [&package.resources.resources[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_name, "Local Calculator");
+    }
+
+    #[test]
+    fn profile_import_commit_rejects_changed_package_or_workspace_after_preview() {
+        let mut conn = database();
+        let mut package = package("url");
+        let mut archive_entries = serialized_documents(&package);
+        let path = write_test_archive(
+            &archive_entries
+                .iter()
+                .map(|(name, bytes)| (*name, bytes.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let (parsed, digest) = read_profile_package_with_digest(&path).unwrap();
+        let preview = profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+
+        let local_profile = Uuid::new_v4().to_string();
+        let timestamp = now_utc();
+        conn.execute(
+            "INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,?2,'system','{}',?3,?3)",
+            params![local_profile, package.profile.name, timestamp],
+        ).unwrap();
+        assert!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "duplicate",
+                None,
+                &preview.package_sha256,
+                &preview.preview_token,
+            )
+            .is_err(),
+            "workspace changed after preview must reject commit"
+        );
+
+        let preview_after_workspace_change =
+            profile_import_preview_from_conn(&conn, &parsed, &digest).unwrap();
+        package.profile.name = "Changed package after preview".into();
+        archive_entries = serialized_documents(&package);
+        let changed_path = write_test_archive(
+            &archive_entries
+                .iter()
+                .map(|(name, bytes)| (*name, bytes.clone()))
+                .collect::<Vec<_>>(),
+        );
+        std::fs::copy(changed_path, &path).unwrap();
+        assert!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "duplicate",
+                None,
+                &preview_after_workspace_change.package_sha256,
+                &preview_after_workspace_change.preview_token,
+            )
+            .is_err(),
+            "package digest mismatch must reject commit"
+        );
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(changed_path);
+        let _ = conn.execute("DELETE FROM profiles WHERE id=?1", [&local_profile]);
+    }
+
+    #[test]
+    fn profile_import_rolls_back_profile_when_resource_constraint_fails() {
+        let mut conn = database();
+        let package = package("url");
+        conn.execute_batch("CREATE TRIGGER reject_profile_import BEFORE INSERT ON resources BEGIN SELECT RAISE(ABORT,'injected resource failure'); END;").unwrap();
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert!(import_profile_package(&mut conn, &package, "duplicate", None).is_err());
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "failed import must roll back profile creation"
+        );
+    }
+
+    #[test]
+    fn profile_export_roundtrip_omits_history_by_default_and_secrets() {
+        let mut conn = database();
+        let source_profile = profile(&conn);
+        let mut resource = resource("Website");
+        resource.resource_type = "url".into();
+        let tx = conn.transaction().unwrap();
+        persist_resource_in_transaction(&tx, &resource, true, Some(&source_profile)).unwrap();
+        tx.commit().unwrap();
+        conn.execute(
+            "UPDATE profiles SET settings_json=?2 WHERE id=?1",
+            params![source_profile, r#"{"apiToken":"secret","accent":"#6858CE"}"#],
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &source_profile, &path, false).unwrap();
+        let package = read_profile_package(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert!(package.history.is_none());
+        assert!(!package.profile.settings.to_string().contains("apiToken"));
+        let imported = import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
+        assert_eq!(imported.imported_resources, 1);
     }
 
     fn resource(name: &str) -> Resource {

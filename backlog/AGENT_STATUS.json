@@ -24,7 +24,7 @@
       "state": "COMPLETE",
       "issue": "SW-003",
       "branch": "feature/sw-001-core",
-      "commit": "bd08148",
+      "commit": "458b0d3",
       "pr": null,
       "task": "SW-003 backend follow-up integrated: DTO fields, migration v2, CRUD/search/profile membership, launch history/analytics and Rust tests; native compile blocked by platform/toolchain prerequisites"
     },
@@ -115,7 +115,7 @@
       },
       {
         "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu",
-        "result": "BLOCKED: cross-target check exposed E0255 duplicate Tauri generated command macros with Rust 1.99.0; Windows linker toolchain also unavailable"
+        "result": "BLOCKED: direct rerun stopped in bundled SQLite build because x86_64-w64-mingw32-gcc is absent; Core separately reports a deeper attempted check (using a temporary tool setup) hit E0255 duplicate Tauri generated command macros under Rust 1.99.0"
       },
       {
         "command": "Playwright Chromium dashboard capture",

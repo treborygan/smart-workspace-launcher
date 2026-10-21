@@ -85,6 +85,12 @@ export interface LaunchEvent extends LaunchResult {
   durationMs?: number | null;
 }
 
+export interface QuickLaunchHotkeyStatus {
+  registered: boolean;
+  shortcut: string;
+  errorCode?: string;
+}
+
 export interface SearchRequest {
   query: string;
   profileId?: string;
@@ -119,12 +125,13 @@ export interface CommandMap {
   profile_switch: { args: { profileId: string }; result: Profile };
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
+  quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
 }
 
 export interface AppEventMap {
   "quick-launch-toggle": undefined;
-  "quick-launch-hotkey-status": { registered: boolean; shortcut: string; errorCode?: string };
+  "quick-launch-hotkey-status": QuickLaunchHotkeyStatus;
 }
 
 /** The only frontend entry point for invoking native commands. */

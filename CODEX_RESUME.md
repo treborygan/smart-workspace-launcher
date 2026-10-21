@@ -6,7 +6,7 @@ Repository: `treborygan/smart-workspace-launcher`. Main includes SW-011 PR #36 m
 
 SW-011 changes include input/path validation, HTTPS credential rejection, launch profile/resource authorization, intent-bound replay validation, bounded profile names, and SQLite timeout/trusted schema settings. QA found no blocker. Residual behavior: replaying a formerly valid explicit-target request after target deactivation returns NotFound without relaunching. SW-011 checks passed for frontend typecheck, 8 test files/56 tests, production build, diff check, Rust formatting, cargo metadata, 11 Python archive harness tests, and handoff verification. Rust library tests remain blocked because GLib >=2.70 development files are missing.
 
-Environment: Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1. No PowerShell or real Windows 11 x64 host is available. No executable/package/release/READY notice exists. V1 remains BLOCKED; `.github/workflows/` remains absent.
+Environment: Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1. No PowerShell or real Windows 11 x64 host is available. No executable/package/release/READY notice exists. V1 remains BLOCKED. **2026-10-22 update:** GitHub Actions Windows CI/preview-build exception was explicitly approved and is being added through PR #40; hosted Windows Server automated checks do not replace W-001..W-014 Windows 11 acceptance.
 
 ## Resume actions
 

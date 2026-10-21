@@ -3190,9 +3190,14 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequences (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,id), UNIQUE(profile_id,name COLLATE NOCASE)); CREATE TABLE IF NOT EXISTS workspace_sequence_steps (sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 19), resource_id TEXT NOT NULL, target_id TEXT, PRIMARY KEY(sequence_id,position), UNIQUE(sequence_id,id), FOREIGN KEY(profile_id,sequence_id) REFERENCES workspace_sequences(profile_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_workspace_sequences_profile_name ON workspace_sequences(profile_id,name COLLATE NOCASE);")?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequence_runs (request_id TEXT PRIMARY KEY, sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, sequence_json TEXT NOT NULL, result_json TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_workspace_sequence_runs_profile_time ON workspace_sequence_runs(profile_id,created_utc DESC);")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (7,'sw014-workspace-sequences-v1',?1)",[now_utc()])?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS usage_settings (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, recording_enabled INTEGER NOT NULL DEFAULT 1 CHECK(recording_enabled IN (0,1)), retention_days INTEGER CHECK(retention_days IN (30,90,365)), excluded_resource_ids_json TEXT NOT NULL DEFAULT '[]'); CREATE TABLE IF NOT EXISTS launch_request_guard (request_id TEXT PRIMARY KEY, intent_hash TEXT NOT NULL, resource_id TEXT NOT NULL, target_id TEXT, profile_id TEXT, source TEXT NOT NULL, status TEXT NOT NULL, launched_at_utc TEXT NOT NULL, error_code TEXT, message TEXT, duration_ms INTEGER); CREATE INDEX IF NOT EXISTS idx_launch_guard_profile_time ON launch_request_guard(profile_id,launched_at_utc DESC);")?;
-    conn.execute("INSERT OR IGNORE INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms) SELECT request_id,'legacy:'||request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events",[])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS usage_settings (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, recording_enabled INTEGER NOT NULL DEFAULT 1 CHECK(recording_enabled IN (0,1)), retention_days INTEGER CHECK(retention_days IN (30,90,365)), excluded_resource_ids_json TEXT NOT NULL DEFAULT '[]'); CREATE TABLE IF NOT EXISTS launch_request_guard (request_id TEXT PRIMARY KEY, intent_hash TEXT NOT NULL, resource_id TEXT NOT NULL, target_id TEXT, profile_id TEXT, source TEXT NOT NULL, status TEXT NOT NULL, launched_at_utc TEXT NOT NULL, error_code TEXT, duration_ms INTEGER); CREATE INDEX IF NOT EXISTS idx_launch_guard_profile_time ON launch_request_guard(profile_id,launched_at_utc DESC);")?;
+    let guard_has_message: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('launch_request_guard') WHERE name='message')", [], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+    if guard_has_message {
+        conn.execute_batch("DROP INDEX IF EXISTS idx_launch_guard_profile_time; ALTER TABLE launch_request_guard RENAME TO launch_request_guard_with_message; CREATE TABLE launch_request_guard (request_id TEXT PRIMARY KEY, intent_hash TEXT NOT NULL, resource_id TEXT NOT NULL, target_id TEXT, profile_id TEXT, source TEXT NOT NULL, status TEXT NOT NULL, launched_at_utc TEXT NOT NULL, error_code TEXT, duration_ms INTEGER); INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms) SELECT request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms FROM launch_request_guard_with_message; DROP TABLE launch_request_guard_with_message; CREATE INDEX idx_launch_guard_profile_time ON launch_request_guard(profile_id,launched_at_utc DESC);")?;
+    }
+    conn.execute("INSERT OR IGNORE INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms) SELECT request_id,'legacy:'||request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms FROM launch_events",[])?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (8,'sw015-usage-settings-request-guard-v1',?1)",[now_utc()])?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (9,'sw015-request-guard-path-free-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -4807,21 +4812,22 @@ fn record_failed_sequence_launch(
         return Err(AppError::Invalid("invalid sequence launch source".into()));
     }
     let intent_hash = launch_intent_hash(request)?;
-    if let Some(mut event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], launch_event_from_row).optional()? {
+    if let Some(mut event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,CASE WHEN status='handed_off' THEN 'Windows accepted the Shell handoff; target load is not verified.' WHEN error_code='launch_outcome_unknown' THEN 'The prior launch outcome is unknown and was not retried.' ELSE 'The target could not be handed to Windows Shell.' END,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], launch_event_from_row).optional()? {
         let stored_hash: String = conn.query_row("SELECT intent_hash FROM launch_request_guard WHERE request_id=?1", [&request.request_id], |r|r.get(0))?;
         if (!stored_hash.starts_with("legacy:") && stored_hash != intent_hash) || event.resource_id != request.resource_id || event.target_id != request.target_id || event.profile_id.as_deref() != Some(profile_id) || event.source != request.source {
             return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
         }
         if event.status == "requested" {
-            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
+            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
             conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
             event = usage_event_from_guard(conn, &request.request_id)?;
         }
         return Ok(event);
     }
     let launched_at_utc = now_utc();
-    conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,'sequence',?6,'failed',?7,?8,0)", params![request.request_id,intent_hash,request.resource_id,request.target_id,profile_id,launched_at_utc,error_code,message])?;
-    let event = usage_event_from_guard(conn, &request.request_id)?;
+    conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,duration_ms) VALUES (?1,?2,?3,?4,?5,'sequence',?6,'failed',?7,0)", params![request.request_id,intent_hash,request.resource_id,request.target_id,profile_id,launched_at_utc,error_code])?;
+    let mut event = usage_event_from_guard(conn, &request.request_id)?;
+    event.message = Some(message.to_string());
     record_guard_event(conn, request, &event)?;
     Ok(event)
 }
@@ -5223,7 +5229,7 @@ fn should_record_usage(
 }
 
 fn usage_event_from_guard(conn: &Connection, request_id: &str) -> Result<LaunchEvent, AppError> {
-    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [request_id], launch_event_from_row)?)
+    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,CASE WHEN status='handed_off' THEN 'Windows accepted the Shell handoff; target load is not verified.' WHEN error_code='launch_outcome_unknown' THEN 'The prior launch outcome is unknown and was not retried.' ELSE 'The target could not be handed to Windows Shell.' END,duration_ms FROM launch_request_guard WHERE request_id=?1", [request_id], launch_event_from_row)?)
 }
 
 fn record_guard_event(
@@ -5277,7 +5283,7 @@ where
         return Err(AppError::Invalid("unsupported launch source".into()));
     }
     let intent_hash = launch_intent_hash(request)?;
-    if let Some(existing) = conn.query_row("SELECT request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?,r.get::<_,Option<i64>>(10)?))).optional()? {
+    if let Some(existing) = conn.query_row("SELECT request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<i64>>(9)?))).optional()? {
         let is_legacy = existing.1.starts_with("legacy:");
         let legacy_target_matches = if !is_legacy { true } else if let Some(target_id) = request.target_id.as_deref() { existing.3.as_deref() == Some(target_id) } else {
             let current_default: Option<String> = conn.query_row("SELECT id FROM resource_targets WHERE resource_id=?1 AND active=1 ORDER BY priority DESC LIMIT 1", [&request.resource_id], |r|r.get(0)).optional()?;
@@ -5287,7 +5293,7 @@ where
             return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
         }
         if existing.6 == "requested" {
-            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1", [&request.request_id])?;
+            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown' WHERE request_id=?1", [&request.request_id])?;
             conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
         }
         return usage_event_from_guard(conn, &request.request_id);
@@ -5327,7 +5333,7 @@ where
             Some("The target could not be handed to Windows Shell.".to_string()),
         ),
     };
-    conn.execute("UPDATE launch_request_guard SET status=?2,error_code=?3,message=?4,duration_ms=?5 WHERE request_id=?1", params![request.request_id,status,error_code,message,duration_ms])?;
+    conn.execute("UPDATE launch_request_guard SET status=?2,error_code=?3,duration_ms=?4 WHERE request_id=?1", params![request.request_id,status,error_code,duration_ms])?;
     let event = usage_event_from_guard(conn, &request.request_id)?;
     record_guard_event(conn, request, &event)?;
     Ok(event)
@@ -8819,6 +8825,26 @@ mod tests {
             .unwrap();
         assert_eq!(events, 0);
         assert_eq!(guards, 1);
+    }
+
+    #[test]
+    fn migration_removes_guard_messages_and_replays_generic_safe_text() {
+        let conn = database();
+        let profile_id = profile(&conn);
+        let resource_id = Uuid::new_v4().to_string();
+        let request_id = Uuid::new_v4().to_string();
+        conn.execute_batch("ALTER TABLE launch_request_guard ADD COLUMN message TEXT;")
+            .unwrap();
+        conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,profile_id,source,status,launched_at_utc,error_code,duration_ms,message) VALUES (?1,'hash',?2,?3,'dashboard','failed','2026-10-21T00:00:00Z','target_not_found',0,'C:\\\\private\\\\secret.txt')",params![request_id,resource_id,profile_id]).unwrap();
+        migrate_database(&conn).unwrap();
+        let has_message: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('launch_request_guard') WHERE name='message'",[],|r|r.get(0)).unwrap();
+        assert_eq!(has_message, 0);
+        let event = usage_event_from_guard(&conn, &request_id).unwrap();
+        assert_eq!(
+            event.message.as_deref(),
+            Some("The target could not be handed to Windows Shell.")
+        );
+        assert!(!event.message.unwrap().contains("secret.txt"));
     }
 
     #[test]

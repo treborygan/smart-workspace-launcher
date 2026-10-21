@@ -383,6 +383,7 @@ struct ProfilePackageHistoryEvent {
     duration_ms: Option<i64>,
 }
 
+#[derive(Clone)]
 struct ValidatedProfilePackage {
     manifest: ProfilePackageManifest,
     profile: ProfilePackageDocument,
@@ -5227,8 +5228,8 @@ mod tests {
 
     #[test]
     fn production_zip_reader_rejects_high_ratio_and_asset_checksum_mismatch() {
-        let package = package("url");
-        let mut high_ratio = serialized_documents(&package);
+        let base_package = package("url");
+        let mut high_ratio = serialized_documents(&base_package);
         high_ratio.push(("padding.bin", vec![0; 1024 * 1024]));
         let high_ratio_path =
             write_test_archive_with_compression(&high_ratio, CompressionMethod::Deflated);
@@ -5640,7 +5641,7 @@ mod tests {
                 .map(|(name, bytes)| (*name, bytes.clone()))
                 .collect::<Vec<_>>(),
         );
-        std::fs::copy(changed_path, &path).unwrap();
+        std::fs::copy(&changed_path, &path).unwrap();
         assert!(
             import_profile_package_from_path(
                 &mut conn,

@@ -140,6 +140,37 @@ export interface DashboardLayout {
   cards: LayoutCard[];
 }
 
+export type ProfileImportStrategy = "duplicate" | "merge" | "replace";
+
+export interface ProfileImportPreview {
+  profileId: string;
+  profileName: string;
+  resourceCount: number;
+  layoutCount: number;
+  historyEventCount: number;
+  profileIdCollision: boolean;
+  profileNameCollision: boolean;
+  resourceIdCollisions: string[];
+  targetIdCollisions: string[];
+  assetCount: number;
+}
+
+export interface ProfileImportResult {
+  profileId: string;
+  profileName: string;
+  importedResources: number;
+  reusedResources: number;
+  importedLayouts: number;
+  importedHistoryEvents: number;
+}
+
+export interface ProfileExportResult {
+  path: string;
+  profileName: string;
+  resourceCount: number;
+  historyEventCount: number;
+}
+
 export interface CommandMap {
   resource_list: { args: { profileId?: string }; result: Resource[] };
   resource_create: { args: { resource: ResourceInput }; result: Resource };
@@ -151,6 +182,9 @@ export interface CommandMap {
   profile_list: { args?: undefined; result: Profile[] };
   profile_create: { args: { name: string }; result: Profile };
   profile_switch: { args: { profileId: string }; result: Profile };
+  profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
+  profile_import_preview: { args: { packagePath: string }; result: ProfileImportPreview };
+  profile_import_commit: { args: { packagePath: string; strategy: ProfileImportStrategy; targetProfileId?: string }; result: ProfileImportResult };
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };

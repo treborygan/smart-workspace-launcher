@@ -67,6 +67,21 @@
         "type": "string",
         "format": "uuid"
       }
+    },
+    "membership_details": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resource_id", "favorite", "sort_position"],
+        "properties": {
+          "resource_id": { "type": "string", "format": "uuid" },
+          "favorite": { "type": "boolean" },
+          "category": { "type": ["string", "null"], "maxLength": 80 },
+          "sort_position": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+        }
+      }
     }
   }
 }

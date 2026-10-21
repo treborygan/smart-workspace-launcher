@@ -34,6 +34,9 @@
     "layouts_file": {
       "const": "layouts.json"
     },
+    "history_file": {
+      "const": "history.json"
+    },
     "include_history": {
       "type": "boolean",
       "default": false

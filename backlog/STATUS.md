@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 22:03 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
+Updated 2026-10-21 22:06 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
 
 ## Environment and release status
 
@@ -19,8 +19,12 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 ## In progress
 
 - SW-013 (issue #12) is complete and merged in PR #37 (`77b3b1b`).
-- SW-014 (issue #13) is implemented on `feature/sw-014-action-sequences`: profile-scoped named sequences of 1–20 existing-resource steps, optional active owned targets, manual launch through the validated command, durable per-step progress/idempotent request replay, stop on first failure, and inert archive round trips with transactional collision remapping. Final independent QA passed without blocker. PR #38 is open against `main`, head `2b61024`; GitHub review is pending. This is cross-platform V1.1 work; its SW-012 Windows acceptance dependency remains unmet.
+- SW-014 (issue #13) is implemented on `feature/sw-014-action-sequences`: profile-scoped named sequences of 1–20 existing-resource steps, optional active owned targets, manual launch through the validated command, durable per-step progress/idempotent request replay, stop on first failure, and inert archive round trips with transactional collision remapping. Final independent QA passed without blocker. PR #38 is open against `main`, head `fb22dff`; GitHub review is pending. This is cross-platform V1.1 work; its SW-012 Windows acceptance dependency remains unmet.
 
+
+## In progress
+
+- SW-015 (issue #14) is active on `feature/sw-015-usage-retention`, stacked on SW-014 PR #38. The TypeScript contract is frozen for profile-local UTC filters, pagination, scoped recording/retention/exclusions, explicit purge, and CSV export. Core, UI and independent QA are active in isolated worktrees. Backend acceptance includes an idempotency guard independent from analytics retention and opt-out; guards must survive purge and never contain paths/content. PR #38 review remains pending.
 
 ## Verification evidence
 

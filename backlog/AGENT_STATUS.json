@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:03:40Z",
+  "updated_at_utc": "2026-10-21T22:06:32Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-014-action-sequences"
+    "branch": "feature/sw-015-usage-retention"
   },
   "active_pull_request": {
     "number": 38,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
     "state": "OPEN",
-    "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c",
+    "head_sha": "fb22dff",
     "review_status": "independent QA passed; GitHub review pending"
   },
   "subagent_limit": 3,
@@ -68,6 +68,39 @@
       "issue": "SW-012",
       "branch": null,
       "pr": null
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-015 backend",
+      "branch": "feature/sw-015-core",
+      "commit": null,
+      "pr": null,
+      "task": "Implement request guard independent from retained analytics events, profile usage settings, filters, retention, purge and safe CSV command."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-015 UI",
+      "branch": "feature/sw-015-ui",
+      "commit": null,
+      "pr": null,
+      "task": "Implement usage dashboard filters/pagination/settings/purge/export against frozen contracts."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-015 contract/security review",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Read-only review of frozen contract and acceptance/security risks."
     }
   ],
   "milestones": {
@@ -117,7 +150,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Await GitHub review and merge SW-014 PR #38 after review. PR attachment connector returned connection closed; retry on resume. Continue SW-015..SW-025 cross-platform work; SW-012/V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Complete SW-015 issue #14 on feature/sw-015-usage-retention; Core and UI are implementing in isolated worktrees against the frozen shared contract, with QA doing read-only security review. Rebase/integrate only after both report. Continue SW-016..SW-025. PR #38 review remains pending; retry artifact attachment. SW-012/V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -176,7 +209,7 @@
       "issue": "SW-014",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
-      "head_sha": "2b61024c298e36d1a2d55310b273edc9ce42f47c"
+      "head_sha": "fb22dff"
     }
   ]
 }

@@ -40,6 +40,17 @@ describe("ResourceMetadataPanel", () => {
     expect(host.textContent).toContain("C:\\Work\\renamed.xlsx");
     expect(host.textContent).toContain("Missing");
   });
+  it("re-inspects when target kind changes with the same target ID and URI", async () => {
+    const first = resource("r1");
+    const changed = { ...first, targets: [{ ...first.targets[0], kind: "app" as const }] };
+    api.inspect.mockResolvedValueOnce([{ resourceId: "r1", targetId: "t-r1", inspectedUtc: "2026-01-01T00:00:00Z", availability: "available", provenance: "local-filesystem", cacheStatus: "cached" }]);
+    api.inspect.mockResolvedValueOnce([{ resourceId: "r1", targetId: "t-r1", inspectedUtc: "2026-01-02T00:00:00Z", availability: "unsupported", provenance: "unsupported", cacheStatus: "fresh" }]);
+    await act(async () => root.render(createElement(ResourceMetadataPanel, { resource: first })));
+    expect(host.textContent).toContain("Available");
+    await act(async () => root.render(createElement(ResourceMetadataPanel, { resource: changed })));
+    expect(api.inspect).toHaveBeenNthCalledWith(2, "r1", false);
+    expect(host.textContent).toContain("Unsupported");
+  });
   it("shows native inspection failures", async () => {
     api.inspect.mockRejectedValue(new Error("Access denied"));
     await act(async () => root.render(createElement(ResourceMetadataPanel, { resource: resource("r1") })));

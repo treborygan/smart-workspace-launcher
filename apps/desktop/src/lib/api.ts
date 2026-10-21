@@ -1,5 +1,6 @@
 import { invokeTyped } from "@sw/contracts";
 import type { ResourcePatch } from "@sw/contracts";
+import type { DashboardLayout } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -54,5 +55,17 @@ export const api = {
   async profiles(): Promise<Profile[]> {
     if (isNative()) return invokeTyped("profile_list");
     return [{ id: "default", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: now, updatedUtc: now }];
+  },
+  async layout(profileId: string): Promise<DashboardLayout | null> {
+    if (isNative()) return invokeTyped("layout_get", { profileId, surface: "dashboard" });
+    try {
+      const saved = localStorage.getItem(`swl-layout-${profileId}-dashboard`);
+      return saved ? JSON.parse(saved) as DashboardLayout : null;
+    } catch { return null; }
+  },
+  async saveLayout(layout: DashboardLayout): Promise<DashboardLayout> {
+    if (isNative()) return invokeTyped("layout_save", { layout });
+    localStorage.setItem(`swl-layout-${layout.profileId}-${layout.surface}`, JSON.stringify(layout));
+    return layout;
   },
 };

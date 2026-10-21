@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
 }));
 vi.mock("./lib/api", () => ({ api }));
 import App from "./App";
@@ -14,12 +14,15 @@ const resources: Resource[] = [
   { id: "r1", resourceType: "file", displayName: "Roadmap.xlsx", description: "Planning workbook", defaultAction: "open", createdUtc: timestamp, updatedUtc: timestamp, targets: [{ id: "t1", kind: "file", canonicalUri: "C:\\Work\\Roadmap.xlsx", priority: 0, arguments: [], active: true }], tags: [], aliases: [], favorite: true, launchCount: 2, category: "Work" },
   { id: "r2", resourceType: "url", displayName: "Calendar", description: "Team calendar", defaultAction: "open", createdUtc: timestamp, updatedUtc: timestamp, targets: [{ id: "t2", kind: "url", canonicalUri: "https://calendar.example", priority: 0, arguments: [], active: true }], tags: [], aliases: [], favorite: false, launchCount: 4, category: "Web" },
 ];
-const profiles: Profile[] = [{ id: "p1", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp }];
+const profiles: Profile[] = [
+  { id: "p1", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp },
+  { id: "p2", name: "Work", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp },
+];
 let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
-  localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles);
+  localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.clearAllMocks(); });
@@ -42,5 +45,18 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Calendar");
     expect(host.querySelectorAll(".resource-card")).toHaveLength(1);
     expect(host.querySelector(".resource-card h3")?.textContent).toBe("Calendar");
+  });
+
+  it("restores each profile's own resource ordering when switching", async () => {
+    api.resources.mockImplementation(async (profileId: string) => profileId === "p2" ? [...resources].reverse() : resources);
+    api.layout.mockImplementation(async (profileId: string) => profileId === "p2" ? ({ profileId, surface: "dashboard", version: 1, cards: [
+      { resourceId: "r2", x: 0, y: 0, w: 4, h: 1, type: "icon" }, { resourceId: "r1", x: 4, y: 0, w: 4, h: 1, type: "icon" },
+    ] }) : null);
+    await act(async () => { root.render(createElement(App)); });
+    const selector = host.querySelector<HTMLSelectElement>(".profile-switch")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p2"); selector.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(host.querySelector(".resource-card h3")?.textContent).toBe("Calendar");
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selector, "p1"); selector.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(host.querySelector(".resource-card h3")?.textContent).toBe("Roadmap.xlsx");
   });
 });

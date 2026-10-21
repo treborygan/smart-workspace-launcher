@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./components/Icon";
 import { api } from "./lib/api";
-import type { ResourcePatch } from "@sw/contracts";
+import type { DashboardLayout, ResourcePatch } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import "./styles.css";
 
@@ -52,6 +52,7 @@ function AddResourceDialog({ profileId, onClose, onCreate }: { profileId?: strin
 export default function App() {
   const [resources, setResources] = useState<Resource[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState(() => localStorage.getItem("swl-active-profile") || "default");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [section, setSection] = useState<Section>("Dashboard");
   const [query, setQuery] = useState("");
@@ -60,13 +61,20 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [cardWidths, setCardWidths] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem("swl-card-widths-v1") || "{}"); } catch { return {}; }
-  });
+  const [cardWidths, setCardWidths] = useState<Record<string, number>>({});
   const [dark, setDark] = useState(false);
 
   const reload = async () => {
-    try { const activeProfiles = await api.profiles(); const items = await api.resources(activeProfiles[0]?.id); const order = JSON.parse(localStorage.getItem(`swl-layout-order-${activeProfiles[0]?.id || "default"}`) || "[]") as string[]; const rank = new Map(order.map((id, index) => [id, index])); const ordered = [...items].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER)); setResources(ordered); setProfiles(activeProfiles); setSelectedId((old) => old && items.some((r) => r.id === old) ? old : items[0]?.id ?? null); }
+    try {
+      const activeProfiles = await api.profiles();
+      const rememberedProfile = localStorage.getItem("swl-active-profile");
+      const profile = activeProfiles.find((item) => item.id === rememberedProfile) || activeProfiles[0];
+      const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
+      const restored = restoreLayout(items, layout);
+      setProfiles(activeProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
+      if (profile) localStorage.setItem("swl-active-profile", profile.id);
+      setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
+    }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not connect to the local workspace."); }
     finally { setLoading(false); }
   };
@@ -91,7 +99,7 @@ export default function App() {
   const selected = resources.find((resource) => resource.id === selectedId) ?? null;
 
   const update = async (id: string, patch: ResourcePatch) => {
-    try { const changed = await api.update(id, { ...patch, profileId: profiles[0]?.id }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
+    try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
   };
   const launch = async (resource: Resource) => {
@@ -104,23 +112,39 @@ export default function App() {
   };
   const remove = async (resource: Resource) => {
     if (!window.confirm(`Remove “${resource.displayName}” from this workspace?`)) return;
-    try { await api.remove(resource.id); setResources((all) => all.filter((r) => r.id !== resource.id)); setSelectedId(null); }
+    try { await api.remove(resource.id); const next = resources.filter((r) => r.id !== resource.id); setResources(next); setSelectedId(null); await persistLayout(next, cardWidths); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not remove resource."); }
   };
   const reorder = (overId: string) => {
     if (!dragId || dragId === overId) return;
     const next = [...resources]; const from = next.findIndex((r) => r.id === dragId); const to = next.findIndex((r) => r.id === overId);
     const [moved] = next.splice(from, 1); next.splice(to, 0, moved); setResources(next); setDragId(null);
-    localStorage.setItem(`swl-layout-order-${profiles[0]?.id || "default"}`, JSON.stringify(next.map((r) => r.id)));
+    void persistLayout(next, cardWidths);
   };
   const resizeCard = (id: string, width: number) => {
-    const next = { ...cardWidths, [id]: width }; setCardWidths(next); localStorage.setItem("swl-card-widths-v1", JSON.stringify(next));
+    const next = { ...cardWidths, [id]: width }; setCardWidths(next); void persistLayout(resources, next);
+  };
+  const switchProfile = async (profileId: string) => {
+    if (profileId === activeProfileId) return;
+    setLoading(true); setNotice("");
+    try {
+      const [items, layout] = await Promise.all([api.resources(profileId), api.layout(profileId)]);
+      const restored = restoreLayout(items, layout);
+      setActiveProfileId(profileId); localStorage.setItem("swl-active-profile", profileId);
+      setResources(restored.resources); setCardWidths(restored.widths); setSelectedId(restored.resources[0]?.id ?? null); setQuery("");
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
+    finally { setLoading(false); }
+  };
+  const persistLayout = async (items: Resource[], widths: Record<string, number>) => {
+    if (!activeProfileId) return;
+    try { await api.saveLayout(makeLayout(activeProfileId, items, widths)); }
+    catch (e) { setNotice(e instanceof Error ? e.message : "Could not save dashboard layout."); }
   };
 
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-symbol"><span /><span /><span /><span /></span><span className="brand-name">Workspace</span></div>
-      <div className="profile-select"><span className="profile-avatar">{profiles[0]?.name?.slice(0, 1) || "P"}</span><span className="profile-label"><b>{profiles[0]?.name || "Personal"}</b><small>Workspace profile</small></span><Icon name="chevron" size={15} /></div>
+      <div className="profile-select"><span className="profile-avatar">{profiles.find((profile) => profile.id === activeProfileId)?.name?.slice(0, 1) || "P"}</span><span className="profile-label"><b>{profiles.find((profile) => profile.id === activeProfileId)?.name || "Personal"}</b><small>Workspace profile</small></span><Icon name="chevron" size={15} /><select className="profile-switch" aria-label="Switch profile" value={activeProfileId} onChange={(event) => void switchProfile(event.target.value)}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></div>
       <div className="nav-label">WORKSPACE</div>
       <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
       <div className="nav-label collections-label">COLLECTIONS <button className="tiny-plus" onClick={() => setShowAdd(true)} aria-label="Add collection"><Icon name="plus" size={14} /></button></div>
@@ -152,12 +176,32 @@ export default function App() {
     <aside className="inspector"><div className="inspector-head"><h2>Inspector</h2><button className="icon-button" aria-label="More inspector options"><Icon name="more" /></button></div>
       {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div><div className="location-value">{selected.targets[0]?.canonicalUri || "No location available"}</div><button className="subtle-action" onClick={() => navigator.clipboard?.writeText(selected.targets[0]?.canonicalUri || "")}>Copy location</button></div><div className="inspector-section"><div className="inspector-label">CARD SIZE</div><div className="size-options" role="group" aria-label="Dashboard card size">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last opened" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><div className="inspector-label">AVAILABILITY</div><div className="availability"><span className="availability-dot" /><span>Not checked</span><small>Metadata is collected in the desktop app</small></div><p className="provenance">File availability and metadata are inspected locally. No background drive scan.</p></div><div className="inspector-footer"><button className="subtle-action" onClick={() => { const name = window.prompt("Resource name", selected.displayName); if (name?.trim()) void update(selected.id, { displayName: name.trim() }); }}>Rename</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
     </aside>
-    {showAdd && <AddResourceDialog profileId={profiles[0]?.id} onClose={() => setShowAdd(false)} onCreate={(resource) => { setResources((all) => [...all, resource]); setSelectedId(resource.id); setNotice(`${resource.displayName} added to your workspace.`); }} />}
+    {showAdd && <AddResourceDialog profileId={activeProfileId} onClose={() => setShowAdd(false)} onCreate={(resource) => { const next = [...resources, resource]; setResources(next); setSelectedId(resource.id); void persistLayout(next, cardWidths); setNotice(`${resource.displayName} added to your workspace.`); }} />}
   </div>;
 }
 
 function greeting() { const hour = new Date().getHours(); return hour < 12 ? "Good morning, Alex" : hour < 18 ? "Good afternoon, Alex" : "Good evening, Alex"; }
 function relativeTime(value: string) { const elapsed = Math.max(0, Date.now() - new Date(value).getTime()); const minutes = Math.floor(elapsed / 60000); if (minutes < 1) return "Just now"; if (minutes < 60) return `${minutes} min ago`; const hours = Math.floor(minutes / 60); return hours < 24 ? `${hours} hr ago` : `${Math.floor(hours / 24)} days ago`; }
+function restoreLayout(resources: Resource[], layout: DashboardLayout | null) {
+  if (!layout || layout.surface !== "dashboard") return { resources, widths: {} as Record<string, number> };
+  const cards = [...layout.cards].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rank = new Map(cards.map((card, index) => [card.resourceId, index]));
+  const ordered = [...resources].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+  const widths = Object.fromEntries(cards.map((card) => [card.resourceId, Math.max(3, Math.min(8, card.w))]));
+  return { resources: ordered, widths };
+}
+function makeLayout(profileId: string, resources: Resource[], widths: Record<string, number>): DashboardLayout {
+  let x = 0; let y = 0;
+  const cards = resources.map((resource) => {
+    const w = Math.max(3, Math.min(8, widths[resource.id] || 4));
+    if (x + w > 12) { x = 0; y += 1; }
+    const card = { resourceId: resource.id, x, y, w, h: 1, type: (w < 4 ? "compact" : w > 4 ? "info" : "icon") as "compact" | "info" | "icon" };
+    x += w;
+    if (x >= 12) { x = 0; y += 1; }
+    return card;
+  });
+  return { profileId, surface: "dashboard", version: 1, cards };
+}
 function InfoRow({ label, value }: { label: string; value: string }) { return <div className="info-row"><span>{label}</span><b>{value}</b></div>; }
 function Analytics({ resources }: { resources: Resource[] }) { const total = resources.reduce((sum, r) => sum + (r.launchCount || 0), 0); return <><div className="welcome-row"><div><h1>Activity</h1><p>Launch activity recorded by this workspace.</p></div></div><div className="analytics-summary"><div><span>Total launches</span><b>{total}</b></div><div><span>Resources</span><b>{resources.length}</b></div><div><span>Tracked by</span><b>Workspace</b></div></div><div className="section-heading"><div><h2>Most opened</h2><span>Local launch handoffs</span></div></div><div className="recent-list">{resources.slice().sort((a,b)=>(b.launchCount||0)-(a.launchCount||0)).map((r)=> <div className="recent-row" key={r.id}><ResourceMark resource={r}/><span className="recent-name"><b>{r.displayName}</b><small>Default app handoff count</small></span><b className="launch-count">{r.launchCount || 0}</b></div>)}</div><p className="analytics-note">Activity counts requests handled by Smart Workspace. A system handoff does not confirm that a document finished opening. External file usage is not observed.</p></> }
 function Explorer({ resources, onSelect, query, setQuery, onAdd }: { resources: Resource[]; onSelect: (r: Resource) => void; query: string; setQuery: (q: string) => void; onAdd: () => void }) { return <><div className="welcome-row"><div><h1>Resource Explorer</h1><p>Browse and organize your workspace resources.</p></div><button className="button primary" onClick={onAdd}><Icon name="plus" size={16}/> Add resource</button></div><div className="search-box explorer-search"><Icon name="search" size={18}/><input placeholder="Search by name or location" value={query} onChange={(e)=>setQuery(e.target.value)}/></div><div className="table-shell"><table><thead><tr><th>NAME</th><th>TYPE</th><th>COLLECTION</th><th>LOCATION</th><th>LAUNCHES</th></tr></thead><tbody>{resources.map((r)=><tr key={r.id} onClick={()=>onSelect(r)} tabIndex={0} onKeyDown={(e)=>e.key==="Enter"&&onSelect(r)}><td><span className="table-name"><ResourceMark resource={r}/><b>{r.displayName}</b></span></td><td>{r.resourceType}</td><td>{r.category || "—"}</td><td className="table-location">{r.targets[0]?.canonicalUri}</td><td>{r.launchCount || 0}</td></tr>)}</tbody></table>{resources.length===0&&<div className="table-empty">No resources match your search.</div>}</div></> }

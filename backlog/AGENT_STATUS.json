@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T20:08:10Z",
+  "updated_at_utc": "2026-10-21T20:11:40Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -14,7 +14,7 @@
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/27",
     "state": "DRAFT",
     "base_pr": 26,
-    "head_commit": "805ae07"
+    "head_commit": "bb54896"
   },
   "subagent_limit": 3,
   "agents": [
@@ -22,23 +22,23 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "COMPLETE",
-      "issue": "SW-005",
-      "branch": "feature/sw-001-core",
+      "state": "ACTIVE",
+      "issue": "SW-007",
+      "branch": "feature/sw-007-metadata",
       "commit": "2b05fba",
       "pr": 27,
-      "task": "Per-profile OS shortcut persistence/conflict handling and bounded fuzzy-ranked local resource search; Windows GNU type-check only, Rust tests unexecuted because GLib/GTK dev packages are unavailable."
+      "task": "Implementing bounded local metadata cache/health and analytics summaries from issue #18; typed API frozen by coordinator, tests and Windows-only limitations to be recorded."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "COMPLETE",
-      "issue": "SW-005",
-      "branch": "feature/sw-002-ui",
+      "state": "ACTIVE",
+      "issue": "SW-009",
+      "branch": "feature/sw-009-dock",
       "commit": "57bce73",
       "pr": 27,
-      "task": "Separate Quick Launch native window UI, shortcut settings, failure feedback, profile-keyed drafts and regression tests."
+      "task": "Implementing independent Dock and shared profile/resource state from issue #8, based on SW-005; Windows positioning/autohide remains unverified."
     },
     {
       "role": "qa",
@@ -49,7 +49,7 @@
       "branch": "shared-checkout",
       "commit": null,
       "pr": 27,
-      "task": "Reviewed integrated hotkey/search/profile settings/launch failure flows; initial profile draft bug fixed and re-reviewed; no remaining blocking findings in SW-005 scope. Windows acceptance unavailable."
+      "task": "Reviewed integrated hotkey/search/profile settings/launch failure flows; draft conflict bug fixed and re-reviewed; no remaining blocker in review scope."
     },
     {
       "role": "research",
@@ -125,5 +125,5 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Proceed to SW-007 bounded metadata/analytics and SW-008 production package import/export with previews, collision strategies, transactions and rollback, then SW-009 Dock and SW-011 hardening. Obtain Windows 11 x64 host for SW-012; V1 remains BLOCKED. Continue SW-013..SW-025 after V1."
+  "next_action": "In parallel implement SW-007 metadata/analytics and SW-009 independent Dock on feature branches based on feature/sw-005-quick-launch (head bb54896). Then implement SW-008 production transactional .swprofile import/export, SW-010 completion and SW-011 hardening. Obtain a Windows 11 x64 host for SW-012; V1 remains BLOCKED and SW-013..SW-025 remain required after V1."
 }

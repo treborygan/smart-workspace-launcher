@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 20:08 UTC. Coordinator branch: `feature/sw-005-quick-launch`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-005 #5](https://github.com/treborygan/smart-workspace-launcher/issues/5). Draft PR [#27](https://github.com/treborygan/smart-workspace-launcher/pull/27), stacked on draft foundation PR [#26](https://github.com/treborygan/smart-workspace-launcher/pull/26). Current SW-005 head: `805ae07`.
+Updated 2026-10-21 20:11 UTC. Coordinator branch: `feature/sw-005-quick-launch`. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Selected issue: [SW-005 #5](https://github.com/treborygan/smart-workspace-launcher/issues/5). Draft PR [#27](https://github.com/treborygan/smart-workspace-launcher/pull/27), stacked on draft foundation PR [#26](https://github.com/treborygan/smart-workspace-launcher/pull/26). Current SW-005 head: `bb54896` (includes typed `workspace-state-changed` event for dependent SW-009).
 
 | Work item | State | Evidence / remaining work |
 |---|---|---|
@@ -10,9 +10,9 @@ Updated 2026-10-21 20:08 UTC. Coordinator branch: `feature/sw-005-quick-launch`.
 | SW-004 profiles/layouts | PARTIAL | Profile switching and per-profile dashboard/Dock layout persistence with validation. Profile import/export remains SW-008. |
 | SW-005 Quick Launch/search | IMPLEMENTED; WINDOWS CHECK BLOCKED | PR #27 adds independent Tauri Quick Launch window, global shortcut registration, profile-persistent configurable shortcuts, conflict status, keyboard search and bounded fuzzy ranking. QA re-reviewed fixes with no remaining blocker in this scope. Actual Windows shortcut and Shell behavior is unverified. |
 | SW-006/SW-010 UI | PARTIAL | Dashboard, Explorer, Inspector, profile layouts, themes and Quick Launch UI exist. Full responsive grid acceptance, independent Dock and remaining integration work are outstanding. |
-| SW-007 metadata/analytics | PARTIAL | Launch event history and query exist. Bounded background file metadata and provenance/status implementation remains. |
+| SW-007 metadata/analytics | IN PROGRESS | Core agent is implementing bounded local metadata cache/health and analytics summary on `feature/sw-007-metadata` from issue #18. Windows filesystem behavior remains unverified. |
 | SW-008 import/export | QA HARNESS ONLY | 11 Python archive contract tests exist. Production importer/exporter, previews/diffs, collision strategy, transactional rollback and no-execution guarantees remain. |
-| SW-009 Dock | NOT COMPLETE | Independent optional Dock and Windows lifecycle behavior remain. |
+| SW-009 Dock | IN PROGRESS | UI agent is implementing a separate Dock window, per-profile pins/layout and typed workspace-state refresh on `feature/sw-009-dock` from issue #8. Windows alignment/autohide/multimonitor acceptance remains unverified. |
 | SW-011 integration | NOT STARTED | Requires completed SW-007 through SW-010 plus security review. |
 | SW-012 Windows acceptance/release | BLOCKED | No PowerShell or real Windows 11 x64 host. No EXE, portable package or Release upload. `releases/v1/readiness.json` remains BLOCKED. |
 | SW-013..SW-025 | NOT STARTED | V1.1, V1.2 and V2.0 work remains queued after V1 gates; V1 is not project completion. |
@@ -36,10 +36,11 @@ Environment: Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable. No P
 
 ## Risks and next executable tasks
 
-1. Implement SW-007 bounded local metadata inspection with provenance and finish analytics coverage.
-2. Implement SW-008 production profile export/import: schema and size/path validation, previews/diffs, duplicate/merge/replace decisions, transaction and rollback, and no automatic script execution.
-3. Implement SW-009 independent Dock and SW-011 integration/security hardening.
-4. Obtain a real Windows 11 x64 host, execute the Windows acceptance checklist in `docs/TEST_AND_ACCEPTANCE.md`, and only then evaluate the portable V1 package/release gate. Until then V1 is BLOCKED and no READY notice may be sent.
-5. Continue SW-013..SW-025 after V1; these remain required project work.
+1. Complete active SW-007 bounded local metadata inspection/health/provenance and analytics summary work.
+2. Complete active SW-009 independent Dock/shared state work.
+3. Implement SW-008 production profile export/import: schema and size/path validation, previews/diffs, duplicate/merge/replace decisions, transaction and rollback, and no automatic script execution.
+4. Finish SW-010 and SW-011 integration/security hardening.
+5. Obtain a real Windows 11 x64 host, execute the Windows acceptance checklist in `docs/TEST_AND_ACCEPTANCE.md`, and only then evaluate the portable V1 package/release gate. Until then V1 is BLOCKED and no READY notice may be sent.
+6. Continue SW-013..SW-025 after V1; these remain required project work.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

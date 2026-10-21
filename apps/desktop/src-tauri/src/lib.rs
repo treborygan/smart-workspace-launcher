@@ -2588,11 +2588,16 @@ fn import_profile_package(
             let Some(resource_id) = resource_map.get(&event.resource_id) else {
                 continue;
             };
+            if !should_record_usage(&tx, Some(&target_id), resource_id)? {
+                continue;
+            }
             let target_id_mapped = event
                 .target_id
                 .as_ref()
                 .and_then(|target_id| target_map.get(target_id));
-            tx.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), resource_id, target_id_mapped, target_id, event.source, event.launched_at_utc, event.status, event.error_code, event.message, event.duration_ms])?;
+            let imported_utc = normalize_usage_timestamp(Some(event.launched_at_utc.clone()))?
+                .unwrap_or_else(now_utc);
+            tx.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), resource_id, target_id_mapped, target_id, event.source, imported_utc, event.status, event.error_code, event.message, event.duration_ms])?;
             imported_history_events += 1;
         }
     }
@@ -2696,6 +2701,45 @@ pub struct AnalyticsSummary {
     pub first_event_utc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_utc: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageSettings {
+    pub profile_id: String,
+    pub recording_enabled: bool,
+    pub retention_days: Option<u16>,
+    pub excluded_resource_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageFilter {
+    pub from_utc: Option<String>,
+    pub to_utc: Option<String>,
+    pub source: Option<String>,
+    pub status: Option<String>,
+    pub resource_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageQuery {
+    pub profile_id: String,
+    pub from_utc: Option<String>,
+    pub to_utc: Option<String>,
+    pub source: Option<String>,
+    pub status: Option<String>,
+    pub resource_id: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageExportResult {
+    pub path: String,
+    pub event_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3146,6 +3190,9 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequences (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,id), UNIQUE(profile_id,name COLLATE NOCASE)); CREATE TABLE IF NOT EXISTS workspace_sequence_steps (sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 19), resource_id TEXT NOT NULL, target_id TEXT, PRIMARY KEY(sequence_id,position), UNIQUE(sequence_id,id), FOREIGN KEY(profile_id,sequence_id) REFERENCES workspace_sequences(profile_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_workspace_sequences_profile_name ON workspace_sequences(profile_id,name COLLATE NOCASE);")?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequence_runs (request_id TEXT PRIMARY KEY, sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, sequence_json TEXT NOT NULL, result_json TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_workspace_sequence_runs_profile_time ON workspace_sequence_runs(profile_id,created_utc DESC);")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (7,'sw014-workspace-sequences-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS usage_settings (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, recording_enabled INTEGER NOT NULL DEFAULT 1 CHECK(recording_enabled IN (0,1)), retention_days INTEGER CHECK(retention_days IN (30,90,365)), excluded_resource_ids_json TEXT NOT NULL DEFAULT '[]'); CREATE TABLE IF NOT EXISTS launch_request_guard (request_id TEXT PRIMARY KEY, intent_hash TEXT NOT NULL, resource_id TEXT NOT NULL, target_id TEXT, profile_id TEXT, source TEXT NOT NULL, status TEXT NOT NULL, launched_at_utc TEXT NOT NULL, error_code TEXT, message TEXT, duration_ms INTEGER); CREATE INDEX IF NOT EXISTS idx_launch_guard_profile_time ON launch_request_guard(profile_id,launched_at_utc DESC);")?;
+    conn.execute("INSERT OR IGNORE INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms) SELECT request_id,'legacy:'||request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events",[])?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (8,'sw015-usage-settings-request-guard-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -3244,11 +3291,15 @@ fn load_resource_details_with_limits(
     };
     resource.favorite = favorite;
     resource.category = category;
-    let stats = conn.query_row(
-        "SELECT COUNT(*),MAX(launched_at_utc) FROM launch_events WHERE resource_id=?1",
-        [&resource.id],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
-    )?;
+    let stats = if let Some(pid) = profile_id {
+        conn.query_row("SELECT COUNT(*),MAX(launched_at_utc) FROM launch_events WHERE resource_id=?1 AND profile_id=?2",params![resource.id,pid],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Option<String>>(1)?)))?
+    } else {
+        conn.query_row(
+            "SELECT COUNT(*),MAX(launched_at_utc) FROM launch_events WHERE resource_id=?1",
+            [&resource.id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)),
+        )?
+    };
     resource.launch_count = stats.0;
     resource.last_launched_utc = stats.1;
     Ok(())
@@ -4755,20 +4806,24 @@ fn record_failed_sequence_launch(
     if request.source != "sequence" {
         return Err(AppError::Invalid("invalid sequence launch source".into()));
     }
-    if let Some(mut event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row).optional()? {
-        if event.resource_id != request.resource_id || event.target_id != request.target_id || event.profile_id.as_deref() != Some(profile_id) || event.source != request.source {
+    let intent_hash = launch_intent_hash(request)?;
+    if let Some(mut event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], launch_event_from_row).optional()? {
+        let stored_hash: String = conn.query_row("SELECT intent_hash FROM launch_request_guard WHERE request_id=?1", [&request.request_id], |r|r.get(0))?;
+        if (!stored_hash.starts_with("legacy:") && stored_hash != intent_hash) || event.resource_id != request.resource_id || event.target_id != request.target_id || event.profile_id.as_deref() != Some(profile_id) || event.source != request.source {
             return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
         }
         if event.status == "requested" {
+            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
             conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
-            event = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)?;
+            event = usage_event_from_guard(conn, &request.request_id)?;
         }
         return Ok(event);
     }
     let launched_at_utc = now_utc();
-    conn.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,?5,'sequence',?6,'requested')", params![Uuid::new_v4().to_string(),request.request_id,request.resource_id,request.target_id,profile_id,launched_at_utc])?;
-    conn.execute("UPDATE launch_events SET status='failed',error_code=?2,message=?3,duration_ms=0 WHERE request_id=?1", params![request.request_id,error_code,message])?;
-    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)?)
+    conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,'sequence',?6,'failed',?7,?8,0)", params![request.request_id,intent_hash,request.resource_id,request.target_id,profile_id,launched_at_utc,error_code,message])?;
+    let event = usage_event_from_guard(conn, &request.request_id)?;
+    record_guard_event(conn, request, &event)?;
+    Ok(event)
 }
 
 fn workspace_sequence_run_with<F>(
@@ -5119,6 +5174,69 @@ fn launch_event_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchEvent>
     })
 }
 
+fn launch_intent_hash(request: &LaunchRequest) -> Result<String, AppError> {
+    let intent = serde_json::to_vec(&(
+        request.profile_id.as_deref(),
+        request.resource_id.as_str(),
+        request.target_id.as_deref(),
+        request.source.as_str(),
+    ))?;
+    Ok(format!("{:x}", Sha256::digest(intent)))
+}
+
+fn usage_settings_for(conn: &Connection, profile_id: &str) -> Result<UsageSettings, AppError> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |r| r.get::<_, i64>(0).map(|n| n != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let stored = conn.query_row("SELECT recording_enabled,retention_days,excluded_resource_ids_json FROM usage_settings WHERE profile_id=?1", [profile_id], |r| Ok((r.get::<_, i64>(0)?,r.get::<_, Option<u16>>(1)?,r.get::<_, String>(2)?))).optional()?;
+    let (recording, retention, excluded) = stored.unwrap_or((1, None, "[]".into()));
+    if let Some(days) = retention {
+        conn.execute("DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now',?2)", params![profile_id, format!("-{} days",days)])?;
+    }
+    Ok(UsageSettings {
+        profile_id: profile_id.to_string(),
+        recording_enabled: recording != 0,
+        retention_days: retention,
+        excluded_resource_ids: serde_json::from_str(&excluded)?,
+    })
+}
+
+fn should_record_usage(
+    conn: &Connection,
+    profile_id: Option<&str>,
+    resource_id: &str,
+) -> Result<bool, AppError> {
+    let Some(profile_id) = profile_id else {
+        return Ok(false);
+    };
+    let settings = usage_settings_for(conn, profile_id)?;
+    Ok(settings.recording_enabled
+        && !settings
+            .excluded_resource_ids
+            .iter()
+            .any(|id| id == resource_id))
+}
+
+fn usage_event_from_guard(conn: &Connection, request_id: &str) -> Result<LaunchEvent, AppError> {
+    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [request_id], launch_event_from_row)?)
+}
+
+fn record_guard_event(
+    conn: &Connection,
+    request: &LaunchRequest,
+    event: &LaunchEvent,
+) -> Result<(), AppError> {
+    if should_record_usage(conn, request.profile_id.as_deref(), &request.resource_id)? {
+        conn.execute("INSERT OR IGNORE INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status,error_code,message,duration_ms) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![Uuid::new_v4().to_string(),event.request_id,event.resource_id,event.target_id,event.profile_id,event.source,event.launched_at_utc,event.status,event.error_code,event.message,event.duration_ms])?;
+    }
+    Ok(())
+}
+
 fn launch_event_with<F>(
     conn: &mut Connection,
     request: &LaunchRequest,
@@ -5158,27 +5276,21 @@ where
     {
         return Err(AppError::Invalid("unsupported launch source".into()));
     }
-    if let Some(existing) = conn
-        .query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)
-        .optional()?
-    {
-        if existing.resource_id != request.resource_id
-            || existing.profile_id != request.profile_id
-            || existing.source != request.source
-        {
+    let intent_hash = launch_intent_hash(request)?;
+    if let Some(existing) = conn.query_row("SELECT request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_request_guard WHERE request_id=?1", [&request.request_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,Option<String>>(9)?,r.get::<_,Option<i64>>(10)?))).optional()? {
+        let is_legacy = existing.1.starts_with("legacy:");
+        let legacy_target_matches = if !is_legacy { true } else if let Some(target_id) = request.target_id.as_deref() { existing.3.as_deref() == Some(target_id) } else {
+            let current_default: Option<String> = conn.query_row("SELECT id FROM resource_targets WHERE resource_id=?1 AND active=1 ORDER BY priority DESC LIMIT 1", [&request.resource_id], |r|r.get(0)).optional()?;
+            existing.3 == current_default
+        };
+        if (!is_legacy && existing.1 != intent_hash) || existing.2 != request.resource_id || existing.4 != request.profile_id || existing.5 != request.source || !legacy_target_matches {
             return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
         }
-        let resolved_target: Option<String> = conn
-            .query_row(
-                "SELECT id FROM resource_targets WHERE resource_id=?1 AND active=1 AND (?2 IS NULL OR id=?2) ORDER BY priority DESC LIMIT 1",
-                params![request.resource_id, request.target_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if existing.target_id != resolved_target {
-            return Err(AppError::Invalid("launch request ID was already used for a different target".into()));
+        if existing.6 == "requested" {
+            conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1", [&request.request_id])?;
+            conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
         }
-        return Ok(existing);
+        return usage_event_from_guard(conn, &request.request_id);
     }
     if let Some(profile_id) = request.profile_id.as_deref() {
         let allowed: bool = conn.query_row(
@@ -5193,9 +5305,8 @@ where
     let target:Option<ResourceTarget>=conn.query_row("SELECT id,kind,canonical_uri,priority,arguments_json,working_directory,active FROM resource_targets WHERE resource_id=?1 AND active=1 AND (?2 IS NULL OR id=?2) ORDER BY priority DESC LIMIT 1",params![request.resource_id,request.target_id],|r|Ok(ResourceTarget{id:r.get(0)?,kind:r.get(1)?,canonical_uri:r.get(2)?,priority:r.get(3)?,arguments:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or_default(),working_directory:r.get(5)?,active:r.get::<_,i64>(6)?!=0})).optional()?;
     let target_id = target.as_ref().map(|t| t.id.clone());
     let launched_at_utc = now_utc();
-    let event_id = Uuid::new_v4().to_string();
-    // Caller holds the DB mutex across reservation and handoff, preventing duplicate OS calls.
-    conn.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,?5,?6,?7,'requested')",params![event_id,request.request_id,request.resource_id,target_id,request.profile_id,request.source,launched_at_utc])?;
+    // Caller holds the DB mutex across reservation and handoff. The privacy-minimal guard survives history purge.
+    conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc) VALUES (?1,?2,?3,?4,?5,?6,'requested',?7)",params![request.request_id,intent_hash,request.resource_id,target_id,request.profile_id,request.source,launched_at_utc])?;
     let started = std::time::Instant::now();
     let outcome = match target.as_ref() {
         Some(t) => validate_target(t)
@@ -5216,11 +5327,10 @@ where
             Some("The target could not be handed to Windows Shell.".to_string()),
         ),
     };
-    conn.execute(
-        "UPDATE launch_events SET status=?2,error_code=?3,message=?4,duration_ms=?5 WHERE id=?1",
-        params![event_id, status, error_code, message, duration_ms],
-    )?;
-    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE id=?1",[event_id],launch_event_from_row)?)
+    conn.execute("UPDATE launch_request_guard SET status=?2,error_code=?3,message=?4,duration_ms=?5 WHERE request_id=?1", params![request.request_id,status,error_code,message,duration_ms])?;
+    let event = usage_event_from_guard(conn, &request.request_id)?;
+    record_guard_event(conn, request, &event)?;
+    Ok(event)
 }
 
 #[tauri::command]
@@ -5235,21 +5345,293 @@ fn quick_launch_hotkey_status(state: State<'_, HotkeyStatusState>) -> QuickLaunc
 #[tauri::command]
 fn analytics_query(
     state: State<'_, AppState>,
-    profile_id: Option<String>,
+    profile_id: String,
+    from_utc: Option<String>,
+    to_utc: Option<String>,
+    source: Option<String>,
+    status: Option<String>,
+    resource_id: Option<String>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<LaunchEvent>, AppError> {
-    if let Some(pid) = profile_id.as_ref() {
-        Uuid::parse_str(pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
-    }
+    valid_uuid(&profile_id, "profile id")?;
+    let filter = validate_usage_filter(UsageFilter {
+        from_utc,
+        to_utc,
+        source,
+        status,
+        resource_id,
+    })?;
     let conn = lock(&state)?;
-    let mut stmt=conn.prepare("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE (?1 IS NULL OR profile_id=?1) ORDER BY launched_at_utc DESC LIMIT ?2")?;
+    let _settings = usage_settings_for(&conn, &profile_id)?;
+    let limit = limit.unwrap_or(100).clamp(1, 5000);
+    let offset = offset.unwrap_or(0).min(1_000_000);
+    let mut stmt = conn.prepare("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE profile_id=?1 AND (?2 IS NULL OR launched_at_utc>=?2) AND (?3 IS NULL OR launched_at_utc<=?3) AND (?4 IS NULL OR source=?4) AND (?5 IS NULL OR status=?5) AND (?6 IS NULL OR resource_id=?6) ORDER BY launched_at_utc DESC,request_id DESC LIMIT ?7 OFFSET ?8")?;
     let events = stmt
         .query_map(
-            params![profile_id, limit.unwrap_or(100).clamp(1, 1000) as i64],
+            params![
+                profile_id,
+                filter.from_utc,
+                filter.to_utc,
+                filter.source,
+                filter.status,
+                filter.resource_id,
+                limit as i64,
+                offset as i64
+            ],
             launch_event_from_row,
         )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(events)
+}
+
+fn normalize_usage_timestamp(value: Option<String>) -> Result<Option<String>, AppError> {
+    value
+        .map(|v| {
+            if v.len() > 64 {
+                return Err(AppError::Invalid("usage timestamp is too long".into()));
+            }
+            chrono::DateTime::parse_from_rfc3339(&v)
+                .map(|dt| {
+                    dt.with_timezone(&Utc)
+                        .to_rfc3339_opts(SecondsFormat::Millis, true)
+                })
+                .map_err(|_| AppError::Invalid("usage timestamps must be RFC 3339".into()))
+        })
+        .transpose()
+}
+
+fn validate_usage_filter(mut filter: UsageFilter) -> Result<UsageFilter, AppError> {
+    filter.from_utc = normalize_usage_timestamp(filter.from_utc)?;
+    filter.to_utc = normalize_usage_timestamp(filter.to_utc)?;
+    if filter
+        .from_utc
+        .as_ref()
+        .zip(filter.to_utc.as_ref())
+        .is_some_and(|(from, to)| from > to)
+    {
+        return Err(AppError::Invalid(
+            "fromUtc must not be later than toUtc".into(),
+        ));
+    }
+    if filter.source.as_deref().is_some_and(|s| {
+        ![
+            "dashboard",
+            "quick_launch",
+            "dock",
+            "explorer",
+            "sequence",
+            "other",
+        ]
+        .contains(&s)
+    }) {
+        return Err(AppError::Invalid("unsupported usage source".into()));
+    }
+    if filter
+        .status
+        .as_deref()
+        .is_some_and(|s| !["requested", "handed_off", "failed"].contains(&s))
+    {
+        return Err(AppError::Invalid("unsupported usage status".into()));
+    }
+    if let Some(id) = filter.resource_id.as_deref() {
+        valid_uuid(id, "resource id")?;
+    }
+    Ok(filter)
+}
+
+#[tauri::command]
+fn usage_settings_get(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<UsageSettings, AppError> {
+    valid_uuid(&profile_id, "profile id")?;
+    usage_settings_for(&lock(&state)?, &profile_id)
+}
+
+#[tauri::command]
+fn usage_settings_set(
+    state: State<'_, AppState>,
+    settings: UsageSettings,
+) -> Result<UsageSettings, AppError> {
+    valid_uuid(&settings.profile_id, "profile id")?;
+    if settings
+        .retention_days
+        .is_some_and(|d| ![30, 90, 365].contains(&d))
+    {
+        return Err(AppError::Invalid(
+            "retentionDays must be 30, 90, 365 or null".into(),
+        ));
+    }
+    if settings.excluded_resource_ids.len() > 10_000 {
+        return Err(AppError::Invalid("too many excluded resources".into()));
+    }
+    let mut ids = settings.excluded_resource_ids.clone();
+    ids.sort();
+    ids.dedup();
+    if ids.len() != settings.excluded_resource_ids.len() {
+        return Err(AppError::Invalid(
+            "excluded resource IDs must be unique".into(),
+        ));
+    }
+    for id in &ids {
+        valid_uuid(id, "excluded resource id")?;
+    }
+    let mut conn = lock(&state)?;
+    let tx = conn.transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&settings.profile_id],
+        |r| r.get::<_, i64>(0).map(|v| v != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let valid_members: i64 = tx.query_row("SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1 AND resource_id IN (SELECT value FROM json_each(?2))",params![settings.profile_id,serde_json::to_string(&ids)?],|r|r.get(0))?;
+    if valid_members as usize != ids.len() {
+        return Err(AppError::Invalid(
+            "excluded resources must belong to the selected profile".into(),
+        ));
+    }
+    tx.execute("INSERT INTO usage_settings(profile_id,recording_enabled,retention_days,excluded_resource_ids_json) VALUES (?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET recording_enabled=excluded.recording_enabled,retention_days=excluded.retention_days,excluded_resource_ids_json=excluded.excluded_resource_ids_json",params![settings.profile_id,settings.recording_enabled as i64,settings.retention_days,serde_json::to_string(&ids)?])?;
+    if let Some(days) = settings.retention_days {
+        tx.execute("DELETE FROM launch_events WHERE profile_id=?1 AND launched_at_utc < strftime('%Y-%m-%dT%H:%M:%fZ','now',?2)",params![settings.profile_id,format!("-{} days",days)])?;
+    }
+    tx.commit()?;
+    usage_settings_for(&conn, &settings.profile_id)
+}
+
+#[tauri::command]
+fn usage_history_purge(state: State<'_, AppState>, profile_id: String) -> Result<u64, AppError> {
+    valid_uuid(&profile_id, "profile id")?;
+    let conn = lock(&state)?;
+    let removed = conn.execute(
+        "DELETE FROM launch_events WHERE profile_id=?1",
+        [&profile_id],
+    )?;
+    Ok(removed as u64)
+}
+
+fn csv_safe(value: &str) -> String {
+    let trimmed = value.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
+    let value = if trimmed
+        .chars()
+        .next()
+        .is_some_and(|c| matches!(c, '=' | '+' | '-' | '@'))
+    {
+        format!("'{}", value)
+    } else {
+        value.to_string()
+    };
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[tauri::command]
+fn usage_export_csv(
+    state: State<'_, AppState>,
+    query: UsageQuery,
+    output_path: String,
+) -> Result<UsageExportResult, AppError> {
+    if output_path.len() > 4096 {
+        return Err(AppError::Invalid("output path is too long".into()));
+    }
+    let path = Path::new(&output_path);
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    {
+        return Err(AppError::Invalid(
+            "usage export path must end in .csv".into(),
+        ));
+    }
+    let conn = lock(&state)?;
+    valid_uuid(&query.profile_id, "profile id")?;
+    let _settings = usage_settings_for(&conn, &query.profile_id)?;
+    let filter = validate_usage_filter(UsageFilter {
+        from_utc: query.from_utc,
+        to_utc: query.to_utc,
+        source: query.source,
+        status: query.status,
+        resource_id: query.resource_id,
+    })?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| AppError::Invalid("output path must name a file".into()))?
+        .to_string_lossy();
+    let temporary = path.with_file_name(format!(".{name}.{}.tmp", Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|e| AppError::Invalid(format!("cannot create CSV export: {e}")))?;
+    let written = (|| -> Result<usize, AppError> {
+        writeln!(file,"request_id,resource_id,display_name,launched_at_utc,source,status,error_code,duration_ms").map_err(|e|AppError::Invalid(format!("cannot write CSV: {e}")))?;
+        let mut stmt = conn.prepare("SELECT le.request_id,le.resource_id,r.display_name,le.launched_at_utc,le.source,le.status,le.error_code,le.duration_ms FROM launch_events le LEFT JOIN resources r ON r.id=le.resource_id WHERE le.profile_id=?1 AND (?2 IS NULL OR le.launched_at_utc>=?2) AND (?3 IS NULL OR le.launched_at_utc<=?3) AND (?4 IS NULL OR le.source=?4) AND (?5 IS NULL OR le.status=?5) AND (?6 IS NULL OR le.resource_id=?6) ORDER BY le.launched_at_utc DESC,le.request_id DESC")?;
+        let rows = stmt.query_map(
+            params![
+                query.profile_id,
+                filter.from_utc,
+                filter.to_utc,
+                filter.source,
+                filter.status,
+                filter.resource_id
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<i64>>(7)?,
+                ))
+            },
+        )?;
+        let mut count = 0;
+        for row in rows {
+            let (request_id, resource_id, display_name, utc, source, status, error, duration) =
+                row?;
+            writeln!(
+                file,
+                "{},{},{},{},{},{},{},{}",
+                csv_safe(&request_id),
+                csv_safe(&resource_id),
+                csv_safe(display_name.as_deref().unwrap_or("")),
+                csv_safe(&utc),
+                csv_safe(&source),
+                csv_safe(&status),
+                csv_safe(error.as_deref().unwrap_or("")),
+                duration.map(|d| d.to_string()).unwrap_or_default()
+            )
+            .map_err(|e| AppError::Invalid(format!("cannot write CSV: {e}")))?;
+            count += 1;
+        }
+        Ok(count)
+    })();
+    let event_count = match written {
+        Ok(count) => count,
+        Err(error) => {
+            drop(file);
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
+    if let Err(error) = file.sync_all() {
+        drop(file);
+        let _ = std::fs::remove_file(&temporary);
+        return Err(AppError::Invalid(format!("cannot sync CSV: {error}")));
+    }
+    drop(file);
+    if let Err(error) = finalize_export_no_clobber(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(UsageExportResult {
+        path: output_path,
+        event_count,
+    })
 }
 
 /// Metadata checks, including errors, are reused for 15 minutes unless forceRefresh is set.
@@ -5607,36 +5989,32 @@ fn system_time_to_utc(value: std::time::SystemTime) -> String {
 #[tauri::command]
 fn analytics_summary(
     state: State<'_, AppState>,
-    profile_id: Option<String>,
-    since_utc: Option<String>,
+    profile_id: String,
+    from_utc: Option<String>,
+    to_utc: Option<String>,
+    source: Option<String>,
+    status: Option<String>,
+    resource_id: Option<String>,
 ) -> Result<AnalyticsSummary, AppError> {
-    if let Some(pid) = profile_id.as_ref() {
-        Uuid::parse_str(pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
-    }
-    let since_utc = since_utc
-        .map(|value| {
-            if value.len() > 64 {
-                return Err(AppError::Invalid("sinceUtc is too long".into()));
-            }
-            chrono::DateTime::parse_from_rfc3339(&value)
-                .map(|parsed| {
-                    parsed
-                        .with_timezone(&Utc)
-                        .to_rfc3339_opts(SecondsFormat::Millis, true)
-                })
-                .map_err(|_| AppError::Invalid("sinceUtc must be an RFC 3339 timestamp".into()))
-        })
-        .transpose()?;
+    valid_uuid(&profile_id, "profile id")?;
+    let filter = validate_usage_filter(UsageFilter {
+        from_utc,
+        to_utc,
+        source,
+        status,
+        resource_id,
+    })?;
     let conn = lock(&state)?;
-    analytics_summary_for(&conn, profile_id.as_deref(), since_utc.as_deref())
+    let _settings = usage_settings_for(&conn, &profile_id)?;
+    analytics_summary_for(&conn, &profile_id, &filter)
 }
 
 fn analytics_summary_for(
     conn: &Connection,
-    profile_id: Option<&str>,
-    since_utc: Option<&str>,
+    profile_id: &str,
+    filter: &UsageFilter,
 ) -> Result<AnalyticsSummary, AppError> {
-    let mut stmt = conn.prepare("SELECT source,status,COUNT(*),MIN(launched_at_utc),MAX(launched_at_utc) FROM launch_events WHERE (?1 IS NULL OR profile_id=?1) AND (?2 IS NULL OR launched_at_utc>=?2) GROUP BY source,status ORDER BY source,status")?;
+    let mut stmt = conn.prepare("SELECT source,status,COUNT(*),MIN(launched_at_utc),MAX(launched_at_utc) FROM launch_events WHERE profile_id=?1 AND (?2 IS NULL OR launched_at_utc>=?2) AND (?3 IS NULL OR launched_at_utc<=?3) AND (?4 IS NULL OR source=?4) AND (?5 IS NULL OR status=?5) AND (?6 IS NULL OR resource_id=?6) GROUP BY source,status ORDER BY source,status")?;
     let mut summary = AnalyticsSummary {
         total_launches: 0,
         by_source: BTreeMap::new(),
@@ -5644,15 +6022,25 @@ fn analytics_summary_for(
         first_event_utc: None,
         last_event_utc: None,
     };
-    for row in stmt.query_map(params![profile_id, since_utc], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, u64>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<String>>(4)?,
-        ))
-    })? {
+    for row in stmt.query_map(
+        params![
+            profile_id,
+            filter.from_utc,
+            filter.to_utc,
+            filter.source,
+            filter.status,
+            filter.resource_id
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        },
+    )? {
         let (source, status, count, first, last) = row?;
         summary.total_launches += count;
         *summary.by_source.entry(source).or_default() += count;
@@ -5846,7 +6234,11 @@ pub fn run() {
             quick_launch_hotkey_status,
             quick_launch_hotkey_set,
             analytics_query,
-            analytics_summary
+            analytics_summary,
+            usage_settings_get,
+            usage_settings_set,
+            usage_history_purge,
+            usage_export_csv
         ]);
 
     let app = builder
@@ -8243,7 +8635,7 @@ mod tests {
             )
             .unwrap();
         }
-        let summary = analytics_summary_for(&conn, Some(&pid), None).unwrap();
+        let summary = analytics_summary_for(&conn, &pid, &UsageFilter::default()).unwrap();
         assert_eq!(summary.total_launches, 2);
         assert_eq!(summary.by_source.get("dashboard"), Some(&1));
         assert_eq!(summary.by_source.get("quick_launch"), Some(&1));
@@ -8257,10 +8649,176 @@ mod tests {
             summary.last_event_utc.as_deref(),
             Some("2026-10-20T10:00:00Z")
         );
-        let after =
-            analytics_summary_for(&conn, Some(&pid), Some("2026-10-20T00:00:00.000Z")).unwrap();
+        let after_filter = UsageFilter {
+            from_utc: Some("2026-10-20T00:00:00.000Z".into()),
+            ..Default::default()
+        };
+        let after = analytics_summary_for(&conn, &pid, &after_filter).unwrap();
         assert_eq!(after.total_launches, 1);
         assert_eq!(after.by_source.get("quick_launch"), Some(&1));
+    }
+
+    #[test]
+    fn stopped_recording_and_purge_preserve_request_replay_guard() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("No History");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        conn.execute("INSERT INTO usage_settings(profile_id,recording_enabled,retention_days,excluded_resource_ids_json) VALUES (?1,0,NULL,'[]')", [&profile_id]).unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: resource.id.clone(),
+            profile_id: Some(profile_id.clone()),
+            target_id: None,
+            source: "dashboard".into(),
+        };
+        let mut launches = 0;
+        let result = launch_event_with(&mut conn, &request, |_| {
+            launches += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(result.status, "handed_off");
+        assert_eq!(launches, 1);
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE profile_id=?1",
+                [&profile_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            event_count, 0,
+            "disabled history must not write analytics events"
+        );
+        let guard_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_request_guard WHERE request_id=?1",
+                [&request.request_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(guard_count, 1);
+        conn.execute(
+            "DELETE FROM launch_events WHERE profile_id=?1",
+            [&profile_id],
+        )
+        .unwrap();
+        let replay = launch_event_with(&mut conn, &request, |_| {
+            panic!("replay must not call Shell twice")
+        })
+        .unwrap();
+        assert_eq!(replay.status, "handed_off");
+        let reused = LaunchRequest {
+            source: "dock".into(),
+            ..request.clone()
+        };
+        assert!(launch_event_with(&mut conn, &reused, |_| panic!(
+            "different intent must not launch"
+        ))
+        .is_err());
+        assert_eq!(launches, 1);
+        let still_there: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_request_guard WHERE request_id=?1",
+                [&request.request_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            still_there, 1,
+            "purging analytics must preserve anti-replay state"
+        );
+
+        let sequence_resource = resource("Sequence No History");
+        persist_resource(&mut conn, &sequence_resource, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(
+            &profile_id,
+            "No History Sequence",
+            &[(&sequence_resource, None)],
+        );
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let sequence_request = Uuid::new_v4().to_string();
+        let first_run = workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &sequence_request,
+            |_| {
+                launches += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(first_run.status, "completed");
+        let sequence_event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE profile_id=?1 AND source='sequence'",
+                [&profile_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sequence_event_count, 0);
+        let replay = workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &sequence_request,
+            |_| panic!("sequence replay must not call Shell twice"),
+        )
+        .unwrap();
+        assert_eq!(replay.status, "completed");
+        assert_eq!(launches, 2);
+    }
+
+    #[test]
+    fn usage_filters_normalize_offset_timestamps_and_csv_neutralizes_formulas() {
+        let filter = validate_usage_filter(UsageFilter {
+            from_utc: Some("2026-10-21T03:00:00+03:00".into()),
+            to_utc: Some("2026-10-21T02:00:00Z".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(filter.from_utc.as_deref(), Some("2026-10-21T00:00:00.000Z"));
+        assert_eq!(filter.to_utc.as_deref(), Some("2026-10-21T02:00:00.000Z"));
+        assert!(validate_usage_filter(UsageFilter {
+            from_utc: Some("2026-10-22T00:00:00Z".into()),
+            to_utc: Some("2026-10-21T00:00:00Z".into()),
+            ..Default::default()
+        })
+        .is_err());
+        assert_eq!(csv_safe("  =1+1"), "\"'  =1+1\"");
+        assert_eq!(csv_safe("\t@SUM(A1:A2)"), "\"'\t@SUM(A1:A2)\"");
+        assert_eq!(csv_safe("safe, text"), "\"safe, text\"");
+    }
+
+    #[test]
+    fn retention_prunes_only_analytics_rows_and_keeps_guard_records() {
+        let conn = database();
+        let profile_id = profile(&conn);
+        let resource_id = Uuid::new_v4().to_string();
+        let request_id = Uuid::new_v4().to_string();
+        conn.execute("INSERT INTO usage_settings(profile_id,recording_enabled,retention_days,excluded_resource_ids_json) VALUES (?1,1,30,'[]')", [&profile_id]).unwrap();
+        conn.execute("INSERT INTO launch_events(id,request_id,resource_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,'dashboard','2020-01-01T00:00:00.000Z','handed_off')",params![Uuid::new_v4().to_string(),request_id,resource_id,profile_id]).unwrap();
+        conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,profile_id,source,status,launched_at_utc) VALUES (?1,'hash',?2,?3,'dashboard','handed_off','2020-01-01T00:00:00.000Z')",params![request_id,resource_id,profile_id]).unwrap();
+        let settings = usage_settings_for(&conn, &profile_id).unwrap();
+        assert_eq!(settings.retention_days, Some(30));
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE profile_id=?1",
+                [&profile_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let guards: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_request_guard WHERE request_id=?1",
+                [&request_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(events, 0);
+        assert_eq!(guards, 1);
     }
 
     #[test]

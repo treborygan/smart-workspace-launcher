@@ -21,7 +21,7 @@ function ResourceMark({ resource }: { resource: Resource }) {
   return <span className={`resource-mark ${color}`} aria-hidden="true">{mark}</span>;
 }
 
-function AddResourceDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (resource: Resource) => void }) {
+function AddResourceDialog({ profileId, onClose, onCreate }: { profileId?: string; onClose: () => void; onCreate: (resource: Resource) => void }) {
   const [name, setName] = useState("");
   const [uri, setUri] = useState("");
   const [kind, setKind] = useState<"file" | "folder" | "app">("file");
@@ -31,7 +31,7 @@ function AddResourceDialog({ onClose, onCreate }: { onClose: () => void; onCreat
     if (!name.trim() || !uri.trim()) { setError("Add a name and a file path or HTTPS address."); return; }
     if (/^https?:\/\//i.test(uri) && !/^https:\/\//i.test(uri)) { setError("Only HTTPS addresses are supported."); return; }
     try {
-      const resource = await api.create({ resourceType: /^https:\/\//i.test(uri) ? "url" : kind, displayName: name.trim(), defaultAction: "open", targets: [{ id: crypto.randomUUID(), kind: /^https:\/\//i.test(uri) ? "url" : kind, canonicalUri: uri.trim(), priority: 0, arguments: [], active: true }] });
+      const resource = await api.create({ profileId, resourceType: /^https:\/\//i.test(uri) ? "url" : kind, displayName: name.trim(), defaultAction: "open", targets: [{ id: crypto.randomUUID(), kind: /^https:\/\//i.test(uri) ? "url" : kind, canonicalUri: uri.trim(), priority: 0, arguments: [], active: true }] });
       onCreate(resource); onClose();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not save this resource."); }
   };
@@ -66,7 +66,7 @@ export default function App() {
   const [dark, setDark] = useState(false);
 
   const reload = async () => {
-    try { const [items, activeProfiles] = await Promise.all([api.resources(), api.profiles()]); const order = JSON.parse(localStorage.getItem(`swl-layout-order-${activeProfiles[0]?.id || "default"}`) || "[]") as string[]; const rank = new Map(order.map((id, index) => [id, index])); const ordered = [...items].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER)); setResources(ordered); setProfiles(activeProfiles); setSelectedId((old) => old && items.some((r) => r.id === old) ? old : items[0]?.id ?? null); }
+    try { const activeProfiles = await api.profiles(); const items = await api.resources(activeProfiles[0]?.id); const order = JSON.parse(localStorage.getItem(`swl-layout-order-${activeProfiles[0]?.id || "default"}`) || "[]") as string[]; const rank = new Map(order.map((id, index) => [id, index])); const ordered = [...items].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER)); setResources(ordered); setProfiles(activeProfiles); setSelectedId((old) => old && items.some((r) => r.id === old) ? old : items[0]?.id ?? null); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not connect to the local workspace."); }
     finally { setLoading(false); }
   };
@@ -91,7 +91,7 @@ export default function App() {
   const selected = resources.find((resource) => resource.id === selectedId) ?? null;
 
   const update = async (id: string, patch: ResourcePatch) => {
-    try { const changed = await api.update(id, patch); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
+    try { const changed = await api.update(id, { ...patch, profileId: profiles[0]?.id }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
   };
   const launch = async (resource: Resource) => {
@@ -152,7 +152,7 @@ export default function App() {
     <aside className="inspector"><div className="inspector-head"><h2>Inspector</h2><button className="icon-button" aria-label="More inspector options"><Icon name="more" /></button></div>
       {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div><div className="location-value">{selected.targets[0]?.canonicalUri || "No location available"}</div><button className="subtle-action" onClick={() => navigator.clipboard?.writeText(selected.targets[0]?.canonicalUri || "")}>Copy location</button></div><div className="inspector-section"><div className="inspector-label">CARD SIZE</div><div className="size-options" role="group" aria-label="Dashboard card size">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last opened" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><div className="inspector-label">AVAILABILITY</div><div className="availability"><span className="availability-dot" /><span>Not checked</span><small>Metadata is collected in the desktop app</small></div><p className="provenance">File availability and metadata are inspected locally. No background drive scan.</p></div><div className="inspector-footer"><button className="subtle-action" onClick={() => { const name = window.prompt("Resource name", selected.displayName); if (name?.trim()) void update(selected.id, { displayName: name.trim() }); }}>Rename</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
     </aside>
-    {showAdd && <AddResourceDialog onClose={() => setShowAdd(false)} onCreate={(resource) => { setResources((all) => [...all, resource]); setSelectedId(resource.id); setNotice(`${resource.displayName} added to your workspace.`); }} />}
+    {showAdd && <AddResourceDialog profileId={profiles[0]?.id} onClose={() => setShowAdd(false)} onCreate={(resource) => { setResources((all) => [...all, resource]); setSelectedId(resource.id); setNotice(`${resource.displayName} added to your workspace.`); }} />}
   </div>;
 }
 

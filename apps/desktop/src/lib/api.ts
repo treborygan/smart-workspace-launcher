@@ -22,8 +22,8 @@ function readDemo(): Resource[] {
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
 
 export const api = {
-  async resources(): Promise<Resource[]> {
-    if (isNative()) return invokeTyped("resource_list", {});
+  async resources(profileId?: string): Promise<Resource[]> {
+    if (isNative()) return invokeTyped("resource_list", { profileId });
     return readDemo();
   },
   async create(draft: ResourceDraft): Promise<Resource> {

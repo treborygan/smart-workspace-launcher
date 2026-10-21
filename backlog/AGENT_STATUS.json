@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": null,
-  "overall_status": "AWAITING_CODEX_ENVIRONMENT",
+  "updated_at_utc": "2026-10-21T19:25:00Z",
+  "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
-    "state": "NOT_RUNNING"
+    "state": "ACTIVE",
+    "branch": "feature/sw-001-bootstrap"
   },
   "subagent_limit": 3,
   "agents": [
@@ -14,28 +15,34 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "ACTIVE",
+      "issue": "SW-003",
+      "branch": "feature/sw-001-core",
+      "commit": "60968dd",
+      "pr": null,
+      "task": "Backend follow-up: align DTOs, event analytics, CRUD/search tests and launch idempotence"
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "COMPLETE",
+      "issue": "SW-006/SW-010",
+      "branch": "feature/sw-002-ui",
+      "commit": "f1b3669",
+      "pr": null,
+      "task": "Dashboard, Explorer shell and typed contract integration; partial UX"
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
-      "branch": null,
-      "pr": null
+      "state": "COMPLETE",
+      "issue": "SW-008",
+      "branch": "shared-checkout",
+      "commit": null,
+      "pr": null,
+      "task": "Python profile archive fixture validator and 7 security/schema tests; not production importer"
     },
     {
       "role": "research",
@@ -50,20 +57,66 @@
       "role": "release",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "NOT_RUNNING",
-      "issue": null,
+      "state": "BLOCKED_NO_WINDOWS_HOST",
+      "issue": "SW-012",
       "branch": null,
       "pr": null
     }
   ],
   "milestones": {
-    "V1.0": "NOT_STARTED",
+    "V1.0": "IN_PROGRESS",
     "V1.1": "NOT_STARTED",
     "V1.2": "NOT_STARTED",
     "V2.0": "NOT_STARTED"
   },
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
-  "last_test_run": null,
-  "next_action": "Connect a capable Codex environment and run CODEX_KICKOFF.md"
+  "last_test_run": {
+    "at_utc": "2026-10-21T19:25:00Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable",
+    "results": [
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS"
+      },
+      {
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS (7 tests; archive contract/fixture QA only)"
+      },
+      {
+        "command": "npm ci",
+        "result": "PASS (88 packages installed from lockfile)"
+      },
+      {
+        "command": "npm run typecheck",
+        "result": "PASS"
+      },
+      {
+        "command": "npm test",
+        "result": "PASS (2 tests)"
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS"
+      },
+      {
+        "command": "npm run tauri -- info",
+        "result": "PASS config inspection; Linux WebKitGTK/rsvg2 prerequisites absent"
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+        "result": "BLOCKED: missing glib-2.0/GTK development libraries"
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
+        "result": "FAIL: initial Core source requires rustfmt; Core follow-up is assigned to format and recheck"
+      },
+      {
+        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu",
+        "result": "BLOCKED: missing x86_64-w64-mingw32-gcc"
+      }
+    ]
+  },
+  "windows_verification": "NOT_AVAILABLE",
+  "next_action": "Integrate and verify Core DTO/event behavior; finish native layouts, global hotkey, metadata and safe import/export; then pursue actual Windows 11 x64 acceptance."
 }

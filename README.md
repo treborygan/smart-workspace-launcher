@@ -1,6 +1,6 @@
 # Smart Workspace Launcher — GitHub/Codex multi-agent full-roadmap handoff
 
-**Status: specification + contracts + backlog only. This repository is NOT an implemented, runnable launcher.**
+**Status: implementation in progress.** The repository now contains the first Tauri/Rust/SQLite application layer and a React dashboard/Explorer frontend. Core features, package import, native Windows integrations and release acceptance are still incomplete. This build must not be treated as a V1 release.
 
 A Windows 11 desktop app: (1) resizable drag-and-drop dashboard, (2) global-hotkey quick launcher, (3) optional floating Dock. These share local resources, profiles, layouts, a metadata cache, and launch history. Supports files in Windows default applications, folders, apps and HTTPS URLs in their associated handlers.
 
@@ -59,9 +59,16 @@ This version explicitly configures **GPT-6 Luna** Codex roles under `.codex/`. R
 - `.github/`: issue templates and PR checklist, **no Actions workflows**.
 - `scripts/`: contract validation and opt-in issue publisher.
 
-## No implementation yet
+## Current implementation snapshot
 
-This archive contains no runnable EXE and no fabricated passing app tests. Codex must build and verify them. `scripts/verify_handoff.py` checks only the handoff artifact.
+- React/TypeScript dashboard, search surface, Explorer, Inspector and local browser preview are under `apps/desktop/`.
+- Tauri 2 commands and SQLite persistence are under `apps/desktop/src-tauri/`.
+- `packages/contracts/` is the shared typed IPC boundary.
+- `scripts/qa/profile_archive.py` validates untrusted profile package fixtures for contract/security tests. It does not apply imported packages to the database.
+- Node and Rust dependencies are locked. Local verification commands are `npm ci`, `npm run lint`, `npm test`, `python -m pip install -r requirements-test.txt`, `python -m unittest discover -s tests -v`, and `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml`.
+- On Windows, run `scripts/verify.ps1` and `scripts/build-windows.ps1` to collect test evidence and build local artifacts.
+
+No Windows executable has been built or tested in this environment. The V1 release remains BLOCKED until real Windows 11 x64 standard-user acceptance, WebView2 verification and fresh-download smoke evidence pass. See `backlog/STATUS.md` and `releases/v1/readiness.json` for current gate state.
 
 ## Important deployment notes
 
@@ -70,6 +77,6 @@ Unsigned portable programs can still be blocked by corporate AppLocker/WDAC/Defe
 
 - Repository initialized on `main` with 53 version-controlled handoff files, including five configured Luna subagent roles.
 - [25 GitHub implementation issues](https://github.com/treborygan/smart-workspace-launcher/issues) created for SW-001 through SW-025.
-- No GitHub Actions, live app code, downloadable EXE or release assertions exist yet.
+- No GitHub Actions exist. The live app is under active implementation; no downloadable EXE or release assertions exist yet.
 - No active Codex Tasks environment was registered at verification. **Codex must be connected to this repository and invoked using `CODEX_KICKOFF.md` to begin actual development.**
 - V1 availability is independently checked by the release watch only after an actual Windows-tested GitHub release.

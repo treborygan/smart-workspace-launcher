@@ -1,7 +1,16 @@
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{
+        atomic::AtomicBool,
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 use thiserror::Error;
@@ -159,6 +168,37 @@ pub struct LaunchEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceMetadata {
+    pub resource_id: String,
+    pub target_id: String,
+    pub inspected_utc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_utc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_utc: Option<String>,
+    pub availability: String,
+    pub provenance: String,
+    pub cache_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSummary {
+    pub total_launches: u64,
+    pub by_source: BTreeMap<String, u64>,
+    pub by_status: BTreeMap<String, u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_event_utc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_utc: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LayoutCard {
     pub resource_id: String,
@@ -179,7 +219,7 @@ pub struct DashboardLayout {
     pub cards: Vec<LayoutCard>,
 }
 
-pub struct AppState(pub Mutex<Connection>);
+pub struct AppState(pub Arc<Mutex<Connection>>);
 
 pub struct HotkeyStatusState(pub Mutex<QuickLaunchHotkeyStatus>);
 pub struct ActiveProfileState(pub Mutex<String>);
@@ -553,6 +593,14 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     }
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (2,'sw003-profile-launch-metadata-v2',?1)",[now_utc()])?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (3,'sw004-profile-surface-layouts-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS metadata_cache (resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES resource_targets(id) ON DELETE CASCADE, inspected_utc TEXT NOT NULL, file_size_bytes INTEGER, created_utc TEXT, modified_utc TEXT, availability TEXT NOT NULL, provenance TEXT NOT NULL, cache_status TEXT NOT NULL DEFAULT 'fresh', error_code TEXT, PRIMARY KEY(resource_id,target_id)); CREATE INDEX IF NOT EXISTS idx_metadata_cache_inspected ON metadata_cache(inspected_utc);")?;
+    ensure_column(
+        conn,
+        "metadata_cache",
+        "cache_status",
+        "TEXT NOT NULL DEFAULT 'fresh'",
+    )?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (4,'sw007-metadata-cache-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -1566,6 +1614,433 @@ fn analytics_query(
     Ok(events)
 }
 
+/// Metadata checks, including errors, are reused for 15 minutes unless forceRefresh is set.
+const METADATA_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+// A filesystem metadata syscall cannot be forcibly interrupted; cancellation is checked between targets.
+const METADATA_INSPECTION_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_METADATA_TARGETS: usize = 250;
+const MAX_METADATA_CACHE_ROWS: usize = 10_000;
+const MAX_CONCURRENT_METADATA_INSPECTIONS: usize = 2;
+static ACTIVE_METADATA_INSPECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+struct MetadataInspectionPermit;
+
+impl MetadataInspectionPermit {
+    fn acquire() -> Result<Self, AppError> {
+        loop {
+            let active = ACTIVE_METADATA_INSPECTIONS.load(Ordering::Acquire);
+            if active >= MAX_CONCURRENT_METADATA_INSPECTIONS {
+                return Err(AppError::Invalid("metadata inspection is busy".into()));
+            }
+            if ACTIVE_METADATA_INSPECTIONS
+                .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(Self);
+            }
+        }
+    }
+}
+
+impl Drop for MetadataInspectionPermit {
+    fn drop(&mut self) {
+        ACTIVE_METADATA_INSPECTIONS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[tauri::command]
+async fn resource_inspect(
+    state: State<'_, AppState>,
+    resource_id: String,
+    force_refresh: Option<bool>,
+) -> Result<Vec<ResourceMetadata>, AppError> {
+    Uuid::parse_str(&resource_id)
+        .map_err(|_| AppError::Invalid("resource id must be a UUID".into()))?;
+    let conn = Arc::clone(&state.0);
+    let force_refresh = force_refresh.unwrap_or(false);
+    let permit = MetadataInspectionPermit::acquire()?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let inspection = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        inspect_resource_metadata_on_db_with_cancel(
+            &conn,
+            &resource_id,
+            force_refresh,
+            Some(worker_cancelled),
+        )
+    });
+    match tokio::time::timeout(METADATA_INSPECTION_TIMEOUT, inspection).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(AppError::Invalid("metadata inspection task failed".into())),
+        Err(_) => {
+            cancelled.store(true, Ordering::Release);
+            Err(AppError::Invalid("metadata inspection timed out".into()))
+        }
+    }
+}
+
+#[cfg(test)]
+fn inspect_resource_metadata(
+    conn: &Connection,
+    resource_id: &str,
+    force_refresh: bool,
+) -> Result<Vec<ResourceMetadata>, AppError> {
+    let snapshot = load_metadata_snapshot(conn, resource_id)?;
+    let records = inspect_metadata_snapshot(
+        resource_id,
+        snapshot,
+        force_refresh,
+        None,
+        inspect_target_filesystem,
+        |record| store_metadata_record(conn, record),
+    )?;
+    prune_metadata_cache(conn)?;
+    Ok(records)
+}
+
+fn inspect_resource_metadata_on_db_with_cancel(
+    db: &Arc<Mutex<Connection>>,
+    resource_id: &str,
+    force_refresh: bool,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<Vec<ResourceMetadata>, AppError> {
+    inspect_resource_metadata_on_db_with(
+        db,
+        resource_id,
+        force_refresh,
+        cancelled,
+        inspect_target_filesystem,
+    )
+}
+
+fn inspect_resource_metadata_on_db_with<F>(
+    db: &Arc<Mutex<Connection>>,
+    resource_id: &str,
+    force_refresh: bool,
+    cancelled: Option<Arc<AtomicBool>>,
+    inspector: F,
+) -> Result<Vec<ResourceMetadata>, AppError>
+where
+    F: FnMut(&str, &ResourceTarget) -> ResourceMetadata,
+{
+    let snapshot = {
+        let conn = db
+            .lock()
+            .map_err(|_| AppError::Invalid("database lock poisoned".into()))?;
+        load_metadata_snapshot(&conn, resource_id)?
+    };
+    let records = inspect_metadata_snapshot(
+        resource_id,
+        snapshot,
+        force_refresh,
+        cancelled.as_deref(),
+        inspector,
+        |record| {
+            let conn = db
+                .lock()
+                .map_err(|_| AppError::Invalid("database lock poisoned".into()))?;
+            store_metadata_record(&conn, record)
+        },
+    )?;
+    let conn = db
+        .lock()
+        .map_err(|_| AppError::Invalid("database lock poisoned".into()))?;
+    prune_metadata_cache(&conn)?;
+    Ok(records)
+}
+
+fn load_metadata_snapshot(
+    conn: &Connection,
+    resource_id: &str,
+) -> Result<Vec<(ResourceTarget, Option<ResourceMetadata>)>, AppError> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM resources WHERE id=?1)",
+        [resource_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare("SELECT id,kind,canonical_uri,priority,arguments_json,working_directory,active FROM resource_targets WHERE resource_id=?1 AND active=1 ORDER BY priority DESC,id LIMIT ?2")?;
+    let targets = stmt
+        .query_map(
+            params![resource_id, (MAX_METADATA_TARGETS + 1) as i64],
+            |row| {
+                Ok(ResourceTarget {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    canonical_uri: row.get(2)?,
+                    priority: row.get(3)?,
+                    arguments: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
+                    working_directory: row.get(5)?,
+                    active: row.get::<_, i64>(6)? != 0,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    if targets.len() > MAX_METADATA_TARGETS {
+        return Err(AppError::Invalid(format!(
+            "resource has more than {MAX_METADATA_TARGETS} active targets"
+        )));
+    }
+    targets
+        .into_iter()
+        .map(|target| {
+            let cached = load_cached_metadata(conn, resource_id, &target.id)?;
+            Ok((target, cached))
+        })
+        .collect()
+}
+
+fn inspect_metadata_snapshot<F, S>(
+    resource_id: &str,
+    snapshot: Vec<(ResourceTarget, Option<ResourceMetadata>)>,
+    force_refresh: bool,
+    cancelled: Option<&AtomicBool>,
+    mut inspector: F,
+    mut store: S,
+) -> Result<Vec<ResourceMetadata>, AppError>
+where
+    F: FnMut(&str, &ResourceTarget) -> ResourceMetadata,
+    S: FnMut(&ResourceMetadata) -> Result<(), AppError>,
+{
+    let mut records = Vec::with_capacity(snapshot.len());
+    for (target, cached) in snapshot {
+        if cancelled.is_some_and(|value| value.load(Ordering::Acquire)) {
+            return Err(AppError::Invalid("metadata inspection cancelled".into()));
+        }
+        if !force_refresh {
+            if let Some(mut cached_record) = cached.clone() {
+                if cache_is_fresh(&cached_record) {
+                    if cached_record.cache_status != "error" {
+                        cached_record.cache_status = "cached".into();
+                    }
+                    records.push(cached_record);
+                    continue;
+                }
+            }
+        }
+        let mut inspected = inspector(resource_id, &target);
+        if cancelled.is_some_and(|value| value.load(Ordering::Acquire)) {
+            return Err(AppError::Invalid("metadata inspection cancelled".into()));
+        }
+        if inspected.cache_status == "error" {
+            if let Some(previous) = cached {
+                inspected.file_size_bytes = previous.file_size_bytes;
+                inspected.created_utc = previous.created_utc;
+                inspected.modified_utc = previous.modified_utc;
+                inspected.provenance = previous.provenance;
+            }
+        }
+        store(&inspected)?;
+        records.push(inspected);
+    }
+    Ok(records)
+}
+
+fn load_cached_metadata(
+    conn: &Connection,
+    resource_id: &str,
+    target_id: &str,
+) -> Result<Option<ResourceMetadata>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT inspected_utc,file_size_bytes,created_utc,modified_utc,availability,provenance,cache_status,error_code FROM metadata_cache WHERE resource_id=?1 AND target_id=?2",
+            params![resource_id, target_id],
+            |row| {
+                Ok(ResourceMetadata {
+                    resource_id: resource_id.to_string(),
+                    target_id: target_id.to_string(),
+                    inspected_utc: row.get(0)?,
+                    file_size_bytes: row.get::<_, Option<i64>>(1)?.and_then(|size| u64::try_from(size).ok()),
+                    created_utc: row.get(2)?,
+                    modified_utc: row.get(3)?,
+                    availability: row.get(4)?,
+                    provenance: row.get(5)?,
+                    cache_status: row.get(6)?,
+                    error_code: row.get(7)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn cache_is_fresh(cached: &ResourceMetadata) -> bool {
+    chrono::DateTime::parse_from_rfc3339(&cached.inspected_utc)
+        .map(|inspected| {
+            Utc::now().signed_duration_since(inspected)
+                < chrono::Duration::from_std(METADATA_CACHE_TTL).unwrap_or_default()
+        })
+        .unwrap_or(false)
+}
+
+fn store_metadata_record(conn: &Connection, record: &ResourceMetadata) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO metadata_cache(resource_id,target_id,inspected_utc,file_size_bytes,created_utc,modified_utc,availability,provenance,cache_status,error_code) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(resource_id,target_id) DO UPDATE SET inspected_utc=excluded.inspected_utc,file_size_bytes=excluded.file_size_bytes,created_utc=excluded.created_utc,modified_utc=excluded.modified_utc,availability=excluded.availability,provenance=excluded.provenance,cache_status=excluded.cache_status,error_code=excluded.error_code",
+        params![record.resource_id,record.target_id,record.inspected_utc,record.file_size_bytes.and_then(|value|i64::try_from(value).ok()),record.created_utc,record.modified_utc,record.availability,record.provenance,record.cache_status,record.error_code],
+    )?;
+    Ok(())
+}
+
+fn prune_metadata_cache(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "DELETE FROM metadata_cache WHERE rowid IN (SELECT rowid FROM metadata_cache ORDER BY inspected_utc DESC LIMIT -1 OFFSET ?1)",
+        [MAX_METADATA_CACHE_ROWS as i64],
+    )?;
+    Ok(())
+}
+
+fn inspect_target_filesystem(resource_id: &str, target: &ResourceTarget) -> ResourceMetadata {
+    let inspected_utc = now_utc();
+    let mut result = ResourceMetadata {
+        resource_id: resource_id.into(),
+        target_id: target.id.clone(),
+        inspected_utc,
+        file_size_bytes: None,
+        created_utc: None,
+        modified_utc: None,
+        availability: "unsupported".into(),
+        provenance: "unsupported".into(),
+        cache_status: "fresh".into(),
+        error_code: None,
+    };
+    if is_network_path(&target.canonical_uri) {
+        result.error_code = Some("network_path_skipped".into());
+        return result;
+    }
+    if !matches!(target.kind.as_str(), "file" | "folder" | "app" | "shortcut") {
+        result.error_code = Some("not_local_file".into());
+        return result;
+    }
+    result.provenance = "local-filesystem".into();
+    match std::fs::metadata(&target.canonical_uri) {
+        Ok(metadata) => {
+            result.availability = "available".into();
+            if metadata.is_file() {
+                result.file_size_bytes = Some(metadata.len());
+            }
+            result.created_utc = metadata.created().ok().map(system_time_to_utc);
+            result.modified_utc = metadata.modified().ok().map(system_time_to_utc);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            result.availability = "missing".into();
+            result.error_code = Some("not_found".into());
+        }
+        Err(error) => {
+            result.availability = "inaccessible".into();
+            result.cache_status = "error".into();
+            result.error_code = Some(if error.kind() == std::io::ErrorKind::PermissionDenied {
+                "permission_denied".into()
+            } else {
+                "metadata_error".into()
+            });
+        }
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn is_network_path(path: &str) -> bool {
+    path.replace('/', "\\").starts_with("\\\\")
+}
+
+#[cfg(windows)]
+fn is_network_path(path: &str) -> bool {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    if path.replace('/', "\\").starts_with("\\\\") {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    if bytes.len() < 3 || bytes[1] != b':' || bytes[2] != b'\\' && bytes[2] != b'/' {
+        return false;
+    }
+    let root = format!("{}:\\", bytes[0] as char);
+    let root: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+    const DRIVE_REMOTE: u32 = 4;
+    unsafe { GetDriveTypeW(windows::core::PCWSTR(root.as_ptr())) == DRIVE_REMOTE }
+}
+
+fn system_time_to_utc(value: std::time::SystemTime) -> String {
+    chrono::DateTime::<Utc>::from(value).to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[tauri::command]
+fn analytics_summary(
+    state: State<'_, AppState>,
+    profile_id: Option<String>,
+    since_utc: Option<String>,
+) -> Result<AnalyticsSummary, AppError> {
+    if let Some(pid) = profile_id.as_ref() {
+        Uuid::parse_str(pid).map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
+    }
+    let since_utc = since_utc
+        .map(|value| {
+            if value.len() > 64 {
+                return Err(AppError::Invalid("sinceUtc is too long".into()));
+            }
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map(|parsed| {
+                    parsed
+                        .with_timezone(&Utc)
+                        .to_rfc3339_opts(SecondsFormat::Millis, true)
+                })
+                .map_err(|_| AppError::Invalid("sinceUtc must be an RFC 3339 timestamp".into()))
+        })
+        .transpose()?;
+    let conn = lock(&state)?;
+    analytics_summary_for(&conn, profile_id.as_deref(), since_utc.as_deref())
+}
+
+fn analytics_summary_for(
+    conn: &Connection,
+    profile_id: Option<&str>,
+    since_utc: Option<&str>,
+) -> Result<AnalyticsSummary, AppError> {
+    let mut stmt = conn.prepare("SELECT source,status,COUNT(*),MIN(launched_at_utc),MAX(launched_at_utc) FROM launch_events WHERE (?1 IS NULL OR profile_id=?1) AND (?2 IS NULL OR launched_at_utc>=?2) GROUP BY source,status ORDER BY source,status")?;
+    let mut summary = AnalyticsSummary {
+        total_launches: 0,
+        by_source: BTreeMap::new(),
+        by_status: BTreeMap::new(),
+        first_event_utc: None,
+        last_event_utc: None,
+    };
+    for row in stmt.query_map(params![profile_id, since_utc], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, u64>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })? {
+        let (source, status, count, first, last) = row?;
+        summary.total_launches += count;
+        *summary.by_source.entry(source).or_default() += count;
+        *summary.by_status.entry(status).or_default() += count;
+        if let Some(first) = first {
+            if summary
+                .first_event_utc
+                .as_ref()
+                .is_none_or(|current| first < *current)
+            {
+                summary.first_event_utc = Some(first);
+            }
+        }
+        if let Some(last) = last {
+            if summary
+                .last_event_utc
+                .as_ref()
+                .is_none_or(|current| last > *current)
+            {
+                summary.last_event_utc = Some(last);
+            }
+        }
+    }
+    Ok(summary)
+}
+
 #[cfg(windows)]
 fn launch_target(_app: &tauri::AppHandle, target: &ResourceTarget) -> Result<(), AppError> {
     use windows::{
@@ -1671,7 +2146,7 @@ pub fn run() {
                 eprintln!("Could not load default profile shortcut: {error}");
                 QUICK_LAUNCH_HOTKEY_SPEC.into()
             });
-            app.manage(AppState(Mutex::new(conn)));
+            app.manage(AppState(Arc::new(Mutex::new(conn))));
             let status = match normalize_shortcut(&desired) {
                 Ok(requested) => switch_hotkey(
                     &requested,
@@ -1709,6 +2184,7 @@ pub fn run() {
             resource_delete,
             resource_search,
             resource_launch,
+            resource_inspect,
             profile_list,
             profile_create,
             profile_switch,
@@ -1716,7 +2192,8 @@ pub fn run() {
             layout_save,
             quick_launch_hotkey_status,
             quick_launch_hotkey_set,
-            analytics_query
+            analytics_query,
+            analytics_summary
         ]);
 
     let app = builder
@@ -2025,6 +2502,209 @@ mod tests {
         load_resource_details(&conn, &mut loaded, None).unwrap();
         assert_eq!(loaded.launch_count, 1);
         assert!(loaded.last_launched_utc.is_some());
+    }
+
+    #[test]
+    fn metadata_inspection_caches_size_and_force_refreshes_local_file() {
+        let mut conn = database();
+        let r = resource("Metadata file");
+        persist_resource(&mut conn, &r, true, None).unwrap();
+        let path = std::env::temp_dir().join(format!("sw007-{}.dat", Uuid::new_v4()));
+        std::fs::write(&path, b"first").unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET kind='file',canonical_uri=?1 WHERE resource_id=?2",
+            params![path.to_string_lossy(), r.id],
+        )
+        .unwrap();
+        let first = inspect_resource_metadata(&conn, &r.id, false).unwrap();
+        assert_eq!(first[0].availability, "available");
+        assert_eq!(first[0].provenance, "local-filesystem");
+        assert_eq!(first[0].cache_status, "fresh");
+        assert_eq!(first[0].file_size_bytes, Some(5));
+        assert!(first[0].modified_utc.is_some());
+        std::fs::write(&path, b"updated size").unwrap();
+        let cached = inspect_resource_metadata(&conn, &r.id, false).unwrap();
+        assert_eq!(cached[0].cache_status, "cached");
+        assert_eq!(cached[0].file_size_bytes, Some(5));
+        let refreshed = inspect_resource_metadata(&conn, &r.id, true).unwrap();
+        assert_eq!(refreshed[0].cache_status, "fresh");
+        assert_eq!(refreshed[0].file_size_bytes, Some(12));
+        let stale_snapshot = load_metadata_snapshot(&conn, &r.id).unwrap();
+        let transient_error = inspect_metadata_snapshot(
+            &r.id,
+            stale_snapshot,
+            true,
+            None,
+            |resource_id, target| ResourceMetadata {
+                resource_id: resource_id.into(),
+                target_id: target.id.clone(),
+                inspected_utc: now_utc(),
+                file_size_bytes: None,
+                created_utc: None,
+                modified_utc: None,
+                availability: "inaccessible".into(),
+                provenance: "local-filesystem".into(),
+                cache_status: "error".into(),
+                error_code: Some("metadata_error".into()),
+            },
+            |record| store_metadata_record(&conn, record),
+        )
+        .unwrap();
+        assert_eq!(transient_error[0].file_size_bytes, Some(12));
+        assert_eq!(transient_error[0].availability, "inaccessible");
+        assert_eq!(transient_error[0].cache_status, "error");
+        std::fs::remove_file(path).unwrap();
+        let missing = inspect_resource_metadata(&conn, &r.id, true).unwrap();
+        assert_eq!(missing[0].availability, "missing");
+        assert_eq!(missing[0].error_code.as_deref(), Some("not_found"));
+    }
+
+    #[test]
+    fn metadata_filesystem_work_runs_without_holding_the_database_mutex() {
+        let mut conn = database();
+        let r = resource("Slow metadata");
+        persist_resource(&mut conn, &r, true, None).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let inspector_db = Arc::clone(&db);
+        let lock_was_available = std::sync::atomic::AtomicBool::new(false);
+        let lock_was_available_ref = &lock_was_available;
+        let result = inspect_resource_metadata_on_db_with(
+            &db,
+            &r.id,
+            true,
+            None,
+            move |resource_id, target| {
+                lock_was_available_ref.store(inspector_db.try_lock().is_ok(), Ordering::Release);
+                std::thread::sleep(Duration::from_millis(25));
+                ResourceMetadata {
+                    resource_id: resource_id.into(),
+                    target_id: target.id.clone(),
+                    inspected_utc: now_utc(),
+                    file_size_bytes: Some(7),
+                    created_utc: None,
+                    modified_utc: None,
+                    availability: "available".into(),
+                    provenance: "local-filesystem".into(),
+                    cache_status: "fresh".into(),
+                    error_code: None,
+                }
+            },
+        )
+        .unwrap();
+        assert!(lock_was_available.load(Ordering::Acquire));
+        assert_eq!(result[0].file_size_bytes, Some(7));
+    }
+
+    #[test]
+    fn timed_out_metadata_work_stops_at_the_next_cancellation_checkpoint() {
+        let mut conn = database();
+        let r = resource("Cancelled metadata");
+        persist_resource(&mut conn, &r, true, None).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let result = inspect_resource_metadata_on_db_with(
+            &db,
+            &r.id,
+            true,
+            Some(Arc::clone(&cancelled)),
+            move |resource_id, target| {
+                worker_cancelled.store(true, Ordering::Release);
+                ResourceMetadata {
+                    resource_id: resource_id.into(),
+                    target_id: target.id.clone(),
+                    inspected_utc: now_utc(),
+                    file_size_bytes: Some(7),
+                    created_utc: None,
+                    modified_utc: None,
+                    availability: "available".into(),
+                    provenance: "local-filesystem".into(),
+                    cache_status: "fresh".into(),
+                    error_code: None,
+                }
+            },
+        );
+        assert!(result.is_err());
+        let conn = db.lock().unwrap();
+        let cached_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM metadata_cache", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached_count, 0);
+    }
+
+    #[test]
+    fn metadata_skips_network_targets_and_caps_active_target_count() {
+        let mut conn = database();
+        let r = resource("Network target");
+        persist_resource(&mut conn, &r, true, None).unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET kind='file',canonical_uri='\\\\server\\share\\document.txt' WHERE resource_id=?1",
+            [&r.id],
+        )
+        .unwrap();
+        let skipped = inspect_resource_metadata(&conn, &r.id, true).unwrap();
+        assert_eq!(skipped[0].availability, "unsupported");
+        assert_eq!(skipped[0].provenance, "unsupported");
+        assert_eq!(
+            skipped[0].error_code.as_deref(),
+            Some("network_path_skipped")
+        );
+        for _ in 0..MAX_METADATA_TARGETS {
+            let mut target = sample_target();
+            target.id = Uuid::new_v4().to_string();
+            target.canonical_uri = format!("C:\\unused\\{}.txt", target.id);
+            conn.execute(
+                "INSERT INTO resource_targets(id,resource_id,kind,canonical_uri,priority,arguments_json,active) VALUES (?1,?2,'file',?3,0,'[]',1)",
+                params![target.id, r.id, target.canonical_uri],
+            )
+            .unwrap();
+        }
+        assert!(inspect_resource_metadata(&conn, &r.id, true).is_err());
+    }
+
+    #[test]
+    fn analytics_summary_aggregates_only_local_launch_events_by_profile_source_and_status() {
+        let conn = database();
+        let pid = profile(&conn);
+        for (source, status, timestamp, profile_id) in [
+            (
+                "dashboard",
+                "handed_off",
+                "2026-10-19T10:00:00Z",
+                Some(pid.as_str()),
+            ),
+            (
+                "quick_launch",
+                "failed",
+                "2026-10-20T10:00:00Z",
+                Some(pid.as_str()),
+            ),
+            ("dock", "handed_off", "2026-10-21T10:00:00Z", None),
+        ] {
+            conn.execute(
+                "INSERT INTO launch_events(id,request_id,resource_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),profile_id,source,timestamp,status],
+            )
+            .unwrap();
+        }
+        let summary = analytics_summary_for(&conn, Some(&pid), None).unwrap();
+        assert_eq!(summary.total_launches, 2);
+        assert_eq!(summary.by_source.get("dashboard"), Some(&1));
+        assert_eq!(summary.by_source.get("quick_launch"), Some(&1));
+        assert_eq!(summary.by_status.get("handed_off"), Some(&1));
+        assert_eq!(summary.by_status.get("failed"), Some(&1));
+        assert_eq!(
+            summary.first_event_utc.as_deref(),
+            Some("2026-10-19T10:00:00Z")
+        );
+        assert_eq!(
+            summary.last_event_utc.as_deref(),
+            Some("2026-10-20T10:00:00Z")
+        );
+        let after =
+            analytics_summary_for(&conn, Some(&pid), Some("2026-10-20T00:00:00.000Z")).unwrap();
+        assert_eq!(after.total_launches, 1);
+        assert_eq!(after.by_source.get("quick_launch"), Some(&1));
     }
 
     #[test]
@@ -2494,7 +3174,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",
@@ -2511,12 +3191,21 @@ mod tests {
             )
             .unwrap();
         assert!(n >= 7);
+        let metadata_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='metadata_cache'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(metadata_table, 1);
     }
 
     #[test]
     fn migration_upgrades_legacy_profile_and_launch_tables() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_utc TEXT NOT NULL); CREATE TABLE resources(id TEXT PRIMARY KEY,resource_type TEXT NOT NULL,display_name TEXT NOT NULL,description TEXT,icon TEXT,default_action TEXT NOT NULL,created_utc TEXT NOT NULL,updated_utc TEXT NOT NULL); CREATE TABLE resource_targets(id TEXT PRIMARY KEY,resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,kind TEXT NOT NULL,canonical_uri TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0,arguments_json TEXT NOT NULL DEFAULT '[]',working_directory TEXT,active INTEGER NOT NULL DEFAULT 1); CREATE TABLE profiles(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE COLLATE NOCASE,theme_id TEXT NOT NULL DEFAULT 'system',settings_json TEXT NOT NULL DEFAULT '{}'); CREATE TABLE profile_resources(profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,favorite INTEGER NOT NULL DEFAULT 0,sort_position INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(profile_id,resource_id)); CREATE TABLE launch_events(id TEXT PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,resource_id TEXT NOT NULL,target_id TEXT,profile_id TEXT,source TEXT NOT NULL,launched_at_utc TEXT NOT NULL,status TEXT NOT NULL,error_code TEXT);") .unwrap();
+        conn.execute_batch("CREATE TABLE metadata_cache(resource_id TEXT NOT NULL,target_id TEXT NOT NULL,inspected_utc TEXT NOT NULL,file_size_bytes INTEGER,created_utc TEXT,modified_utc TEXT,availability TEXT NOT NULL,provenance TEXT NOT NULL,error_code TEXT,PRIMARY KEY(resource_id,target_id));").unwrap();
         migrate_database(&conn).unwrap();
         let created: String = conn
             .query_row(
@@ -2526,6 +3215,14 @@ mod tests {
             )
             .unwrap();
         assert!(!created.is_empty());
+        let cache_status_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('metadata_cache') WHERE name='cache_status'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cache_status_column, 1);
         let message_column: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('launch_events') WHERE name='message'",

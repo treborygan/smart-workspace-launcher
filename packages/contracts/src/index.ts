@@ -86,8 +86,12 @@ export interface LaunchEvent extends LaunchResult {
 }
 
 export interface QuickLaunchHotkeyStatus {
+  /** Whether the requested shortcut is currently registered. */
   registered: boolean;
+  /** Requested or configured shortcut. */
   shortcut: string;
+  /** Previously active shortcut when a replacement failed. */
+  activeShortcut?: string;
   errorCode?: string;
 }
 
@@ -126,6 +130,7 @@ export interface CommandMap {
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
+  quick_launch_hotkey_set: { args: { profileId: string; shortcut: string }; result: QuickLaunchHotkeyStatus };
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
 }
 

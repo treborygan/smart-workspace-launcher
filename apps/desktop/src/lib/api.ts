@@ -1,9 +1,14 @@
-import { invokeTyped, listenTyped } from "@sw/contracts";
-import type { DashboardLayout, LaunchSource, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
+import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
+import type { AppEventMap, DashboardLayout, LaunchSource, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
 const isNative = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const activeProfileId = () => typeof localStorage === "undefined" ? undefined : localStorage.getItem("swl-active-profile") || undefined;
+async function notifyWorkspaceChanged(profileId?: string) {
+  const currentProfileId = profileId || activeProfileId();
+  if (isNative() && currentProfileId) await emitTyped("workspace-state-changed", { profileId: currentProfileId });
+}
 
 const now = new Date().toISOString();
 const demoResources: Resource[] = [
@@ -27,14 +32,14 @@ export const api = {
     return readDemo();
   },
   async create(draft: ResourceDraft): Promise<Resource> {
-    if (isNative()) return invokeTyped("resource_create", { resource: draft });
+    if (isNative()) { const result = await invokeTyped("resource_create", { resource: draft }); await notifyWorkspaceChanged(draft.profileId); return result; }
     const resources = readDemo();
     const targets: ResourceTarget[] = draft.targets.map((target) => ({ id: target.id ?? crypto.randomUUID(), kind: target.kind, canonicalUri: target.canonicalUri, priority: target.priority, arguments: target.arguments, workingDirectory: target.workingDirectory || undefined, active: target.active }));
     const created: Resource = { ...draft, defaultAction: draft.defaultAction || "open", id: crypto.randomUUID(), createdUtc: new Date().toISOString(), updatedUtc: new Date().toISOString(), targets, tags: draft.tags || [], aliases: draft.aliases || [], favorite: false, launchCount: 0 };
     writeDemo([...resources, created]); return created;
   },
   async update(id: string, patch: ResourcePatch): Promise<Resource> {
-    if (isNative()) return invokeTyped("resource_update", { id, patch });
+    if (isNative()) { const result = await invokeTyped("resource_update", { id, patch }); await notifyWorkspaceChanged(patch.profileId); return result; }
     const resources: Resource[] = readDemo().map((r) => {
       if (r.id !== id) return r;
       const next = { ...r, ...patch, updatedUtc: new Date().toISOString() };
@@ -43,12 +48,12 @@ export const api = {
     });
     writeDemo(resources); return resources.find((r) => r.id === id)!;
   },
-  async remove(id: string): Promise<void> {
-    if (isNative()) return invokeTyped("resource_delete", { id });
+  async remove(id: string, profileId?: string): Promise<void> {
+    if (isNative()) { await invokeTyped("resource_delete", { id }); await notifyWorkspaceChanged(profileId); return; }
     writeDemo(readDemo().filter((r) => r.id !== id));
   },
   async launch(id: string, source: LaunchSource = "dashboard", profileId?: string): Promise<LaunchResult> {
-    if (isNative()) return invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId } });
+    if (isNative()) { const result = await invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId } }); if (result.status !== "failed") await notifyWorkspaceChanged(profileId); return result; }
     throw new Error("Native launch is available in the Windows desktop app. This browser preview does not open local resources.");
   },
   async search(query: string, profileId: string | undefined, fallbackResources: Resource[]): Promise<Resource[]> {
@@ -68,6 +73,9 @@ export const api = {
   onQuickLaunchHotkeyStatus(handler: (status: QuickLaunchHotkeyStatus) => void): Promise<() => void> {
     return isNative() ? listenTyped("quick-launch-hotkey-status", handler) : Promise.resolve(() => undefined);
   },
+  onWorkspaceStateChanged(handler: (payload: AppEventMap["workspace-state-changed"]) => void): Promise<() => void> {
+    return isNative() ? listenTyped("workspace-state-changed", handler) : Promise.resolve(() => undefined);
+  },
   async quickLaunchHotkeyStatus(): Promise<QuickLaunchHotkeyStatus> {
     if (isNative()) return invokeTyped("quick_launch_hotkey_status");
     return { registered: true, shortcut: "Alt+Space" };
@@ -79,7 +87,7 @@ export const api = {
     return status;
   },
   async switchProfile(profileId: string): Promise<Profile> {
-    if (isNative()) return invokeTyped("profile_switch", { profileId });
+    if (isNative()) { const result = await invokeTyped("profile_switch", { profileId }); await notifyWorkspaceChanged(profileId); return result; }
     return (await api.profiles()).find((profile) => profile.id === profileId) || (await api.profiles())[0];
   },
   async hideCurrentWindow(): Promise<void> {
@@ -87,19 +95,26 @@ export const api = {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().hide();
   },
+  async setDockVisibility(visible: boolean): Promise<void> {
+    if (!isNative()) { localStorage.setItem("swl-dock-visible", String(visible)); return; }
+    const { getAllWindows } = await import("@tauri-apps/api/window");
+    const dock = (await getAllWindows()).find((item) => item.label === "dock");
+    if (!dock) throw new Error("The Dock window is not available.");
+    if (visible) await dock.show(); else await dock.hide();
+  },
   async profiles(): Promise<Profile[]> {
     if (isNative()) return invokeTyped("profile_list");
     return [{ id: "default", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: now, updatedUtc: now }];
   },
-  async layout(profileId: string): Promise<DashboardLayout | null> {
-    if (isNative()) return invokeTyped("layout_get", { profileId, surface: "dashboard" });
+  async layout(profileId: string, surface: "dashboard" | "dock" = "dashboard"): Promise<DashboardLayout | null> {
+    if (isNative()) return invokeTyped("layout_get", { profileId, surface });
     try {
-      const saved = localStorage.getItem(`swl-layout-${profileId}-dashboard`);
+      const saved = localStorage.getItem(`swl-layout-${profileId}-${surface}`);
       return saved ? JSON.parse(saved) as DashboardLayout : null;
     } catch { return null; }
   },
   async saveLayout(layout: DashboardLayout): Promise<DashboardLayout> {
-    if (isNative()) return invokeTyped("layout_save", { layout });
+    if (isNative()) { const result = await invokeTyped("layout_save", { layout }); await notifyWorkspaceChanged(layout.profileId); return result; }
     localStorage.setItem(`swl-layout-${layout.profileId}-${layout.surface}`, JSON.stringify(layout));
     return layout;
   },

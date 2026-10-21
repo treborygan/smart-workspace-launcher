@@ -1,44 +1,36 @@
 # Current implementation status
 
-Updated 2026-10-21 21:26 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Coordinator: GPT-6 Luna Medium. PRs #26 (SW-001..004), #27 (SW-005), #29 (SW-009), #30 (SW-007 backend), #33 (SW-007 UI integration), and #34 (SW-008 archive import/export) have merged to `main`. Corrective PR #32 was merged into the bootstrap branch before PR #26, so `main` contains the QA-reviewed atomic update fix. UI PR #31 was closed as superseded by #33 after its base conflicted with already merged UI/backend changes. SW-008 PR #34 merged as `60fd44f5b0144f66ec05df9cf68922a6dd6e212b` after backend/UI QA review. Draft PR #35 is open for SW-010 on `feature/sw-010-ui`; latest-main README sync is included. SW-011 backend hardening is prepared on `feature/sw-011-backend-security` for dependency-ordered integration.
+Updated 2026-10-21 22:00 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-010 PR #35 merged to `main` as `9c8f8a7`. SW-011 integrated branch `feature/sw-011-integration` is based on that merge and includes hardening commits `737e7e9`, `070f697`, and `b7fe9b6`; QA review found no blocker.
 
-| Work item | State | Evidence / remaining work |
-|---|---|---|
-| SW-001 bootstrap | IMPLEMENTED | Tauri 2 + React/TypeScript + Rust foundation and typed IPC merged via #26. QA-discovered resource update partial-mutation defect fixed atomically; focused regression test authored, but Rust execution blocked on Linux GLib. |
-| SW-002 database/domain | IMPLEMENTED; RUNTIME PARTIAL | SQLite WAL/migrations, profiles/resources/layouts merged. Rust tests are authored but blocked before compilation by missing GTK/GLib development libraries. |
-| SW-003 resource/launch/history | IMPLEMENTED; WINDOWS CHECK BLOCKED | CRUD, search, Shell handoff, request idempotency, local launch history and atomic resource/profile update merged. Native Windows Shell behavior remains unverified. |
-| SW-004 profiles/layouts | IMPLEMENTED | Profile switching and per-profile dashboard/Dock layout persistence with validation. Profile import/export is SW-008. |
-| SW-005 Quick Launch/search | IMPLEMENTED; WINDOWS CHECK BLOCKED | Separate Quick Launch window, global shortcut registration, profile-specific configurable shortcut, conflict status, keyboard search and bounded fuzzy ranking merged via #27. Real Windows behavior unverified. |
-| SW-006/SW-010 UI | PARTIAL; PR #35 IN REVIEW | Dashboard, Explorer, Inspector, profile layouts, themes and Quick Launch exist. Full responsive grid acceptance and remaining integration are not complete. |
-| SW-007 metadata/analytics | IMPLEMENTED; WINDOWS CHECK BLOCKED | Bounded local metadata cache/inspection, provenance, Inspector UI and app-recorded analytics merged via #30/#33. UI handles stale responses on target URI/kind changes. Does not observe external opens. Windows filesystem behavior unverified. |
-| SW-008 import/export | IMPLEMENTED; RUST RUNTIME TESTS BLOCKED | Merged PR #34 contains bounded production `.swprofile` export/import, strict ZIP validation, read-only preview, transactional Duplicate/Merge/Replace, ID remapping and no-clobber export finalization. Core fixed both QA blockers: commit requires the previewed package SHA-256 and a fingerprint over the preview/conflict snapshot; Merge reuses only equivalent resources and imports differing collisions under remapped IDs. Preview includes imported/existing/proposed snapshots. QA reviewed head `adaab02` and confirmed the backend blockers are fixed. Native Tauri dialog plugin and open/save capabilities are included. UI integration is complete and strategy-aware. QA reviewed the combined UI/backend and found no blocker. `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` passes on combined SW-008: 89 packages installed, 5 files/38 tests pass, build and diff check pass. Vite emits a non-failing ineffective dynamic import warning. Rust tests are authored but cannot compile on Linux because GLib >=2.70 development files are missing; Windows GNU check is blocked by missing MinGW compiler. |
-| SW-009 Dock | IMPLEMENTED; WINDOWS CHECK BLOCKED | Independent Dock, profile pins/layout, cross-window state, geometry clamp and hide-on-unfocus behavior merged via #29. Native placement, DPI, multi-monitor and Windows behavior unverified. |
-| SW-011 integration | IN PROGRESS (BACKEND PREPARATION) | Core pushed branch `feature/sw-011-backend-security`: theme API commit `3d76767` (isolated for SW-010 integration) plus hardening commit `f767844`. Changes include Windows path checks, HTTPS credential rejection, launch request replay/membership validation, active-profile attribution, profile name limits, SQLite timeout/trusted schema, and theme settings persistence. QA found a medium replay-validation gap: a launch request reused with target_id omitted after an explicit target can return the previous result for a different requested action. Core fixed this in `f1e8bc2` and `b42ff26`: replay resolves requested intent, rejects mismatch, and rejects explicit unknown/inactive/cross-resource target before replay lookup. Tests cover explicit-lower vs default mismatch, null/default idempotency, and unknown target after a no-target failure. QA re-review cleared the blocker. Residual caveat: a formerly valid explicit target request replayed after target deactivation returns NotFound; no duplicate launch occurs. Path/URL/theme/membership/SQLite review otherwise sound. Do not open/merge this branch until SW-010 is ready and dependency order is maintained. Backend Rust tests remain blocked by this environment. |
-| SW-012 Windows acceptance/release | BLOCKED | No PowerShell or real Windows 11 x64 host. No EXE, portable package or Release upload. `releases/v1/readiness.json` remains BLOCKED. |
-| SW-013..SW-025 | NOT STARTED | V1.1, V1.2 and V2.0 work remains queued after V1 gates; V1 is not project completion. |
+## Environment and release status
 
-## Executed checks
+Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a real Windows 11 x64 host are unavailable. Linux Rust tests stop before project compilation because GLib >=2.70 development files are missing; Windows GNU checks cannot run without MinGW. No Windows binary, portable package, installer, GitHub Release upload, or V1 READY notice exists. `releases/v1/readiness.json` remains BLOCKED. `.github/workflows/` remains absent.
 
-Environment: Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable. No PowerShell or Windows 11 x64 host is available.
+## Completed implementation
 
-- On SW-007 UI integration branch `2ca6ecc`: `npm ci` — PASS (88 packages); `npm run typecheck` — PASS; `npm test` — PASS (4 files, 31 tests); `npm run frontend:build` — PASS; `git diff --check` — PASS. QA independently repeated typecheck, tests, build and diff check with no blocking issues.
-- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check` — PASS on corrective commit `80d797c` and SW-008 backend head `adaab02`.
-- `git diff --check` — PASS on corrective commit `80d797c`.
-- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — BLOCKED before test compilation: missing `glib-2.0 >= 2.70` development package. SW-008 Rust regressions are authored but not executed.
-- Windows GNU target type-check previously passed for SW-007 backend using Linux `cc`, fake `windres`, and a temporary icon; it produced no Windows binary and ran no tests. SW-001 corrective commit was not cross-checked.
-- `python -m unittest discover -s tests -v` — PASS (11 archive QA harness tests only; no production importer).
-- `python scripts/verify_handoff.py` — PASS; reports no compiled app or Windows runtime tests.
-- `python scripts/check_release_gate.py` — BLOCKED as expected (exit 2); real Windows verification unavailable.
-- `git merge-tree --write-tree origin/main origin/feature/sw-007-ui` showed conflicts before integration. The integration branch resolved overlaps; all merged integration tests passed.
-- `.github/workflows/` remains absent. No GitHub Actions were added.
+- SW-001..004 foundation, profiles, CRUD, launch/history and layouts (#26).
+- SW-005 Quick Launch (#27).
+- SW-007 metadata and analytics backend/UI (#30/#33).
+- SW-008 safe profile archive import/export (#34).
+- SW-009 independent Dock (#29).
+- SW-010 Resource Explorer, Inspector, profile themes and responsive dashboard (#35; merged `9c8f8a7`).
+- SW-011 security hardening is integrated locally after SW-010 and QA reviewed. It adds Windows path checks, HTTPS credential rejection, profile/membership launch authorization, replay intent/target validation, profile name limits, and SQLite timeout/trusted schema settings.
+
+## Verification evidence
+
+- `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS on integrated SW-011; 8 frontend test files/56 tests; production build and diff check pass. Vite reports one non-failing ineffective dynamic import warning.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
+- `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1` — PASS.
+- `python -m unittest discover -s tests -v` — PASS (11 archive QA harness tests).
+- `python scripts/verify_handoff.py` — PASS (handoff/schema/fixture checks, not runtime verification).
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — BLOCKED before project compile: missing GLib >=2.70 development files.
+- QA reviewed SW-011 integrated head `b7fe9b6`: no blocker. Caveat: replaying a formerly valid explicit-target request after that target is deactivated returns NotFound; it does not launch again.
+- Performance targets and 10k-resource measurements remain unverified. No Windows acceptance, packaging, DPI/native, startup, memory, or Shell behavior has been confirmed.
 
 ## Next executable tasks
 
-1. Review and merge draft PR #35 after the final branch sync.
-2. Rebase/merge and review SW-011 backend hardening after SW-010, preserving dependency order.
-3. Obtain a real Windows 11 x64 host and run `docs/TEST_AND_ACCEPTANCE.md`; until then V1 is BLOCKED and no READY notice may be sent.
-4. Continue SW-013..SW-025 after V1 gates.
+1. Publish a reviewed SW-011 feature PR when GitHub write/API access is available and merge in dependency order.
+2. Continue SW-013..SW-025 cross-platform work and measurable tests while keeping V1 BLOCKED until real Windows 11 x64 acceptance is available.
+3. Run `docs/TEST_AND_ACCEPTANCE.md` and the checked-in PowerShell verification/packaging scripts on Windows before any release or READY notice.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).
-
-QA gap review for SW-010: Explorer is currently a fixed read-only table; sortable/filterable columns, edit/duplicate/bulk actions, and CSV export remain incomplete. Theme choice is global/transient and does not follow profile mode, system preference, custom accent, or density. Inspector currently shows only the first target and has limited access/connection detail. UI work at `fbf1edf` is complete on `feature/sw-010-ui`: sortable/search/filter Explorer, CSV, bulk Favorites, column chooser, editor for tags/aliases/multiple targets, profile-persisted system/light/dark+accent/density, and responsive card height/order. QA found no contract blocker and independently passed typecheck, 52 tests, build, and diff check. Follow-up `773ede2` adds target priority/arguments/working-directory editing and validation, CSV whitespace-prefixed formula protection with comma/quote/newline tests, profile switch restoration/system media-change tests. `npm run typecheck`, `npm test` (8 files/56 tests), frontend build and diff check pass. QA final review passed at code head `773ede2`; see PR #35 for exact checks. Bulk delete/duplicate and draggable/resizable/reorderable columns remain scoped out. Bulk delete/duplicate and draggable/resizable column controls remain out of scope; Windows acceptance not run. Core has isolated the theme API (`profile_theme_set`, `mode` light/dark/system, accent, density) at `3d76767` for cherry-pick into SW-010. Narrow-width/DPI/native behavior remains Windows acceptance.

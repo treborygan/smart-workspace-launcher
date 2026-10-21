@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T21:26:34Z",
+  "updated_at_utc": "2026-10-21T22:00:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "coordinator/current-main"
+    "branch": "feature/sw-011-integration"
   },
-  "active_pull_request": 35,
+  "active_pull_request": null,
   "subagent_limit": 3,
   "agents": [
     {
@@ -18,10 +18,10 @@
       "effort": "medium",
       "state": "COMPLETE",
       "issue": "SW-011 hardening, security, integration and performance",
-      "branch": "feature/sw-011-backend-security",
-      "commit": "b42ff26",
+      "branch": "feature/sw-011-integration",
+      "commit": "b7fe9b6",
       "pr": null,
-      "task": "SW-011 backend branch ends at b42ff26 with explicit target validation, replay-intent validation, security checks and profile_theme_set. Independent QA re-review pending; no PR/merge until SW-010 dependency is met."
+      "task": "SW-011 integrated on current main after SW-010. Reviewed hardening commits 737e7e9, 070f697, b7fe9b6; QA found no blocker. PR creation pending GitHub API availability."
     },
     {
       "role": "ui",
@@ -30,9 +30,9 @@
       "state": "COMPLETE",
       "issue": "SW-010 Resource Explorer, Inspector, themes",
       "branch": "feature/sw-010-ui",
-      "commit": "773ede220e4b992af76c2ec0cd7945c4d1773d0c",
+      "commit": "3b1d5da",
       "pr": 35,
-      "task": "SW-010 code complete at 773ede2 and ready for review in draft PR #35; docs checkpoint/sync commits follow. 56 frontend tests pass. Remaining scope gaps are declared in PR."
+      "task": "SW-010 PR #35 merged to main at 9c8f8a7. QA approved final code; typecheck, 56 tests, build and diff passed."
     },
     {
       "role": "qa",
@@ -40,10 +40,10 @@
       "effort": "medium",
       "state": "COMPLETE",
       "issue": "SW-010 final review",
-      "branch": "shared-checkout",
-      "commit": "773ede2",
-      "pr": 35,
-      "task": "SW-010 review passed at code head 773ede2: API contract/profile theme integration, Explorer, CSV, editor, multi-target Inspector, layout changes reviewed. Typecheck, 56 tests, build and diff pass. SW-011 b42ff26 replay guards reviewed; inactive-target idempotency caveat recorded."
+      "branch": "feature/sw-011-integration",
+      "commit": "b7fe9b6",
+      "pr": null,
+      "task": "QA reviewed SW-011 integrated diff on current main: replay intent case fixed, no blocker. Caveat: explicit-target replay after target deactivation returns NotFound without launching again."
     },
     {
       "role": "research",
@@ -73,7 +73,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T21:21:00Z",
+    "at_utc": "2026-10-21T22:00:00Z",
     "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows/PowerShell host",
     "results": [
       {
@@ -179,11 +179,39 @@
       {
         "command": "npm run typecheck && npm test && npm run frontend:build && git diff --check",
         "result": "PASS on SW-010 follow-up 773ede2; 8 files/56 tests pass, production build and diff check pass. QA final review is pending."
+      },
+      {
+        "command": "npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check",
+        "result": "PASS on integrated SW-011 branch atop SW-010: 8 files/56 tests; production build and diff check pass. Vite emitted a non-failing ineffective dynamic import warning."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
+        "result": "PASS on SW-011 integrated branch."
+      },
+      {
+        "command": "cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1",
+        "result": "PASS."
+      },
+      {
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS: 11 archive QA harness tests."
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS; handoff/schema/fixture checks only."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "BLOCKED before project test compile: glib-sys requires glib-2.0 >=2.70 development files unavailable on Debian host."
+      },
+      {
+        "command": "QA review SW-011 integrated head b7fe9b6",
+        "result": "PASS, no blocker. Residual: request replay for a now-inactive explicit target returns NotFound; no second launch occurs. Performance targets/benchmarks remain unmeasured."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Draft PR #35 contains SW-010 code and current-main/docs checkpoint; await required review/merge. After merge, rebase/merge SW-011 backend hardening onto updated main and open PR in dependency order. V1 remains blocked pending Windows.",
+  "next_action": "Commit and publish SW-011 integration PR when GitHub write/API access is available; preserve V1 BLOCKED pending real Windows 11 x64 acceptance. Then proceed with next executable SW-013..SW-025 tasks.",
   "recent_merges": [
     {
       "number": 32,
@@ -219,21 +247,12 @@
       "number": 34,
       "sha": "60fd44f5b0144f66ec05df9cf68922a6dd6e212b",
       "scope": "SW-008 safe profile archive import/export with native dialogs, preview-bound commit and strategy-aware UI"
-    }
-  ],
-  "open_pull_requests": [
+    },
     {
       "number": 35,
-      "title": "feat(SW-010): improve Explorer, themes, and responsive dashboard",
-      "state": "DRAFT",
-      "head": "feature/sw-010-ui",
-      "sha": "pending docs sync commit",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/35",
-      "blockers": [
-        "Bulk delete/duplicate and draggable/resizable/reorderable columns remain out of scope",
-        "Rust tests blocked by missing Linux GLib/GObject 2.70 packages",
-        "No Windows 11 host or DPI/native acceptance"
-      ]
+      "sha": "9c8f8a7ae17d9559621eaf68dde23260cb2c97d8",
+      "scope": "SW-010 Resource Explorer, Inspector, profile themes, responsive dashboard"
     }
-  ]
+  ],
+  "open_pull_requests": []
 }

@@ -182,6 +182,42 @@ describe("dynamic shortcut API", () => {
   });
 });
 
+describe("workspace sequence API", () => {
+  const sequence = { id: "s1", profileId: "p1", name: "Morning setup", steps: [{ id: "st1", resourceId: "r1", targetId: "t1" }, { id: "st2", resourceId: "r2" }] };
+  it("uses typed native list/save/delete/run commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const result = { sequenceId: "s1", status: "completed" as const, totalSteps: 2, completedSteps: 2, steps: [] };
+    invokeTyped.mockResolvedValueOnce([sequence]).mockResolvedValueOnce(sequence).mockResolvedValueOnce(undefined).mockResolvedValueOnce(result);
+    expect(await api.workspaceSequences("p1")).toEqual([sequence]);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "workspace_sequence_list", { profileId: "p1" });
+    expect(await api.saveWorkspaceSequence(sequence)).toEqual(sequence);
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "workspace_sequence_save", { sequence });
+    await api.deleteWorkspaceSequence("p1", "s1");
+    expect(invokeTyped).toHaveBeenNthCalledWith(3, "workspace_sequence_delete", { profileId: "p1", id: "s1" });
+    expect(await api.runWorkspaceSequence("p1", "s1", "run-1")).toEqual(result);
+    expect(invokeTyped).toHaveBeenNthCalledWith(4, "workspace_sequence_run", { profileId: "p1", id: "s1", requestId: "run-1" });
+    expect(emitTyped).toHaveBeenCalledTimes(2);
+  });
+  it("stores sequences by profile in the browser preview", async () => {
+    expect(await api.workspaceSequences("p1")).toEqual([]);
+    await api.saveWorkspaceSequence(sequence);
+    expect(await api.workspaceSequences("p1")).toEqual([sequence]);
+    expect(await api.workspaceSequences("p2")).toEqual([]);
+    await api.deleteWorkspaceSequence("p1", "s1");
+    expect(await api.workspaceSequences("p1")).toEqual([]);
+  });
+  it("runs in order and stops at the first failed handoff in preview mode", async () => {
+    await api.saveWorkspaceSequence(sequence);
+    const launch = vi.spyOn(api, "launch").mockResolvedValueOnce({ requestId: "r1", status: "handed_off", launchedAtUtc: "now" }).mockResolvedValueOnce({ requestId: "r2", status: "failed", launchedAtUtc: "now", message: "Unavailable" });
+    const result = await api.runWorkspaceSequence("p1", "s1", "run-1");
+    expect(result).toMatchObject({ status: "failed", totalSteps: 2, completedSteps: 1, stoppedAtStepId: "st2" });
+    expect(launch).toHaveBeenNthCalledWith(1, "r1", "sequence", "p1", "t1");
+    expect(launch).toHaveBeenNthCalledWith(2, "r2", "sequence", "p1", undefined);
+    expect(launch).toHaveBeenCalledTimes(2);
+    launch.mockRestore();
+  });
+});
+
 describe("metadata and analytics API", () => {
   it("calls the typed inspection and event summary commands with exact payloads", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });

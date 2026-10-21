@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api, windowState } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), workspaceSequences: vi.fn(), saveWorkspaceSequence: vi.fn(), deleteWorkspaceSequence: vi.fn(), runWorkspaceSequence: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
   windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
@@ -24,7 +24,7 @@ let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
-  api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false); api.smartCollections.mockResolvedValue([]); api.saveSmartCollection.mockImplementation(async (collection) => collection); api.deleteSmartCollection.mockResolvedValue(undefined); api.dynamicShortcuts.mockResolvedValue([]); api.saveDynamicShortcut.mockImplementation(async (shortcut) => shortcut); api.deleteDynamicShortcut.mockResolvedValue(undefined);
+  api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false); api.smartCollections.mockResolvedValue([]); api.saveSmartCollection.mockImplementation(async (collection) => collection); api.deleteSmartCollection.mockResolvedValue(undefined); api.dynamicShortcuts.mockResolvedValue([]); api.saveDynamicShortcut.mockImplementation(async (shortcut) => shortcut); api.deleteDynamicShortcut.mockResolvedValue(undefined); api.workspaceSequences.mockResolvedValue([]); api.saveWorkspaceSequence.mockImplementation(async (sequence) => sequence); api.deleteWorkspaceSequence.mockResolvedValue(undefined); api.runWorkspaceSequence.mockResolvedValue({ sequenceId: "s1", status: "completed", totalSteps: 1, completedSteps: 1, steps: [] });
   api.setProfileTheme.mockImplementation(async (id: string, theme: { mode: string; accent: string; density: string }) => ({ ...profiles.find((profile) => profile.id === id)!, themeId: theme.mode, settingsJson: JSON.stringify({ ...JSON.parse(profiles.find((profile) => profile.id === id)!.settingsJson), accent: theme.accent, density: theme.density }) }));
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
@@ -309,6 +309,13 @@ describe("workspace dashboard", () => {
     await open();
     expect(host.querySelector('[aria-label="Saved shortcut Work calendar opens Calendar"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Saved shortcut Personal roadmap opens Roadmap.xlsx"]')).toBeNull();
+  });
+
+  it("opens workspace sequences for the active profile", async () => {
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    await act(async () => { const button = [...host.querySelectorAll(".nav-item")].find((item) => item.textContent?.includes("Workspace sequences")) as HTMLButtonElement; button.click(); });
+    expect(host.querySelector(".workspace-sequences-manager h1")?.textContent).toBe("Workspace sequences");
+    expect(api.workspaceSequences).toHaveBeenCalledWith("p1");
   });
 });
 

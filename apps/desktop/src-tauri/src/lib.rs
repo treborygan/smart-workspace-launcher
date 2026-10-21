@@ -194,6 +194,8 @@ pub struct DynamicShortcut {
 
 const MAX_SMART_COLLECTIONS_PER_PROFILE: i64 = 100;
 const MAX_DYNAMIC_SHORTCUTS_PER_PROFILE: i64 = 100;
+const MAX_WORKSPACE_SEQUENCES_PER_PROFILE: i64 = 100;
+const MAX_WORKSPACE_SEQUENCE_STEPS: usize = 20;
 const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
@@ -249,6 +251,8 @@ struct ProfilePackageDocument {
     smart_collections: Vec<ProfilePackageSmartCollection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dynamic_shortcuts: Vec<ProfilePackageDynamicShortcut>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workspace_sequences: Vec<ProfilePackageWorkspaceSequence>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -267,6 +271,61 @@ struct ProfilePackageDynamicShortcut {
     resource_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     target_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageWorkspaceSequence {
+    id: String,
+    name: String,
+    steps: Vec<ProfilePackageWorkspaceSequenceStep>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfilePackageWorkspaceSequenceStep {
+    id: String,
+    resource_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceSequenceStep {
+    pub id: String,
+    pub resource_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSequence {
+    pub id: String,
+    pub profile_id: String,
+    pub name: String,
+    pub steps: Vec<WorkspaceSequenceStep>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSequenceStepResult {
+    pub step_id: String,
+    pub resource_id: String,
+    pub target_id: Option<String>,
+    pub result: LaunchResult,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSequenceRunResult {
+    pub sequence_id: String,
+    pub status: String,
+    pub total_steps: usize,
+    pub completed_steps: usize,
+    pub stopped_at_step_id: Option<String>,
+    pub steps: Vec<WorkspaceSequenceStepResult>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -405,6 +464,7 @@ pub struct ProfileImportPreview {
     pub history_event_count: usize,
     pub smart_collection_count: usize,
     pub dynamic_shortcut_count: usize,
+    pub workspace_sequence_count: usize,
     pub profile_id_collision: bool,
     pub profile_name_collision: bool,
     pub resource_id_collisions: Vec<String>,
@@ -414,6 +474,8 @@ pub struct ProfileImportPreview {
     pub smart_collection_name_collisions: Vec<String>,
     pub dynamic_shortcut_id_collisions: Vec<String>,
     pub dynamic_shortcut_name_collisions: Vec<String>,
+    pub workspace_sequence_id_collisions: Vec<String>,
+    pub workspace_sequence_name_collisions: Vec<String>,
     pub asset_count: usize,
 }
 
@@ -460,6 +522,7 @@ pub struct ProfileImportResult {
     pub reused_resources: usize,
     pub imported_layouts: usize,
     pub imported_history_events: usize,
+    pub imported_workspace_sequences: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -603,6 +666,7 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
         || package.layouts.layouts.len() > 25
         || package.profile.smart_collections.len() > MAX_SMART_COLLECTIONS_PER_PROFILE as usize
         || package.profile.dynamic_shortcuts.len() > MAX_DYNAMIC_SHORTCUTS_PER_PROFILE as usize
+        || package.profile.workspace_sequences.len() > MAX_WORKSPACE_SEQUENCES_PER_PROFILE as usize
     {
         return Err(package_error("package exceeds item count limit"));
     }
@@ -764,6 +828,101 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
             ));
         }
     }
+    let mut sequence_ids = std::collections::HashSet::new();
+    let mut sequence_names = std::collections::HashSet::new();
+    let mut sequence_step_ids = std::collections::HashSet::new();
+    let all_sequence_ids = package
+        .profile
+        .workspace_sequences
+        .iter()
+        .map(|sequence| sequence.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let all_sequence_step_ids = package
+        .profile
+        .workspace_sequences
+        .iter()
+        .flat_map(|sequence| sequence.steps.iter().map(|step| step.id.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    if all_sequence_ids.len() != package.profile.workspace_sequences.len()
+        || all_sequence_step_ids.len()
+            != package
+                .profile
+                .workspace_sequences
+                .iter()
+                .map(|sequence| sequence.steps.len())
+                .sum::<usize>()
+        || all_sequence_ids
+            .iter()
+            .any(|id| all_sequence_step_ids.contains(id))
+    {
+        return Err(package_error(
+            "workspace sequence and step IDs must be unique",
+        ));
+    }
+    for sequence in &package.profile.workspace_sequences {
+        valid_uuid(&sequence.id, "workspace sequence id")?;
+        if !sequence_ids.insert(sequence.id.as_str())
+            || sequence.id == package.profile.id
+            || resource_ids.contains(&sequence.id)
+            || target_ids.contains(&sequence.id)
+            || smart_collection_ids.contains(sequence.id.as_str())
+            || dynamic_shortcut_ids.contains(sequence.id.as_str())
+            || all_sequence_step_ids.contains(sequence.id.as_str())
+        {
+            return Err(package_error(
+                "workspace sequence IDs must be unique across package entities",
+            ));
+        }
+        let validated_steps = sequence
+            .steps
+            .iter()
+            .map(|step| WorkspaceSequenceStep {
+                id: step.id.clone(),
+                resource_id: step.resource_id.clone(),
+                target_id: step.target_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        validate_workspace_sequence_fields(&sequence.id, &sequence.name, &validated_steps)
+            .map_err(|error| package_error(error.to_string()))?;
+        if !sequence_names.insert(sequence.name.trim().to_lowercase()) {
+            return Err(package_error(
+                "workspace sequence names must be unique within the profile",
+            ));
+        }
+        for step in &sequence.steps {
+            if !sequence_step_ids.insert(step.id.as_str())
+                || sequence_ids.contains(step.id.as_str())
+                || step.id == package.profile.id
+                || resource_ids.contains(&step.id)
+                || target_ids.contains(&step.id)
+                || smart_collection_ids.contains(step.id.as_str())
+                || dynamic_shortcut_ids.contains(step.id.as_str())
+                || all_sequence_ids.contains(step.id.as_str())
+            {
+                return Err(package_error(
+                    "workspace sequence step IDs must be unique across package entities",
+                ));
+            }
+            if !membership_ids.contains(&step.resource_id) {
+                return Err(package_error(
+                    "workspace sequence resource must be a profile member",
+                ));
+            }
+            if let Some(target_id) = step.target_id.as_deref() {
+                let target_is_active_and_owned =
+                    package_targets
+                        .get(target_id)
+                        .is_some_and(|(resource_id, active)| {
+                            *resource_id == step.resource_id && *active
+                        });
+                if !target_is_active_and_owned {
+                    return Err(package_error(
+                        "workspace sequence target must be active and owned by its resource",
+                    ));
+                }
+            }
+        }
+    }
     let mut details = std::collections::HashSet::new();
     for membership in &package.profile.membership_details {
         valid_uuid(&membership.resource_id, "membership resource id")?;
@@ -824,8 +983,15 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
                     .target_id
                     .as_deref()
                     .is_some_and(|id| !target_ids.contains(id))
-                || !["dashboard", "quick_launch", "dock", "explorer", "other"]
-                    .contains(&event.source.as_str())
+                || ![
+                    "dashboard",
+                    "quick_launch",
+                    "dock",
+                    "explorer",
+                    "sequence",
+                    "other",
+                ]
+                .contains(&event.source.as_str())
                 || !["requested", "handed_off", "failed"].contains(&event.status.as_str())
                 || event
                     .error_code
@@ -1258,6 +1424,22 @@ fn profile_package_from_db(
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let workspace_sequences = workspace_sequence_list_on_conn(conn, profile_id)?
+        .into_iter()
+        .map(|sequence| ProfilePackageWorkspaceSequence {
+            id: sequence.id,
+            name: sequence.name,
+            steps: sequence
+                .steps
+                .into_iter()
+                .map(|step| ProfilePackageWorkspaceSequenceStep {
+                    id: step.id,
+                    resource_id: step.resource_id,
+                    target_id: step.target_id,
+                })
+                .collect(),
+        })
+        .collect();
     let manifest = ProfilePackageManifest {
         format: "swprofile".into(),
         schema_version: 1,
@@ -1283,6 +1465,7 @@ fn profile_package_from_db(
             membership_details: memberships,
             smart_collections,
             dynamic_shortcuts,
+            workspace_sequences,
         },
         resources: ProfileResourcesDocument {
             schema_version: 1,
@@ -1532,6 +1715,30 @@ fn profile_import_preview_from_conn(
             dynamic_shortcut_name_collisions.push(shortcut.name.clone());
         }
     }
+    let mut workspace_sequence_id_collisions = Vec::new();
+    let mut workspace_sequence_name_collisions = Vec::new();
+    for sequence in &package.profile.workspace_sequences {
+        let id_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workspace_sequences WHERE id=?1)",
+            [&sequence.id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if id_exists {
+            workspace_sequence_id_collisions.push(sequence.id.clone());
+        }
+        let name_exists: bool = if let Some(target_profile_id) = target_profile_id {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_sequences WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+                params![target_profile_id, sequence.name],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )?
+        } else {
+            false
+        };
+        if name_exists {
+            workspace_sequence_name_collisions.push(sequence.name.clone());
+        }
+    }
     let mut preview = ProfileImportPreview {
         package_sha256: package_sha256.into(),
         preview_token: String::new(),
@@ -1546,6 +1753,7 @@ fn profile_import_preview_from_conn(
             .map_or(0, |history| history.events.len()),
         smart_collection_count: package.profile.smart_collections.len(),
         dynamic_shortcut_count: package.profile.dynamic_shortcuts.len(),
+        workspace_sequence_count: package.profile.workspace_sequences.len(),
         profile_id_collision,
         profile_name_collision,
         resource_id_collisions,
@@ -1555,6 +1763,8 @@ fn profile_import_preview_from_conn(
         smart_collection_name_collisions,
         dynamic_shortcut_id_collisions,
         dynamic_shortcut_name_collisions,
+        workspace_sequence_id_collisions,
+        workspace_sequence_name_collisions,
         asset_count: package.manifest.assets.len(),
     };
     preview.preview_token = profile_preview_token(&preview)?;
@@ -1956,6 +2166,165 @@ fn import_profile_dynamic_shortcuts(
     Ok(())
 }
 
+fn unique_workspace_sequence_name(
+    tx: &Transaction<'_>,
+    profile_id: &str,
+    requested: &str,
+) -> Result<String, AppError> {
+    let requested = requested.trim();
+    for suffix in 1..=1000 {
+        let ending = if suffix == 1 {
+            String::new()
+        } else {
+            format!(" (imported {suffix})")
+        };
+        let base: String = requested
+            .chars()
+            .take(100usize.saturating_sub(ending.chars().count()))
+            .collect();
+        let candidate = format!("{}{}", base.trim_end(), ending);
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_sequences WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)", params![profile_id,candidate], |row| row.get::<_,i64>(0).map(|value| value != 0))?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique workspace sequence name",
+    ))
+}
+
+fn fresh_workspace_sequence_id(tx: &Transaction<'_>) -> Result<String, AppError> {
+    for _ in 0..100 {
+        let id = Uuid::new_v4().to_string();
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1)", [&id], |row| row.get::<_,i64>(0).map(|value| value != 0))?;
+        if !exists {
+            return Ok(id);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique workspace sequence ID",
+    ))
+}
+
+fn fresh_workspace_sequence_step_id(tx: &Transaction<'_>) -> Result<String, AppError> {
+    for _ in 0..100 {
+        let id = Uuid::new_v4().to_string();
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1)", [&id], |row| row.get::<_,i64>(0).map(|value| value != 0))?;
+        if !exists {
+            return Ok(id);
+        }
+    }
+    Err(package_error(
+        "could not allocate a unique workspace sequence step ID",
+    ))
+}
+
+fn import_profile_workspace_sequences(
+    tx: &Transaction<'_>,
+    package: &ValidatedProfilePackage,
+    target_profile_id: &str,
+    strategy: &str,
+    resource_map: &std::collections::HashMap<String, String>,
+    target_map: &std::collections::HashMap<String, String>,
+) -> Result<usize, AppError> {
+    let mut imported = 0;
+    for source in &package.profile.workspace_sequences {
+        let mut steps = Vec::with_capacity(source.steps.len());
+        for source_step in &source.steps {
+            let resource_id = resource_map
+                .get(&source_step.resource_id)
+                .ok_or_else(|| package_error("workspace sequence resource mapping missing"))?
+                .clone();
+            let target_id = if let Some(source_target_id) = source_step.target_id.as_deref() {
+                let mapped = target_map
+                    .get(source_target_id)
+                    .ok_or_else(|| package_error("workspace sequence target mapping missing"))?;
+                let active_owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)", params![mapped,resource_id], |row| row.get::<_,i64>(0).map(|value| value != 0))?;
+                if !active_owned {
+                    return Err(package_error(
+                        "workspace sequence target is no longer active and owned",
+                    ));
+                }
+                Some(mapped.clone())
+            } else {
+                None
+            };
+            steps.push(WorkspaceSequenceStep {
+                id: source_step.id.clone(),
+                resource_id,
+                target_id,
+            });
+        }
+        let existing = workspace_sequence_list_on_conn(tx, target_profile_id)?
+            .into_iter()
+            .find(|sequence| {
+                sequence.id == source.id || sequence.name.eq_ignore_ascii_case(source.name.trim())
+            });
+        if strategy == "merge" {
+            if let Some(existing) = &existing {
+                let equivalent = existing.name.eq_ignore_ascii_case(source.name.trim())
+                    && existing.steps.len() == steps.len()
+                    && existing.steps.iter().zip(&steps).all(|(left, right)| {
+                        left.resource_id == right.resource_id && left.target_id == right.target_id
+                    });
+                if equivalent {
+                    continue;
+                }
+            }
+        }
+        let id_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1)",
+            [&source.id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        let id = if strategy == "duplicate" || id_exists {
+            fresh_workspace_sequence_id(tx)?
+        } else {
+            source.id.clone()
+        };
+        let name = if existing.is_some() {
+            unique_workspace_sequence_name(tx, target_profile_id, &source.name)?
+        } else {
+            source.name.trim().to_string()
+        };
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM workspace_sequences WHERE profile_id=?1",
+            [target_profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_WORKSPACE_SEQUENCES_PER_PROFILE {
+            return Err(package_error(
+                "profile would exceed the workspace sequence limit",
+            ));
+        }
+        for step in &mut steps {
+            let step_id_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1)",
+                [&step.id],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )?;
+            if strategy == "duplicate" || step_id_exists {
+                step.id = fresh_workspace_sequence_step_id(tx)?;
+            }
+        }
+        let sequence = WorkspaceSequence {
+            id: id.clone(),
+            profile_id: target_profile_id.to_string(),
+            name,
+            steps,
+        };
+        validate_workspace_sequence_fields(&sequence.id, &sequence.name, &sequence.steps)
+            .map_err(|error| package_error(error.to_string()))?;
+        let timestamp = now_utc();
+        tx.execute("INSERT INTO workspace_sequences(id,profile_id,name,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?4)", params![id,target_profile_id,sequence.name,timestamp])?;
+        for (position, step) in sequence.steps.iter().enumerate() {
+            tx.execute("INSERT INTO workspace_sequence_steps(sequence_id,profile_id,id,position,resource_id,target_id) VALUES (?1,?2,?3,?4,?5,?6)", params![id,target_profile_id,step.id,position as i64,step.resource_id,step.target_id])?;
+        }
+        imported += 1;
+    }
+    Ok(imported)
+}
+
 fn import_profile_package(
     conn: &mut Connection,
     package: &ValidatedProfilePackage,
@@ -2039,6 +2408,10 @@ fn import_profile_package(
         )?;
         tx.execute(
             "DELETE FROM dynamic_shortcuts WHERE profile_id=?1",
+            [&target_id],
+        )?;
+        tx.execute(
+            "DELETE FROM workspace_sequences WHERE profile_id=?1",
             [&target_id],
         )?;
         tx.execute(
@@ -2201,6 +2574,14 @@ fn import_profile_package(
         &resource_map,
         &target_map,
     )?;
+    let imported_workspace_sequences = import_profile_workspace_sequences(
+        &tx,
+        package,
+        &target_id,
+        strategy,
+        &resource_map,
+        &target_map,
+    )?;
     let mut imported_history_events = 0;
     if let Some(history) = &package.history {
         for event in &history.events {
@@ -2223,6 +2604,7 @@ fn import_profile_package(
         reused_resources,
         imported_layouts,
         imported_history_events,
+        imported_workspace_sequences,
     })
 }
 
@@ -2761,6 +3143,9 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (5,'sw013-profile-smart-collections-v1',?1)",[now_utc()])?;
     conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_resource_id ON resource_targets(resource_id,id); CREATE TABLE IF NOT EXISTS dynamic_shortcuts (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), resource_id TEXT NOT NULL, target_id TEXT, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,name COLLATE NOCASE), FOREIGN KEY(profile_id,resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE, FOREIGN KEY(resource_id,target_id) REFERENCES resource_targets(resource_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_dynamic_shortcuts_profile_name ON dynamic_shortcuts(profile_id,name COLLATE NOCASE); CREATE TRIGGER IF NOT EXISTS prevent_deactivating_dynamic_shortcut_target BEFORE UPDATE OF active ON resource_targets WHEN OLD.active=1 AND NEW.active=0 AND EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE resource_id=OLD.resource_id AND target_id=OLD.id) BEGIN SELECT RAISE(ABORT,'target is referenced by a dynamic shortcut'); END;")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (6,'sw013-dynamic-shortcuts-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequences (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,id), UNIQUE(profile_id,name COLLATE NOCASE)); CREATE TABLE IF NOT EXISTS workspace_sequence_steps (sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL CHECK(position BETWEEN 0 AND 19), resource_id TEXT NOT NULL, target_id TEXT, PRIMARY KEY(sequence_id,position), UNIQUE(sequence_id,id), FOREIGN KEY(profile_id,sequence_id) REFERENCES workspace_sequences(profile_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_workspace_sequences_profile_name ON workspace_sequences(profile_id,name COLLATE NOCASE);")?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_sequence_runs (request_id TEXT PRIMARY KEY, sequence_id TEXT NOT NULL, profile_id TEXT NOT NULL, sequence_json TEXT NOT NULL, result_json TEXT NOT NULL, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_workspace_sequence_runs_profile_time ON workspace_sequence_runs(profile_id,created_utc DESC);")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (7,'sw014-workspace-sequences-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -3988,6 +4373,41 @@ fn validate_dynamic_shortcut(shortcut: &DynamicShortcut) -> Result<(), AppError>
     Ok(())
 }
 
+fn validate_workspace_sequence_fields(
+    id: &str,
+    name: &str,
+    steps: &[WorkspaceSequenceStep],
+) -> Result<(), AppError> {
+    valid_uuid(id, "workspace sequence id")?;
+    if name.trim().is_empty()
+        || name.trim().chars().count() > 100
+        || name.chars().any(char::is_control)
+    {
+        return Err(AppError::Invalid(
+            "workspace sequence name must contain 1 to 100 printable characters".into(),
+        ));
+    }
+    if steps.is_empty() || steps.len() > MAX_WORKSPACE_SEQUENCE_STEPS {
+        return Err(AppError::Invalid(format!(
+            "workspace sequence must contain 1 to {MAX_WORKSPACE_SEQUENCE_STEPS} steps"
+        )));
+    }
+    let mut step_ids = std::collections::HashSet::new();
+    for step in steps {
+        valid_uuid(&step.id, "workspace sequence step id")?;
+        valid_uuid(&step.resource_id, "workspace sequence resource id")?;
+        if step.id == id || !step_ids.insert(step.id.as_str()) {
+            return Err(AppError::Invalid(
+                "workspace sequence step IDs must be unique".into(),
+            ));
+        }
+        if let Some(target_id) = step.target_id.as_deref() {
+            valid_uuid(target_id, "workspace sequence target id")?;
+        }
+    }
+    Ok(())
+}
+
 fn dynamic_shortcut_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicShortcut> {
     Ok(DynamicShortcut {
         id: row.get(0)?,
@@ -4127,6 +4547,388 @@ fn dynamic_shortcut_delete(
 ) -> Result<(), AppError> {
     let conn = lock(&state)?;
     dynamic_shortcut_delete_on_conn(&conn, &profile_id, &id)
+}
+
+fn workspace_sequence_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<WorkspaceSequence>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare("SELECT id,profile_id,name FROM workspace_sequences WHERE profile_id=?1 ORDER BY name COLLATE NOCASE,id")?;
+    let mut sequences = stmt
+        .query_map([profile_id], |row| {
+            Ok(WorkspaceSequence {
+                id: row.get(0)?,
+                profile_id: row.get(1)?,
+                name: row.get(2)?,
+                steps: Vec::new(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for sequence in &mut sequences {
+        let mut steps = conn.prepare("SELECT id,resource_id,target_id FROM workspace_sequence_steps WHERE profile_id=?1 AND sequence_id=?2 ORDER BY position")?;
+        sequence.steps = steps
+            .query_map(params![profile_id, sequence.id], |row| {
+                Ok(WorkspaceSequenceStep {
+                    id: row.get(0)?,
+                    resource_id: row.get(1)?,
+                    target_id: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    Ok(sequences)
+}
+
+#[tauri::command]
+fn workspace_sequence_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<WorkspaceSequence>, AppError> {
+    let conn = lock(&state)?;
+    workspace_sequence_list_on_conn(&conn, &profile_id)
+}
+
+fn workspace_sequence_save_on_conn(
+    conn: &mut Connection,
+    mut sequence: WorkspaceSequence,
+) -> Result<WorkspaceSequence, AppError> {
+    sequence.name = sequence.name.trim().to_string();
+    validate_workspace_sequence_fields(&sequence.id, &sequence.name, &sequence.steps)?;
+    valid_uuid(&sequence.profile_id, "profile id")?;
+    let tx = conn.transaction()?;
+    let profile_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&sequence.profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let existing_profile: Option<String> = tx
+        .query_row(
+            "SELECT profile_id FROM workspace_sequences WHERE id=?1",
+            [&sequence.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if existing_profile
+        .as_deref()
+        .is_some_and(|owner| owner != sequence.profile_id)
+    {
+        return Err(AppError::NotFound);
+    }
+    if existing_profile.is_none() {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM workspace_sequences WHERE profile_id=?1",
+            [&sequence.profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_WORKSPACE_SEQUENCES_PER_PROFILE {
+            return Err(AppError::Invalid(
+                "profile has reached its workspace sequence limit".into(),
+            ));
+        }
+        let entity_collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1)", [&sequence.id], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+        if entity_collision {
+            return Err(AppError::Invalid(
+                "workspace sequence ID is already used".into(),
+            ));
+        }
+    }
+    let name_collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_sequences WHERE profile_id=?1 AND name=?2 COLLATE NOCASE AND id<>?3)", params![sequence.profile_id,sequence.name,sequence.id], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+    if name_collision {
+        return Err(AppError::Invalid(
+            "workspace sequence name already exists in this profile".into(),
+        ));
+    }
+    for step in &sequence.steps {
+        let member: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+            params![sequence.profile_id, step.resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !member {
+            return Err(AppError::Invalid(
+                "every sequence resource must belong to its profile".into(),
+            ));
+        }
+        if let Some(target_id) = step.target_id.as_deref() {
+            let active_owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)", params![target_id,step.resource_id], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+            if !active_owned {
+                return Err(AppError::Invalid(
+                    "sequence target must be active and belong to its resource".into(),
+                ));
+            }
+        }
+        let id_collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 AND id<>?2 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 AND NOT (sequence_id=?3 AND profile_id=?4))", params![step.id,sequence.id,sequence.id,sequence.profile_id], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+        if id_collision {
+            return Err(AppError::Invalid(
+                "workspace sequence step ID is already used".into(),
+            ));
+        }
+    }
+    let timestamp = now_utc();
+    tx.execute("INSERT INTO workspace_sequences(id,profile_id,name,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?4) ON CONFLICT(id) DO UPDATE SET name=excluded.name,updated_utc=excluded.updated_utc", params![sequence.id,sequence.profile_id,sequence.name,timestamp])?;
+    tx.execute(
+        "DELETE FROM workspace_sequence_steps WHERE sequence_id=?1 AND profile_id=?2",
+        params![sequence.id, sequence.profile_id],
+    )?;
+    for (position, step) in sequence.steps.iter().enumerate() {
+        tx.execute("INSERT INTO workspace_sequence_steps(sequence_id,profile_id,id,position,resource_id,target_id) VALUES (?1,?2,?3,?4,?5,?6)", params![sequence.id,sequence.profile_id,step.id,position as i64,step.resource_id,step.target_id])?;
+    }
+    tx.commit()?;
+    Ok(sequence)
+}
+
+#[tauri::command]
+fn workspace_sequence_save(
+    state: State<'_, AppState>,
+    sequence: WorkspaceSequence,
+) -> Result<WorkspaceSequence, AppError> {
+    let mut conn = lock(&state)?;
+    workspace_sequence_save_on_conn(&mut conn, sequence)
+}
+
+fn workspace_sequence_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "workspace sequence id")?;
+    let changed = conn.execute(
+        "DELETE FROM workspace_sequences WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn workspace_sequence_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    workspace_sequence_delete_on_conn(&conn, &profile_id, &id)
+}
+
+fn sequence_step_request_id(run_request_id: &str, step_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"smart-workspace-launcher/sequence-step/v1\0");
+    hasher.update(run_request_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(step_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes).to_string()
+}
+
+fn record_failed_sequence_launch(
+    conn: &mut Connection,
+    request: &LaunchRequest,
+    error_code: &str,
+    message: &str,
+) -> Result<LaunchEvent, AppError> {
+    valid_uuid(&request.request_id, "launch request id")?;
+    valid_uuid(&request.resource_id, "resource id")?;
+    let profile_id = request
+        .profile_id
+        .as_deref()
+        .ok_or_else(|| AppError::Invalid("sequence launch requires a profile".into()))?;
+    valid_uuid(profile_id, "profile id")?;
+    if request.source != "sequence" {
+        return Err(AppError::Invalid("invalid sequence launch source".into()));
+    }
+    if let Some(mut event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row).optional()? {
+        if event.resource_id != request.resource_id || event.target_id != request.target_id || event.profile_id.as_deref() != Some(profile_id) || event.source != request.source {
+            return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
+        }
+        if event.status == "requested" {
+            conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
+            event = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)?;
+        }
+        return Ok(event);
+    }
+    let launched_at_utc = now_utc();
+    conn.execute("INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,?5,'sequence',?6,'requested')", params![Uuid::new_v4().to_string(),request.request_id,request.resource_id,request.target_id,profile_id,launched_at_utc])?;
+    conn.execute("UPDATE launch_events SET status='failed',error_code=?2,message=?3,duration_ms=0 WHERE request_id=?1", params![request.request_id,error_code,message])?;
+    Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&request.request_id], launch_event_from_row)?)
+}
+
+fn workspace_sequence_run_with<F>(
+    conn: &mut Connection,
+    sequence_id: &str,
+    profile_id: &str,
+    request_id: &str,
+    mut launch: F,
+) -> Result<WorkspaceSequenceRunResult, AppError>
+where
+    F: FnMut(&ResourceTarget) -> Result<(), String>,
+{
+    valid_uuid(sequence_id, "workspace sequence id")?;
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(request_id, "sequence request id")?;
+    let existing_run = conn.query_row("SELECT sequence_id,profile_id,sequence_json,result_json FROM workspace_sequence_runs WHERE request_id=?1", [request_id], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?))).optional()?;
+    let (mut sequence, mut result, resumed) =
+        if let Some((stored_sequence_id, stored_profile_id, stored_snapshot, stored_result)) =
+            existing_run
+        {
+            if stored_sequence_id != sequence_id || stored_profile_id != profile_id {
+                return Err(AppError::Invalid(
+                    "sequence request ID was already used for a different action".into(),
+                ));
+            }
+            let stored_sequence: WorkspaceSequence = serde_json::from_str(&stored_snapshot)?;
+            let stored_result: WorkspaceSequenceRunResult = serde_json::from_str(&stored_result)?;
+            if stored_result.status != "in_progress" {
+                return Ok(stored_result);
+            }
+            (stored_sequence, stored_result, true)
+        } else {
+            let sequence = workspace_sequence_list_on_conn(conn, profile_id)?
+                .into_iter()
+                .find(|sequence| sequence.id == sequence_id)
+                .ok_or(AppError::NotFound)?;
+            let result = WorkspaceSequenceRunResult {
+                sequence_id: sequence.id.clone(),
+                status: "in_progress".into(),
+                total_steps: sequence.steps.len(),
+                completed_steps: 0,
+                stopped_at_step_id: None,
+                steps: Vec::new(),
+            };
+            (sequence, result, false)
+        };
+    if sequence.steps.is_empty() || sequence.steps.len() > MAX_WORKSPACE_SEQUENCE_STEPS {
+        return Err(AppError::Invalid(
+            "workspace sequence has no valid steps".into(),
+        ));
+    }
+    if !resumed {
+        let snapshot = serde_json::to_string(&sequence)?;
+        let result_json = serde_json::to_string(&result)?;
+        let timestamp = now_utc();
+        conn.execute("INSERT INTO workspace_sequence_runs(request_id,sequence_id,profile_id,sequence_json,result_json,created_utc,updated_utc) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![request_id,sequence_id,profile_id,snapshot,result_json,timestamp])?;
+    }
+    let first_pending = result.steps.len();
+    for step in sequence.steps.into_iter().skip(first_pending) {
+        let step_request_id = sequence_step_request_id(request_id, &step.id);
+        let request = LaunchRequest {
+            request_id: step_request_id,
+            resource_id: step.resource_id.clone(),
+            target_id: step.target_id.clone(),
+            profile_id: Some(profile_id.to_string()),
+            source: "sequence".into(),
+        };
+        let target_is_still_valid = if let Some(target_id) = step.target_id.as_deref() {
+            conn.query_row("SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)", params![target_id,step.resource_id], |row| row.get::<_,i64>(0).map(|value| value != 0))?
+        } else {
+            true
+        };
+        let profile_still_contains_resource: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+            params![profile_id, step.resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        let (step_result, event_status) = if !target_is_still_valid
+            || !profile_still_contains_resource
+        {
+            let code = if target_is_still_valid {
+                "resource_not_in_profile"
+            } else {
+                "target_not_found"
+            };
+            let event = record_failed_sequence_launch(conn, &request, code, "The sequence step is no longer available. Review the resource and target before running again.")?;
+            (
+                LaunchResult {
+                    request_id: event.request_id.clone(),
+                    status: event.status.clone(),
+                    launched_at_utc: event.launched_at_utc.clone(),
+                    error_code: event.error_code.clone(),
+                    message: event.message.clone(),
+                },
+                event.status,
+            )
+        } else {
+            let mut event = launch_event_with(conn, &request, |target| launch(target))?;
+            if event.status == "requested" {
+                conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&event.request_id])?;
+                event = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&event.request_id], launch_event_from_row)?;
+            }
+            (
+                LaunchResult {
+                    request_id: event.request_id.clone(),
+                    status: event.status.clone(),
+                    launched_at_utc: event.launched_at_utc.clone(),
+                    error_code: event.error_code.clone(),
+                    message: event.message.clone(),
+                },
+                event.status,
+            )
+        };
+        result.steps.push(WorkspaceSequenceStepResult {
+            step_id: step.id.clone(),
+            resource_id: step.resource_id.clone(),
+            target_id: step.target_id.clone(),
+            result: step_result,
+        });
+        if event_status == "handed_off" {
+            result.completed_steps += 1;
+        } else {
+            result.status = "failed".into();
+            result.stopped_at_step_id = Some(step.id);
+        }
+        let result_json = serde_json::to_string(&result)?;
+        conn.execute(
+            "UPDATE workspace_sequence_runs SET result_json=?2,updated_utc=?3 WHERE request_id=?1",
+            params![request_id, result_json, now_utc()],
+        )?;
+        if result.status == "failed" {
+            return Ok(result);
+        }
+    }
+    result.status = "completed".into();
+    conn.execute(
+        "UPDATE workspace_sequence_runs SET result_json=?2,updated_utc=?3 WHERE request_id=?1",
+        params![request_id, serde_json::to_string(&result)?, now_utc()],
+    )?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn workspace_sequence_run(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+    request_id: String,
+) -> Result<WorkspaceSequenceRunResult, AppError> {
+    let mut conn = lock(&state)?;
+    let result = workspace_sequence_run_with(&mut conn, &id, &profile_id, &request_id, |target| {
+        launch_target(&app, target).map_err(|error| error.to_string())
+    })?;
+    for step in &result.steps {
+        if let Some(event) = conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE request_id=?1", [&step.result.request_id], launch_event_from_row).optional()? {
+            let _ = app.emit("launch-result", &event);
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -4344,8 +5146,15 @@ where
             return Err(AppError::NotFound);
         }
     }
-    if !["dashboard", "quick_launch", "dock", "explorer", "other"]
-        .contains(&request.source.as_str())
+    if ![
+        "dashboard",
+        "quick_launch",
+        "dock",
+        "explorer",
+        "sequence",
+        "other",
+    ]
+    .contains(&request.source.as_str())
     {
         return Err(AppError::Invalid("unsupported launch source".into()));
     }
@@ -5024,6 +5833,10 @@ pub fn run() {
             dynamic_shortcut_list,
             dynamic_shortcut_save,
             dynamic_shortcut_delete,
+            workspace_sequence_list,
+            workspace_sequence_save,
+            workspace_sequence_delete,
+            workspace_sequence_run,
             profile_export,
             profile_import_preview,
             profile_import_commit,
@@ -5296,6 +6109,7 @@ mod tests {
             }],
             smart_collections: Vec::new(),
             dynamic_shortcuts: Vec::new(),
+            workspace_sequences: Vec::new(),
         };
         let package = ValidatedProfilePackage {
             manifest: ProfilePackageManifest {
@@ -5864,6 +6678,184 @@ mod tests {
         assert_eq!(imported.imported_resources, 1);
     }
 
+    #[test]
+    fn workspace_sequence_archive_roundtrip_is_inert_and_replace_remaps_references() {
+        let mut conn = database();
+        let source = package("url");
+        let source_result = import_profile_package(&mut conn, &source, "duplicate", None).unwrap();
+        let resource_id: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1",
+                [&source_result.profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let target_id: String = conn
+            .query_row(
+                "SELECT id FROM resource_targets WHERE resource_id=?1",
+                [&resource_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let source_resource = resource("source placeholder");
+        let source_resource = Resource {
+            id: resource_id.clone(),
+            targets: vec![ResourceTarget {
+                id: target_id.clone(),
+                kind: "url".into(),
+                canonical_uri: "https://example.com".into(),
+                priority: 0,
+                arguments: Vec::new(),
+                working_directory: None,
+                active: true,
+            }],
+            ..source_resource
+        };
+        let sequence = workspace_sequence(
+            &source_result.profile_id,
+            "Start day",
+            &[(&source_resource, Some(&target_id))],
+        );
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let source_path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &source_result.profile_id, &source_path, false).unwrap();
+        let exported = read_profile_package(&source_path).unwrap();
+        let _ = std::fs::remove_file(source_path);
+        assert_eq!(exported.profile.workspace_sequences.len(), 1);
+        assert_eq!(
+            exported.profile.workspace_sequences[0].steps[0].resource_id,
+            resource_id
+        );
+        let duplicate_import =
+            import_profile_package(&mut conn, &exported, "duplicate", None).unwrap();
+        assert_eq!(duplicate_import.imported_workspace_sequences, 1);
+        let duplicated =
+            workspace_sequence_list_on_conn(&conn, &duplicate_import.profile_id).unwrap();
+        assert_eq!(duplicated.len(), 1);
+        assert_ne!(duplicated[0].id, sequence.id);
+        assert_ne!(duplicated[0].steps[0].id, sequence.steps[0].id);
+        assert_ne!(duplicated[0].steps[0].resource_id, resource_id);
+        assert_ne!(
+            duplicated[0].steps[0].target_id.as_deref(),
+            Some(target_id.as_str())
+        );
+
+        let target_profile = profile(&conn);
+        let old_resource = resource("Old resource");
+        persist_resource(&mut conn, &old_resource, true, Some(&target_profile)).unwrap();
+        let old_sequence =
+            workspace_sequence(&target_profile, "Old sequence", &[(&old_resource, None)]);
+        workspace_sequence_save_on_conn(&mut conn, old_sequence.clone()).unwrap();
+        let preview = profile_import_preview_from_conn(
+            &conn,
+            &exported,
+            &"a".repeat(64),
+            Some(&target_profile),
+        )
+        .unwrap();
+        assert_eq!(preview.workspace_sequence_count, 1);
+        assert_eq!(
+            preview.workspace_sequence_name_collisions,
+            Vec::<String>::new()
+        );
+        let imported =
+            import_profile_package(&mut conn, &exported, "replace", Some(&target_profile)).unwrap();
+        assert_eq!(imported.imported_workspace_sequences, 1);
+        let sequences = workspace_sequence_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(sequences.len(), 1);
+        assert_ne!(sequences[0].id, old_sequence.id);
+        assert_ne!(sequences[0].steps[0].resource_id, resource_id);
+        assert_ne!(
+            sequences[0].steps[0].target_id.as_deref(),
+            Some(target_id.as_str())
+        );
+        let remapped_target = sequences[0].steps[0].target_id.as_deref().unwrap();
+        assert!(conn.query_row("SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)",params![remapped_target,sequences[0].steps[0].resource_id],|row| row.get::<_,i64>(0)).unwrap() != 0);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM workspace_sequence_runs", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0,
+            "profile archive import must not execute sequences"
+        );
+    }
+
+    #[test]
+    fn workspace_sequence_import_insert_failure_rolls_back_replacement() {
+        let mut conn = database();
+        let package = package("url");
+        let source_profile =
+            import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
+        let source_resource_id: String = conn
+            .query_row(
+                "SELECT resource_id FROM profile_resources WHERE profile_id=?1",
+                [&source_profile.profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let source_target_id: String = conn
+            .query_row(
+                "SELECT id FROM resource_targets WHERE resource_id=?1",
+                [&source_resource_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let placeholder = resource("source");
+        let source_resource = Resource {
+            id: source_resource_id.clone(),
+            targets: vec![ResourceTarget {
+                id: source_target_id.clone(),
+                kind: "url".into(),
+                canonical_uri: "https://example.com".into(),
+                priority: 0,
+                arguments: Vec::new(),
+                working_directory: None,
+                active: true,
+            }],
+            ..placeholder
+        };
+        let incoming_sequence = workspace_sequence(
+            &source_profile.profile_id,
+            "Incoming",
+            &[(&source_resource, Some(&source_target_id))],
+        );
+        workspace_sequence_save_on_conn(&mut conn, incoming_sequence).unwrap();
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &source_profile.profile_id, &path, false).unwrap();
+        let archive = read_profile_package(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        let target_profile = profile(&conn);
+        let prior = resource("Prior");
+        persist_resource(&mut conn, &prior, true, Some(&target_profile)).unwrap();
+        let prior_sequence =
+            workspace_sequence(&target_profile, "Prior sequence", &[(&prior, None)]);
+        workspace_sequence_save_on_conn(&mut conn, prior_sequence.clone()).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_sequence_step_insert BEFORE INSERT ON workspace_sequence_steps BEGIN SELECT RAISE(ABORT,'injected sequence step failure'); END;").unwrap();
+        assert!(
+            import_profile_package(&mut conn, &archive, "replace", Some(&target_profile)).is_err()
+        );
+        let sequences = workspace_sequence_list_on_conn(&conn, &target_profile).unwrap();
+        assert_eq!(sequences, vec![prior_sequence]);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
+                [&target_profile],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM profiles WHERE id=?1",
+                [&target_profile],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "Work");
+    }
+
     fn resource(name: &str) -> Resource {
         Resource {
             id: Uuid::new_v4().to_string(),
@@ -5890,6 +6882,303 @@ mod tests {
             launch_count: 0,
             last_launched_utc: None,
         }
+    }
+
+    fn workspace_sequence(
+        profile_id: &str,
+        name: &str,
+        resources: &[(&Resource, Option<&str>)],
+    ) -> WorkspaceSequence {
+        WorkspaceSequence {
+            id: Uuid::new_v4().to_string(),
+            profile_id: profile_id.to_string(),
+            name: name.to_string(),
+            steps: resources
+                .iter()
+                .map(|(resource, target_id)| WorkspaceSequenceStep {
+                    id: Uuid::new_v4().to_string(),
+                    resource_id: resource.id.clone(),
+                    target_id: target_id.map(str::to_string),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn workspace_sequence_validation_bounds_step_count_and_ids() {
+        let sequence_id = Uuid::new_v4().to_string();
+        let resource_id = Uuid::new_v4().to_string();
+        let one_step = || {
+            vec![WorkspaceSequenceStep {
+                id: Uuid::new_v4().to_string(),
+                resource_id: resource_id.clone(),
+                target_id: None,
+            }]
+        };
+        assert!(validate_workspace_sequence_fields(&sequence_id, "Open work", &[]).is_err());
+        assert!(validate_workspace_sequence_fields(&sequence_id, "Open work", &one_step()).is_ok());
+        let twenty = (0..20)
+            .map(|_| WorkspaceSequenceStep {
+                id: Uuid::new_v4().to_string(),
+                resource_id: resource_id.clone(),
+                target_id: None,
+            })
+            .collect::<Vec<_>>();
+        assert!(validate_workspace_sequence_fields(&sequence_id, "Open work", &twenty).is_ok());
+        let twenty_one = (0..21)
+            .map(|_| WorkspaceSequenceStep {
+                id: Uuid::new_v4().to_string(),
+                resource_id: resource_id.clone(),
+                target_id: None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            validate_workspace_sequence_fields(&sequence_id, "Open work", &twenty_one).is_err()
+        );
+        let duplicated_id = Uuid::new_v4().to_string();
+        let duplicate_steps = vec![
+            WorkspaceSequenceStep {
+                id: duplicated_id.clone(),
+                resource_id: resource_id.clone(),
+                target_id: None,
+            },
+            WorkspaceSequenceStep {
+                id: duplicated_id,
+                resource_id,
+                target_id: None,
+            },
+        ];
+        assert!(
+            validate_workspace_sequence_fields(&sequence_id, "Open work", &duplicate_steps)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn workspace_sequences_are_profile_scoped_and_validate_membership_and_active_targets() {
+        let mut conn = database();
+        let owner = profile(&conn);
+        let other = profile(&conn);
+        let first = resource("First");
+        let second = resource("Second");
+        persist_resource(&mut conn, &first, true, Some(&owner)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&other)).unwrap();
+        let mut sequence =
+            workspace_sequence(&owner, "Morning", &[(&first, Some(&first.targets[0].id))]);
+        assert!(workspace_sequence_save_on_conn(&mut conn, sequence.clone()).is_ok());
+        assert_eq!(
+            workspace_sequence_list_on_conn(&conn, &owner).unwrap(),
+            vec![sequence.clone()]
+        );
+        assert!(workspace_sequence_list_on_conn(&conn, &other)
+            .unwrap()
+            .is_empty());
+        sequence.id = Uuid::new_v4().to_string();
+        sequence.steps[0].resource_id = second.id.clone();
+        assert!(workspace_sequence_save_on_conn(&mut conn, sequence.clone()).is_err());
+        sequence.steps[0].resource_id = first.id.clone();
+        sequence.steps[0].target_id = Some(second.targets[0].id.clone());
+        assert!(workspace_sequence_save_on_conn(&mut conn, sequence.clone()).is_err());
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE id=?1",
+            [&first.targets[0].id],
+        )
+        .unwrap();
+        sequence.steps[0].target_id = Some(first.targets[0].id.clone());
+        assert!(workspace_sequence_save_on_conn(&mut conn, sequence).is_err());
+    }
+
+    #[test]
+    fn workspace_sequence_run_is_ordered_and_replay_does_not_launch_twice() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let mut first = resource("First");
+        let mut second = resource("Second");
+        first.targets[0].canonical_uri = "https://first.example.com".into();
+        second.targets[0].canonical_uri = "https://second.example.com".into();
+        persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(
+            &profile_id,
+            "Start work",
+            &[(&first, None), (&second, None)],
+        );
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let request_id = Uuid::new_v4().to_string();
+        let mut calls = Vec::new();
+        let result = workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &request_id,
+            |target| {
+                calls.push(target.canonical_uri.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            calls,
+            vec![
+                first.targets[0].canonical_uri.clone(),
+                second.targets[0].canonical_uri.clone()
+            ]
+        );
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.completed_steps, 2);
+        assert_eq!(result.steps.len(), 2);
+        assert_eq!(result.steps[0].step_id, sequence.steps[0].id);
+        assert_eq!(result.steps[1].step_id, sequence.steps[1].id);
+        let replay =
+            workspace_sequence_run_with(&mut conn, &sequence.id, &profile_id, &request_id, |_| {
+                panic!("replay must not call Shell")
+            })
+            .unwrap();
+        assert_eq!(replay.status, "completed");
+        assert_eq!(calls.len(), 2);
+        let other_sequence = workspace_sequence(&profile_id, "Other", &[(&first, None)]);
+        workspace_sequence_save_on_conn(&mut conn, other_sequence.clone()).unwrap();
+        assert!(workspace_sequence_run_with(
+            &mut conn,
+            &other_sequence.id,
+            &profile_id,
+            &request_id,
+            |_| Ok(())
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn workspace_sequence_run_stops_at_first_failed_handoff() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let first = resource("First");
+        let second = resource("Failure");
+        let third = resource("Never opened");
+        persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &third, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(
+            &profile_id,
+            "Stop on error",
+            &[(&first, None), (&second, None), (&third, None)],
+        );
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let mut calls = Vec::new();
+        let result = workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &Uuid::new_v4().to_string(),
+            |target| {
+                calls.push(target.canonical_uri.clone());
+                if target.canonical_uri == second.targets[0].canonical_uri {
+                    Err("synthetic_failure".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.completed_steps, 1);
+        assert_eq!(
+            result.stopped_at_step_id.as_deref(),
+            Some(sequence.steps[1].id.as_str())
+        );
+        assert_eq!(result.steps.len(), 2);
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE profile_id=?1 AND source='sequence'",
+                [&profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 2);
+    }
+
+    #[test]
+    fn workspace_sequence_run_records_stale_target_and_does_not_continue() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let first = resource("First");
+        let second = resource("Deactivated");
+        persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(
+            &profile_id,
+            "Stale target",
+            &[(&first, None), (&second, Some(&second.targets[0].id))],
+        );
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE id=?1",
+            [&second.targets[0].id],
+        )
+        .unwrap();
+        let mut calls = 0;
+        let result = workspace_sequence_run_with(
+            &mut conn,
+            &sequence.id,
+            &profile_id,
+            &Uuid::new_v4().to_string(),
+            |_| {
+                calls += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.completed_steps, 1);
+        assert_eq!(
+            result.stopped_at_step_id.as_deref(),
+            Some(sequence.steps[1].id.as_str())
+        );
+        assert_eq!(
+            result.steps[1].result.error_code.as_deref(),
+            Some("target_not_found")
+        );
+    }
+
+    #[test]
+    fn workspace_sequence_run_recovery_does_not_repeat_unknown_shell_handoff() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("Interrupted");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let sequence = workspace_sequence(&profile_id, "Interrupted", &[(&resource, None)]);
+        workspace_sequence_save_on_conn(&mut conn, sequence.clone()).unwrap();
+        let request_id = Uuid::new_v4().to_string();
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = workspace_sequence_run_with(
+                &mut conn,
+                &sequence.id,
+                &profile_id,
+                &request_id,
+                |_| panic!("simulate crash after launch reservation"),
+            );
+        }));
+        assert!(panic_result.is_err());
+        let recovered =
+            workspace_sequence_run_with(&mut conn, &sequence.id, &profile_id, &request_id, |_| {
+                panic!("uncertain handoff must never be repeated")
+            })
+            .unwrap();
+        assert_eq!(recovered.status, "failed");
+        assert_eq!(
+            recovered.steps[0].result.error_code.as_deref(),
+            Some("launch_outcome_unknown")
+        );
+        let event_status: String = conn
+            .query_row(
+                "SELECT status FROM launch_events WHERE request_id=?1",
+                [&recovered.steps[0].result.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_status, "failed");
     }
 
     #[test]

@@ -133,6 +133,34 @@ def validate_profile_archive(path: str | Path) -> dict[str, Any]:
         known_resource_ids = set(resource_ids)
         if not set(docs["profile.json"]["memberships"]).issubset(known_resource_ids):
             raise ProfileArchiveError("profile membership refers to an unknown resource")
+        profile = docs["profile.json"]
+        sequence_ids: set[str] = set()
+        sequence_step_ids: set[str] = set()
+        sequence_names: set[str] = set()
+        targets_by_id = {
+            target["id"]: (resource["id"], target.get("active", True))
+            for resource in resources
+            for target in resource["targets"]
+        }
+        for sequence in profile.get("workspace_sequences", []):
+            if sequence["id"] in sequence_ids:
+                raise ProfileArchiveError("workspace sequence IDs must be unique")
+            sequence_ids.add(sequence["id"])
+            folded_name = sequence["name"].casefold()
+            if folded_name in sequence_names:
+                raise ProfileArchiveError("workspace sequence names must be unique")
+            sequence_names.add(folded_name)
+            for step in sequence["steps"]:
+                if step["id"] in sequence_step_ids:
+                    raise ProfileArchiveError("workspace sequence step IDs must be unique")
+                sequence_step_ids.add(step["id"])
+                if step["resource_id"] not in profile["memberships"]:
+                    raise ProfileArchiveError("workspace sequence step resource is not a profile member")
+                if "target_id" in step:
+                    target = targets_by_id.get(step["target_id"])
+                    if target is None or target[0] != step["resource_id"] or not target[1]:
+                        raise ProfileArchiveError("workspace sequence step target is not active on its resource")
+
         for layout in docs["layouts.json"]["layouts"]:
             if any(card["resource_id"] not in known_resource_ids for card in layout["cards"]):
                 raise ProfileArchiveError("layout refers to an unknown resource")

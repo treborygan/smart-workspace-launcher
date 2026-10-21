@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection, WorkspaceSequence, WorkspaceSequenceRunResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -188,6 +188,37 @@ export const api = {
   async deleteDynamicShortcut(profileId: string, id: string): Promise<void> {
     if (isNative()) { await invokeTyped("dynamic_shortcut_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
     localStorage.setItem(`swl-dynamic-shortcuts-${profileId}`, JSON.stringify((await api.dynamicShortcuts(profileId)).filter((item) => item.id !== id)));
+  },
+  async workspaceSequences(profileId: string): Promise<WorkspaceSequence[]> {
+    if (isNative()) return invokeTyped("workspace_sequence_list", { profileId });
+    try { return JSON.parse(localStorage.getItem(`swl-workspace-sequences-${profileId}`) || "[]") as WorkspaceSequence[]; } catch { return []; }
+  },
+  async saveWorkspaceSequence(sequence: WorkspaceSequence): Promise<WorkspaceSequence> {
+    if (isNative()) { const saved = await invokeTyped("workspace_sequence_save", { sequence }); await notifyWorkspaceChanged(sequence.profileId); return saved; }
+    const current = await api.workspaceSequences(sequence.profileId);
+    const next = current.some((item) => item.id === sequence.id) ? current.map((item) => item.id === sequence.id ? sequence : item) : [...current, sequence];
+    localStorage.setItem(`swl-workspace-sequences-${sequence.profileId}`, JSON.stringify(next));
+    return sequence;
+  },
+  async deleteWorkspaceSequence(profileId: string, id: string): Promise<void> {
+    if (isNative()) { await invokeTyped("workspace_sequence_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
+    localStorage.setItem(`swl-workspace-sequences-${profileId}`, JSON.stringify((await api.workspaceSequences(profileId)).filter((item) => item.id !== id)));
+  },
+  async runWorkspaceSequence(profileId: string, id: string, requestId: string = crypto.randomUUID()): Promise<WorkspaceSequenceRunResult> {
+    if (isNative()) return invokeTyped("workspace_sequence_run", { profileId, id, requestId });
+    const sequence = (await api.workspaceSequences(profileId)).find((item) => item.id === id);
+    if (!sequence) throw new Error("Workspace sequence was not found.");
+    const steps: WorkspaceSequenceRunResult["steps"] = [];
+    for (const step of sequence.steps) {
+      let result: LaunchResult;
+      try { result = await api.launch(step.resourceId, "sequence", profileId, step.targetId); }
+      catch (error) { result = { requestId: crypto.randomUUID(), status: "failed", launchedAtUtc: new Date().toISOString(), errorCode: "launch_failed", message: error instanceof Error ? error.message : "Resource launch failed." }; }
+      steps.push({ stepId: step.id, resourceId: step.resourceId, ...(step.targetId ? { targetId: step.targetId } : {}), result });
+      if (result.status === "failed") break;
+    }
+    const completedSteps = steps.filter((step) => step.result.status !== "failed").length;
+    const stoppedAtStepId = steps.at(-1)?.result.status === "failed" ? steps.at(-1)!.stepId : undefined;
+    return { sequenceId: id, status: stoppedAtStepId ? "failed" : "completed", totalSteps: sequence.steps.length, completedSteps, ...(stoppedAtStepId ? { stoppedAtStepId } : {}), steps };
   },
   async layout(profileId: string, surface: "dashboard" | "dock" = "dashboard"): Promise<DashboardLayout | null> {
     if (isNative()) return invokeTyped("layout_get", { profileId, surface });

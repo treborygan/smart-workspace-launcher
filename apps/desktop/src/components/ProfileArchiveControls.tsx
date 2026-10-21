@@ -16,6 +16,15 @@ export function ProfileArchiveControls({ profiles, activeProfileId, onImported }
   const [importResult, setImportResult] = useState<ProfileImportResult | null>(null);
   const profile = profiles.find((item) => item.id === activeProfileId);
   const desktopAvailable = api.isNativeApp();
+  const refreshPreview = async (nextStrategy: ProfileImportStrategy, nextTargetProfileId: string) => {
+    if (!packagePath) return;
+    setBusy(true); setError(""); setConfirming(false);
+    try {
+      const nextPreview = await api.previewProfileImport(packagePath, nextStrategy === "duplicate" ? undefined : nextTargetProfileId);
+      setPreview(nextPreview);
+    } catch (reason) { setPreview(null); setError(message(reason, "Could not refresh the import preview.")); }
+    finally { setBusy(false); }
+  };
   const exportProfile = async () => {
     if (!profile) return;
     setBusy(true); setError(""); setResult("");
@@ -42,7 +51,13 @@ export function ProfileArchiveControls({ profiles, activeProfileId, onImported }
     if (!preview || !packagePath) return;
     setBusy(true); setError("");
     try {
-      const imported = await api.commitProfileImport(packagePath, strategy, strategy === "duplicate" ? undefined : targetProfileId, preview.packageSha256, preview.previewToken);
+      const commitTargetId = strategy === "duplicate" ? undefined : targetProfileId;
+      const refreshed = await api.previewProfileImport(packagePath, commitTargetId);
+      if (refreshed.packageSha256 !== preview.packageSha256 || refreshed.previewToken !== preview.previewToken) {
+        setPreview(refreshed); setConfirming(false); setError("The import preview changed. Review the updated collisions and confirm again.");
+        return;
+      }
+      const imported = await api.commitProfileImport(packagePath, strategy, commitTargetId, refreshed.packageSha256, refreshed.previewToken);
       setImportResult(imported); setConfirming(false); setResult(`Imported ${imported.importedResources} resources into ${imported.profileName}. ${imported.reusedResources} existing resources reused; ${imported.importedLayouts} layouts and ${imported.importedHistoryEvents} history events imported.`);
       onImported(imported.profileId);
     } catch (reason) { setError(message(reason, "Profile import failed. No changes were applied.")); }
@@ -62,16 +77,17 @@ export function ProfileArchiveControls({ profiles, activeProfileId, onImported }
       <h4>Review import · {preview.profileName}</h4>
       <p>This preview is read-only. No data has changed.</p>
       <details className="archive-checksum"><summary>Reviewed package checksum</summary><code>{preview.packageSha256}</code></details>
-      <dl><div><dt>Resources</dt><dd>{preview.resourceCount}</dd></div><div><dt>Layouts</dt><dd>{preview.layoutCount}</dd></div><div><dt>History events</dt><dd>{preview.historyEventCount}</dd></div><div><dt>Assets</dt><dd>{preview.assetCount}</dd></div></dl>
-      <div className="archive-collisions"><b>Collisions</b><span>Profile ID: {preview.profileIdCollision ? "yes" : "no"}</span><span>Profile name: {preview.profileNameCollision ? "yes" : "no"}</span><span>Resource IDs: {preview.resourceIdCollisions.length}</span><span>Target IDs: {preview.targetIdCollisions.length}</span></div>
-      {(preview.resourceIdCollisions.length > 0 || preview.targetIdCollisions.length > 0) && <details><summary>Collision details</summary><p>{preview.resourceIdCollisions.join(", ") || "No resource ID collisions"}</p><p>{preview.targetIdCollisions.join(", ") || "No target ID collisions"}</p></details>}
+      <dl><div><dt>Resources</dt><dd>{preview.resourceCount}</dd></div><div><dt>Layouts</dt><dd>{preview.layoutCount}</dd></div><div><dt>Smart collections</dt><dd>{preview.smartCollectionCount}</dd></div><div><dt>Quick Launch shortcuts</dt><dd>{preview.dynamicShortcutCount}</dd></div><div><dt>History events</dt><dd>{preview.historyEventCount}</dd></div><div><dt>Assets</dt><dd>{preview.assetCount}</dd></div></dl>
+      <div className="archive-collisions"><b>Collisions {preview.targetProfileId ? `in ${profiles.find((item) => item.id === preview.targetProfileId)?.name || "the selected target profile"}` : "for a new duplicate profile"}</b><span>Profile ID: {preview.profileIdCollision ? "yes" : "no"}</span><span>Profile name: {preview.profileNameCollision ? "yes" : "no"}</span><span>Resource IDs: {preview.resourceIdCollisions.length}</span><span>Target IDs: {preview.targetIdCollisions.length}</span><span>Smart collection IDs/names: {preview.smartCollectionIdCollisions.length}/{preview.smartCollectionNameCollisions.length}</span><span>Shortcut IDs/names: {preview.dynamicShortcutIdCollisions.length}/{preview.dynamicShortcutNameCollisions.length}</span></div>
+      {(preview.resourceIdCollisions.length > 0 || preview.targetIdCollisions.length > 0 || preview.smartCollectionIdCollisions.length > 0 || preview.smartCollectionNameCollisions.length > 0 || preview.dynamicShortcutIdCollisions.length > 0 || preview.dynamicShortcutNameCollisions.length > 0) && <details><summary>Collision details</summary><p>Resource IDs: {preview.resourceIdCollisions.join(", ") || "none"}</p><p>Target IDs: {preview.targetIdCollisions.join(", ") || "none"}</p><p>Smart collection IDs: {preview.smartCollectionIdCollisions.join(", ") || "none"}</p><p>Smart collection names: {preview.smartCollectionNameCollisions.join(", ") || "none"}</p><p>Quick Launch shortcut IDs: {preview.dynamicShortcutIdCollisions.join(", ") || "none"}</p><p>Quick Launch shortcut names: {preview.dynamicShortcutNameCollisions.join(", ") || "none"}</p></details>}
       {!!preview.resourceConflicts?.length && <details className="archive-conflict-list" open><summary>Resource value review · {preview.resourceConflicts.length}</summary><p>Each conflict shows package values, existing local values, and the content the selected strategy will apply. IDs may be remapped during import.</p>{preview.resourceConflicts.map((conflict, index) => {
         const proposed = strategy === "merge" ? conflict.proposed : safeImportSnapshot(conflict.imported);
         const resolution = strategy === "merge" ? conflict.resolution === "reuse_existing" ? "Merge will reuse the matching existing resource" : "Merge will import as a new resource with remapped IDs" : strategy === "replace" ? "Replace clears profile membership, then imports this as a new resource" : "Duplicate creates this as a new resource with remapped IDs";
         return <article className="archive-conflict" key={`${conflict.imported.id}-${index}`}><h5>{conflict.imported.name} <small>{resolution}</small></h5><div className="archive-snapshot-grid"><Snapshot title="Package" resource={conflict.imported} /><Snapshot title="Existing" resource={conflict.existing} /><Snapshot title={strategy === "merge" ? "Proposed result" : "Imported values"} resource={proposed} /></div></article>;
       })}</details>}
-      <label>Import strategy<select value={strategy} onChange={(event) => { setStrategy(event.target.value as ProfileImportStrategy); setConfirming(false); }}><option value="duplicate">Duplicate as a new profile</option><option value="merge">Merge into an existing profile</option><option value="replace">Replace an existing profile’s contents</option></select></label>
-      {strategy !== "duplicate" && <label>Target profile<select value={targetProfileId} onChange={(event) => setTargetProfileId(event.target.value)}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+      <label>Import strategy<select value={strategy} disabled={busy} onChange={(event) => { const next = event.target.value as ProfileImportStrategy; setStrategy(next); void refreshPreview(next, targetProfileId); }}><option value="duplicate">Duplicate as a new profile</option><option value="merge">Merge into an existing profile</option><option value="replace">Replace an existing profile’s contents</option></select></label>
+      <p className="archive-security">Duplicate keeps the package as a separate profile. Merge reuses matching resources and retains both collection/shortcut names by remapping collisions. Replace replaces the selected profile’s contents.</p>
+      {strategy !== "duplicate" && <label>Target profile<select value={targetProfileId} disabled={busy} onChange={(event) => { const next = event.target.value; setTargetProfileId(next); void refreshPreview(strategy, next); }}>{profiles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
       {!confirming ? <button className="button primary" onClick={() => setConfirming(true)} disabled={busy || (strategy !== "duplicate" && !targetProfileId)}>Review commit…</button> : <div className="archive-confirm" role="group" aria-label="Confirm profile import"><b>{strategy === "replace" ? "Replace profile contents?" : strategy === "merge" ? "Merge this profile?" : "Create a duplicate profile?"}</b><span>{strategy === "replace" ? "Existing resources and layouts for the selected profile will be replaced." : strategy === "merge" ? "Matching resources will be reused and package content merged." : "A new profile will be created from this package."}</span><button className="button primary" onClick={() => void commitImport()} disabled={busy}>{busy ? "Importing…" : "Confirm import"}</button><button className="button secondary" onClick={() => setConfirming(false)} disabled={busy}>Cancel</button></div>}
     </div>}
   </section>;

@@ -7,7 +7,7 @@ vi.mock("../lib/profileDialogs", () => ({ chooseProfileExportPath, chooseProfile
 import { ProfileArchiveControls } from "./ProfileArchiveControls";
 import type { Profile } from "@sw/contracts";
 const timestamp = "2026-01-01T00:00:00Z";
-const profiles: Profile[] = [{ id: "p1", name: "Work", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp }];
+const profiles: Profile[] = [{ id: "p1", name: "Work", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp }, { id: "p2", name: "Personal", themeId: "system", settingsJson: "{}", createdUtc: timestamp, updatedUtc: timestamp }];
 let host: HTMLDivElement; let root: Root;
 const render = async () => act(async () => root.render(createElement(ProfileArchiveControls, { profiles, activeProfileId: "p1", onImported: vi.fn() })));
 const clickText = async (text: string) => { const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes(text)); if (!button) throw new Error(`Missing button: ${text}`); await act(async () => { button.click(); await Promise.resolve(); }); };
@@ -30,12 +30,14 @@ describe("ProfileArchiveControls", () => {
     expect(host.textContent).toContain("Exported 2 resources from Work");
   });
   it("shows read-only collision preview and requires an explicit commit confirmation", async () => {
-    api.previewProfileImport.mockResolvedValue({ profileId: "p1", profileName: "Work", packageSha256: "digest", previewToken: "opaque-token", resourceCount: 4, layoutCount: 2, historyEventCount: 3, profileIdCollision: true, profileNameCollision: true, resourceIdCollisions: ["r1"], targetIdCollisions: ["t1"], assetCount: 0, resourceConflicts: [{ resolution: "import_as_new", imported: { id: "r1", name: "Imported report", resourceType: "file", description: "From package", tags: ["finance"], aliases: [], targets: [{ id: "t1", kind: "file", value: "C:\\Package\\report.xlsx", priority: 0, arguments: [], active: true }] }, existing: { id: "r1", name: "Existing report", resourceType: "file", description: "Local copy", tags: ["local"], aliases: [], targets: [{ id: "t1", kind: "file", value: "D:\\Local\\report.xlsx", priority: 0, arguments: [], active: true }] }, proposed: { id: "r1-new", name: "Imported report", resourceType: "file", description: "From package", tags: ["finance"], aliases: [], targets: [{ id: "t1-new", kind: "file", value: "C:\\Package\\report.xlsx", priority: 0, arguments: [], active: true }] } }] });
+    api.previewProfileImport.mockResolvedValue({ profileId: "p1", profileName: "Work", targetProfileId: "p1", packageSha256: "digest", previewToken: "opaque-token", resourceCount: 4, layoutCount: 2, historyEventCount: 3, smartCollectionCount: 2, dynamicShortcutCount: 1, profileIdCollision: true, profileNameCollision: true, resourceIdCollisions: ["r1"], targetIdCollisions: ["t1"], smartCollectionIdCollisions: ["sc1"], smartCollectionNameCollisions: ["Work files"], dynamicShortcutIdCollisions: ["ds1"], dynamicShortcutNameCollisions: ["Weekly report"], assetCount: 0, resourceConflicts: [{ resolution: "import_as_new", imported: { id: "r1", name: "Imported report", resourceType: "file", description: "From package", tags: ["finance"], aliases: [], targets: [{ id: "t1", kind: "file", value: "C:\\Package\\report.xlsx", priority: 0, arguments: [], active: true }] }, existing: { id: "r1", name: "Existing report", resourceType: "file", description: "Local copy", tags: ["local"], aliases: [], targets: [{ id: "t1", kind: "file", value: "D:\\Local\\report.xlsx", priority: 0, arguments: [], active: true }] }, proposed: { id: "r1-new", name: "Imported report", resourceType: "file", description: "From package", tags: ["finance"], aliases: [], targets: [{ id: "t1-new", kind: "file", value: "C:\\Package\\report.xlsx", priority: 0, arguments: [], active: true }] } }] });
     api.commitProfileImport.mockResolvedValue({ profileId: "p2", profileName: "Work (2)", importedResources: 4, reusedResources: 0, importedLayouts: 2, importedHistoryEvents: 3 });
     await render(); await clickText("Import profile");
     expect(api.previewProfileImport).toHaveBeenCalledWith("C:\\work.swprofile");
     expect(host.textContent).toContain("This preview is read-only. No data has changed.");
     expect(host.textContent).toContain("Resource IDs: 1");
+    expect(host.textContent).toContain("Smart collections"); expect(host.textContent).toContain("Quick Launch shortcuts");
+    expect(host.textContent).toContain("Work files"); expect(host.textContent).toContain("Weekly report");
     expect(host.textContent).toContain("Existing report"); expect(host.textContent).toContain("Imported report"); expect(host.textContent).toContain("Imported values"); expect(host.textContent).toContain("Duplicate creates this as a new resource");
     expect(host.textContent).toContain("digest");
     expect(api.commitProfileImport).not.toHaveBeenCalled();
@@ -48,16 +50,36 @@ describe("ProfileArchiveControls", () => {
   });
   it("requires strategy and target profile selection before replacement commit", async () => {
     const snapshot = { id: "r1", name: "Example", resourceType: "file" as const, description: null, icon: null, tags: [], aliases: [], targets: [{ id: "t1", kind: "file" as const, value: "C:\\Example.txt", priority: 0, arguments: [], active: true }] };
-    api.previewProfileImport.mockResolvedValue({ profileId: "package-id", profileName: "Imported", packageSha256: "digest", previewToken: "token", resourceCount: 1, layoutCount: 0, historyEventCount: 0, profileIdCollision: false, profileNameCollision: false, resourceIdCollisions: [], targetIdCollisions: [], resourceConflicts: [{ resolution: "import_as_new", imported: snapshot, existing: snapshot, proposed: snapshot }], assetCount: 0 });
+    api.previewProfileImport.mockResolvedValue({ profileId: "package-id", profileName: "Imported", targetProfileId: "p1", packageSha256: "digest", previewToken: "token", resourceCount: 1, layoutCount: 0, historyEventCount: 0, smartCollectionCount: 0, dynamicShortcutCount: 0, profileIdCollision: false, profileNameCollision: false, resourceIdCollisions: [], targetIdCollisions: [], smartCollectionIdCollisions: [], smartCollectionNameCollisions: [], dynamicShortcutIdCollisions: [], dynamicShortcutNameCollisions: [], resourceConflicts: [{ resolution: "import_as_new", imported: snapshot, existing: snapshot, proposed: snapshot }], assetCount: 0 });
     await render(); await clickText("Import profile");
     const select = [...host.querySelectorAll("select")].find((item) => item.options[0]?.value === "duplicate")!;
     await act(async () => { select.value = "replace"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(api.previewProfileImport).toHaveBeenCalledWith("C:\\work.swprofile", "p1");
     expect(host.textContent).toContain("Replace an existing profile’s contents");
     expect(host.textContent).toContain("Replace clears profile membership, then imports this as a new resource");
     expect(host.textContent).toContain("Target profile");
     await clickText("Review commit");
     expect(host.textContent).toContain("Existing resources and layouts");
     expect(api.commitProfileImport).not.toHaveBeenCalled();
+    await clickText("Confirm import");
+    expect(api.previewProfileImport).toHaveBeenLastCalledWith("C:\\work.swprofile", "p1");
+    expect(api.commitProfileImport).toHaveBeenCalledWith("C:\\work.swprofile", "replace", "p1", "digest", "token");
+  });
+  it("refreshes collisions when the target changes and commits the currently reviewed target token", async () => {
+    const previewFor = (targetProfileId: string) => ({ profileId: "package", profileName: "Imported", targetProfileId, packageSha256: "digest", previewToken: `token-${targetProfileId}`, resourceCount: 1, layoutCount: 0, historyEventCount: 0, smartCollectionCount: 1, dynamicShortcutCount: 1, profileIdCollision: false, profileNameCollision: false, resourceIdCollisions: [], targetIdCollisions: [], smartCollectionIdCollisions: [], smartCollectionNameCollisions: [], dynamicShortcutIdCollisions: [], dynamicShortcutNameCollisions: [], resourceConflicts: [], assetCount: 0 });
+    api.previewProfileImport.mockImplementation(async (_path: string, target: string | undefined) => previewFor(target || "package"));
+    await render(); await clickText("Import profile");
+    const strategy = [...host.querySelectorAll("select")].find((item) => item.options[0]?.value === "duplicate")!;
+    await act(async () => { strategy.value = "merge"; strategy.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    const target = [...host.querySelectorAll("select")].find((item) => item.options[0]?.value === "p1")!;
+    await act(async () => { target.value = "p2"; target.dispatchEvent(new Event("change", { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(api.previewProfileImport).toHaveBeenLastCalledWith("C:\\work.swprofile", "p2");
+    expect(host.textContent).toContain("Collisions in Personal");
+    expect(host.textContent).toContain("Shortcut IDs/names: 0/0");
+    await clickText("Review commit"); await clickText("Confirm import");
+    expect(api.previewProfileImport).toHaveBeenLastCalledWith("C:\\work.swprofile", "p2");
+    expect(api.commitProfileImport).toHaveBeenCalledWith("C:\\work.swprofile", "merge", "p2", "digest", "token-p2");
   });
   it("surfaces validation failures without attempting import", async () => {
     api.previewProfileImport.mockRejectedValue(new Error("Invalid package manifest"));

@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-21 22:00 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-010 PR #35 merged to `main` as `9c8f8a7`. SW-011 integrated branch `feature/sw-011-integration` is based on that merge and includes hardening commits `737e7e9`, `070f697`, and `b7fe9b6`; QA review found no blocker.
+Updated 2026-10-21 21:51 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`. SW-013 implementation is integrated on `feature/sw-013-dynamic-collections`; final independent QA passed with no blocker; Replace/remap and injected rollback regression coverage is present. PR creation is next.
 
 ## Environment and release status
 
@@ -14,11 +14,16 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 - SW-008 safe profile archive import/export (#34).
 - SW-009 independent Dock (#29).
 - SW-010 Resource Explorer, Inspector, profile themes and responsive dashboard (#35; merged `9c8f8a7`).
-- SW-011 security hardening is integrated locally after SW-010 and QA reviewed. It adds Windows path checks, HTTPS credential rejection, profile/membership launch authorization, replay intent/target validation, profile name limits, and SQLite timeout/trusted schema settings.
+- SW-011 security hardening (#36; merged `0a212d8`): Windows path checks, HTTPS credential rejection, profile/resource launch authorization, replay intent/target validation, bounded profile names, and SQLite timeout/trusted schema settings.
+
+## In progress
+
+- SW-013 (issue #12) implementation and final independent QA are complete locally; feature PR creation is next. It adds profile-scoped bounded AND-filter smart collections, named shortcuts to existing profile resources and optional active owned targets, Quick Launch integration, profile archive round trips, target-bound preview tokens and import collision details. Archive imports do not execute package content. No per-resource/global OS hotkeys are included; the existing global Quick Launch hotkey remains.
 
 ## Verification evidence
 
-- `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS on integrated SW-011; 8 frontend test files/56 tests; production build and diff check pass. Vite reports one non-failing ineffective dynamic import warning.
+- SW-013 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build` — PASS (73 tests across 11 files; production build, existing non-fatal Vite dynamic-import warning). `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check` — PASS. `python tests/test_profile_archive_contract.py -q` — PASS (11 tests); `python scripts/verify_handoff.py` — PASS. `python scripts/check_release_gate.py` — BLOCKED as expected. Focused Rust tests including Replace/remap and injected transaction rollback are authored, but blocked before compilation by missing GLib/GObject >=2.70 development packages. Windows GNU checks remain blocked by missing MinGW; Windows acceptance unavailable. Final QA found no SW-013 blocker.
+- On integrated SW-011: `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS; 8 frontend test files/56 tests; build and diff check pass. Vite reports a non-failing ineffective dynamic import warning.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
 - `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1` — PASS.
 - `python -m unittest discover -s tests -v` — PASS (11 archive QA harness tests).
@@ -29,8 +34,7 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## Next executable tasks
 
-1. Publish a reviewed SW-011 feature PR when GitHub write/API access is available and merge in dependency order.
-2. Continue SW-013..SW-025 cross-platform work and measurable tests while keeping V1 BLOCKED until real Windows 11 x64 acceptance is available.
-3. Run `docs/TEST_AND_ACCEPTANCE.md` and the checked-in PowerShell verification/packaging scripts on Windows before any release or READY notice.
+1. Finish SW-013 independent review and merge its feature PR, then continue SW-014..SW-025 in dependency order while performing cross-platform work available here.
+2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:00:00Z",
+  "updated_at_utc": "2026-10-21T21:51:30Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-011-integration"
+    "branch": "feature/sw-013-dynamic-collections"
   },
   "active_pull_request": null,
   "subagent_limit": 3,
@@ -17,33 +17,33 @@
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-011 hardening, security, integration and performance",
-      "branch": "feature/sw-011-integration",
-      "commit": "b7fe9b6",
+      "issue": "SW-013",
+      "branch": "feature/sw-013-dynamic-collections",
+      "commit": "a18c6dc368dfe1106b889203cb6f9cb561a09254",
       "pr": null,
-      "task": "SW-011 integrated on current main after SW-010. Reviewed hardening commits 737e7e9, 070f697, b7fe9b6; QA found no blocker. PR creation pending GitHub API availability."
+      "task": "Implemented profile-scoped smart collections, dynamic shortcuts, archive support, target-bound import previews, Replace and rollback regressions."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-010 Resource Explorer, Inspector, themes",
-      "branch": "feature/sw-010-ui",
-      "commit": "3b1d5da",
-      "pr": 35,
-      "task": "SW-010 PR #35 merged to main at 9c8f8a7. QA approved final code; typecheck, 56 tests, build and diff passed."
+      "issue": "SW-013",
+      "branch": "feature/sw-013-dynamic-collections",
+      "commit": null,
+      "pr": null,
+      "task": "Implemented smart collection and shortcut managers, active-profile Quick Launch integration, and collision preview UI."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-010 final review",
-      "branch": "feature/sw-011-integration",
-      "commit": "b7fe9b6",
+      "issue": "SW-013",
+      "branch": "feature/sw-013-dynamic-collections",
+      "commit": null,
       "pr": null,
-      "task": "QA reviewed SW-011 integrated diff on current main: replay intent case fixed, no blocker. Caveat: explicit-target replay after target deactivation returns NotFound without launching again."
+      "task": "Final independent review of Replace/rollback test additions and integrated SW-013 tree."
     },
     {
       "role": "research",
@@ -66,152 +66,52 @@
   ],
   "milestones": {
     "V1.0": "IN_PROGRESS",
-    "V1.1": "NOT_STARTED",
+    "V1.1": "IN_PROGRESS",
     "V1.2": "NOT_STARTED",
     "V2.0": "NOT_STARTED"
   },
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T22:00:00Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows/PowerShell host",
+    "at_utc": "2026-10-21T21:51:30Z",
+    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no PowerShell or Windows 11 host",
     "results": [
       {
-        "command": "npm ci && npm run typecheck && npm test && npm run frontend:build && git diff --check",
-        "result": "PASS on SW-007 UI integration branch (npm ci: 88 packages; 4 files/31 tests; production build succeeded). QA independently ran typecheck/tests/build/diff check and confirmed no blocking issue."
+        "command": "npm run typecheck && npm test -- --run && npm run frontend:build",
+        "result": "PASS: typecheck; 11 frontend files/73 tests; production build. Existing non-failing Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check",
+        "result": "PASS on SW-013 head a18c6dc."
+      },
+      {
+        "command": "python tests/test_profile_archive_contract.py -q",
+        "result": "PASS: 11 tests."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS after PR #26/#27/#29/#30/#33 merges; reports no compiled app or Windows runtime tests."
+        "result": "PASS: catalog/schema/fixture/handoff checks; no compiled app or Windows runtime checks."
       },
       {
         "command": "python scripts/check_release_gate.py",
         "result": "BLOCKED as expected; no real Windows 11 verification."
       },
       {
-        "command": "npm run lint && npm test && npm run frontend:build && git diff --check",
-        "result": "PASS on integrated SW-009 + SW-007 backend branch; 23 frontend tests; production build succeeded"
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
-        "result": "PASS"
-      },
-      {
-        "command": "Windows GNU target cargo check --tests (with host cc, fake windres and temporary icon)",
-        "result": "PASS type-check only on SW-007 backend commit; no Windows binary or test execution"
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "result": "BLOCKED before test compilation: glib-2.0 >= 2.70 development package missing"
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
-        "result": "PASS on corrective commit 80d797c"
-      },
-      {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS (11 profile archive QA harness tests; no production importer yet)"
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS (handoff/schema/fixture checks only)"
-      },
-      {
-        "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED as expected; no real Windows 11 verification"
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check",
-        "result": "PASS on SW-008 backend head adaab02; independently re-run by QA."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "result": "BLOCKED before test compilation: glib-sys cannot find glib-2.0 >=2.70 / glib-2.0.pc."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib dynamic_shortcuts -- --nocapture",
+        "result": "BLOCKED before project compilation: GLib/GObject >=2.70 development packages are missing."
       },
       {
         "command": "cargo check --target x86_64-pc-windows-gnu --tests",
-        "result": "BLOCKED: x86_64-w64-mingw32-gcc is not installed; no Windows binary or tests."
+        "result": "BLOCKED: MinGW x86_64-w64-mingw32-gcc unavailable; not Windows acceptance."
       },
       {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS: 11 profile archive QA fixture/helper tests."
-      },
-      {
-        "command": "npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check",
-        "result": "PASS on SW-008 integration at 6a02e59: 89 packages installed; typecheck passes; 5 files/38 tests pass; production build passes; diff check passes. Vite reports one non-failing ineffective dynamic import warning."
-      },
-      {
-        "command": "QA review of SW-008 backend and UI",
-        "result": "PASS with no blocking issues. QA separately confirmed digest/token binding, safe merge collision behavior, strategy-aware UI, and API commit token propagation."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
-        "result": "PASS on SW-011 backend branch at f767844."
-      },
-      {
-        "command": "npm run typecheck && npm test -- --run",
-        "result": "PASS on SW-011 branch baseline: TypeScript check and 5 files/38 frontend tests pass."
-      },
-      {
-        "command": "python scripts/qa/profile_archive.py fixtures/valid/example.swprofile",
-        "result": "PASS on SW-011 branch."
-      },
-      {
-        "command": "git diff --check",
-        "result": "PASS on SW-011 branch."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "result": "BLOCKED before project compile: GLib >=2.70 dev package unavailable on Linux."
-      },
-      {
-        "command": "cargo check --target x86_64-pc-windows-gnu --tests",
-        "result": "BLOCKED before project compile: Windows GNU DLL toolchain unavailable; no Windows tests."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
-        "result": "PASS on SW-011 hardening follow-up f1e8bc2. Rust tests remain blocked by missing GLib >=2.70."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
-        "result": "PASS on SW-011 latest head b42ff26; explicit target and replay intent regression tests authored but cannot compile without Linux GLib/GObject >=2.70."
-      },
-      {
-        "command": "npm run typecheck && npm test && npm run frontend:build && git diff --check",
-        "result": "PASS on SW-010 follow-up 773ede2; 8 files/56 tests pass, production build and diff check pass. QA final review is pending."
-      },
-      {
-        "command": "npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check",
-        "result": "PASS on integrated SW-011 branch atop SW-010: 8 files/56 tests; production build and diff check pass. Vite emitted a non-failing ineffective dynamic import warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS on SW-011 integrated branch."
-      },
-      {
-        "command": "cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1",
-        "result": "PASS."
-      },
-      {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS: 11 archive QA harness tests."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS; handoff/schema/fixture checks only."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "result": "BLOCKED before project test compile: glib-sys requires glib-2.0 >=2.70 development files unavailable on Debian host."
-      },
-      {
-        "command": "QA review SW-011 integrated head b7fe9b6",
-        "result": "PASS, no blocker. Residual: request replay for a now-inactive explicit target returns NotFound; no second launch occurs. Performance targets/benchmarks remain unmeasured."
+        "command": "QA final SW-013 review",
+        "result": "PASS: no blocker. Replace/remap and injected insertion-failure rollback tests are well-scoped; Rust execution remains blocked by missing GLib/GObject."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Commit and publish SW-011 integration PR when GitHub write/API access is available; preserve V1 BLOCKED pending real Windows 11 x64 acceptance. Then proceed with next executable SW-013..SW-025 tasks.",
+  "next_action": "Complete QA, open and merge reviewed SW-013 PR, then continue SW-014..SW-025 cross-platform tasks in dependency order. SW-012 Windows acceptance remains blocked until real Windows 11 x64 is available; do not package or announce V1.",
   "recent_merges": [
     {
       "number": 32,
@@ -252,6 +152,11 @@
       "number": 35,
       "sha": "9c8f8a7ae17d9559621eaf68dde23260cb2c97d8",
       "scope": "SW-010 Resource Explorer, Inspector, profile themes, responsive dashboard"
+    },
+    {
+      "number": 36,
+      "sha": "0a212d8541328d3b41033ba36496871c2b05d8dc",
+      "scope": "SW-011 launch/input validation, replay intent guards, and SQLite hardening"
     }
   ],
   "open_pull_requests": []

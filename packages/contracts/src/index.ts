@@ -60,6 +60,13 @@ export interface Profile {
   updatedUtc: string;
 }
 
+export interface ProfileThemeInput {
+  mode: "light" | "dark" | "system";
+  /** Custom accent color in #RRGGBB form. */
+  accent: string;
+  density?: "compact" | "balanced" | "comfortable";
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -212,6 +219,7 @@ export interface CommandMap {
   resource_inspect: { args: { resourceId: string; forceRefresh?: boolean }; result: ResourceMetadata[] };
   profile_list: { args?: undefined; result: Profile[] };
   profile_create: { args: { name: string }; result: Profile };
+  profile_theme_set: { args: { profileId: string; theme: ProfileThemeInput }; result: Profile };
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
   profile_import_preview: { args: { packagePath: string }; result: ProfileImportPreview };

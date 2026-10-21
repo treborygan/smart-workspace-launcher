@@ -148,6 +148,14 @@ pub struct Profile {
     pub updated_utc: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProfileThemeInput {
+    pub mode: String,
+    pub accent: String,
+    pub density: Option<String>,
+}
+
 const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
@@ -3049,6 +3057,78 @@ fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, A
     Ok(profile)
 }
 
+fn profile_theme_set_on_conn(
+    conn: &mut Connection,
+    profile_id: &str,
+    theme: &ProfileThemeInput,
+) -> Result<Profile, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    if !["light", "dark", "system"].contains(&theme.mode.as_str())
+        || !valid_hex_color(&theme.accent)
+        || theme.density.as_ref().is_some_and(|density| {
+            !["compact", "balanced", "comfortable"].contains(&density.as_str())
+        })
+    {
+        return Err(AppError::Invalid("invalid profile theme".into()));
+    }
+    let tx = conn.transaction()?;
+    let settings_json: String = tx
+        .query_row(
+            "SELECT settings_json FROM profiles WHERE id=?1",
+            [profile_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    let mut settings: serde_json::Value = serde_json::from_str(&settings_json)?;
+    let Some(settings) = settings.as_object_mut() else {
+        return Err(AppError::Invalid(
+            "profile settings must be a JSON object".into(),
+        ));
+    };
+    settings.insert(
+        "accent".into(),
+        serde_json::Value::String(theme.accent.clone()),
+    );
+    if let Some(density) = &theme.density {
+        settings.insert("density".into(), serde_json::Value::String(density.clone()));
+    } else {
+        settings.remove("density");
+    }
+    if settings.len() > 50 {
+        return Err(AppError::Invalid(
+            "profile settings exceed 50 properties".into(),
+        ));
+    }
+    let updated_utc = now_utc();
+    tx.execute(
+        "UPDATE profiles SET theme_id=?2,settings_json=?3,updated_utc=?4 WHERE id=?1",
+        params![
+            profile_id,
+            theme.mode,
+            serde_json::Value::Object(settings.clone()).to_string(),
+            updated_utc
+        ],
+    )?;
+    let profile = tx.query_row(
+        "SELECT id,name,theme_id,settings_json,created_utc,updated_utc FROM profiles WHERE id=?1",
+        [profile_id],
+        profile_from_row,
+    )?;
+    tx.commit()?;
+    Ok(profile)
+}
+
+#[tauri::command]
+fn profile_theme_set(
+    state: State<'_, AppState>,
+    profile_id: String,
+    theme: ProfileThemeInput,
+) -> Result<Profile, AppError> {
+    let mut conn = lock(&state)?;
+    profile_theme_set_on_conn(&mut conn, &profile_id, &theme)
+}
+
 #[tauri::command]
 fn profile_export(
     state: State<'_, AppState>,
@@ -3878,6 +3958,7 @@ pub fn run() {
             resource_inspect,
             profile_list,
             profile_create,
+            profile_theme_set,
             profile_export,
             profile_import_preview,
             profile_import_commit,
@@ -4478,6 +4559,105 @@ mod tests {
             ..sample_target()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn target_validation_rejects_credentials_controls_ads_and_device_paths() {
+        assert!(validate_target(&ResourceTarget {
+            kind: "url".into(),
+            canonical_uri: "https://user:password@example.com/path".into(),
+            ..sample_target()
+        })
+        .is_err());
+        for path in [
+            "C:\\safe\\..\\secret.txt",
+            "C:\\file.txt:secret-stream",
+            "\\\\.\\PhysicalDrive0",
+            "\\\\?\\C:\\secret.txt",
+            "C:\\NUL.txt",
+            "relative\\file.txt",
+        ] {
+            assert!(
+                validate_target(&ResourceTarget {
+                    kind: "file".into(),
+                    canonical_uri: path.into(),
+                    ..sample_target()
+                })
+                .is_err(),
+                "accepted unsafe Windows target path: {path}"
+            );
+        }
+        assert!(validate_target(&ResourceTarget {
+            working_directory: Some("C:\\folder\0\\child".into()),
+            ..sample_target()
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn profile_theme_update_persists_validated_theme_and_preserves_other_settings() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        conn.execute(
+            "UPDATE profiles SET settings_json=?2 WHERE id=?1",
+            params![
+                profile_id,
+                r#"{"customSetting":{"keep":true},"density":"comfortable","theme":"legacy"}"#
+            ],
+        )
+        .unwrap();
+        let updated = profile_theme_set_on_conn(
+            &mut conn,
+            &profile_id,
+            &ProfileThemeInput {
+                mode: "dark".into(),
+                accent: "#A1b2C3".into(),
+                density: Some("compact".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.theme_id, "dark");
+        let settings: serde_json::Value = serde_json::from_str(&updated.settings_json).unwrap();
+        assert_eq!(settings["accent"], "#A1b2C3");
+        assert_eq!(settings["density"], "compact");
+        assert_eq!(settings["customSetting"]["keep"], true);
+        assert_eq!(settings["theme"], "legacy");
+
+        let cleared = profile_theme_set_on_conn(
+            &mut conn,
+            &profile_id,
+            &ProfileThemeInput {
+                mode: "system".into(),
+                accent: "#112233".into(),
+                density: None,
+            },
+        )
+        .unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&cleared.settings_json).unwrap();
+        assert!(settings.get("density").is_none());
+        assert_eq!(settings["customSetting"]["keep"], true);
+        let export = profile_package_from_db(&conn, &profile_id, false).unwrap();
+        assert_eq!(export.profile.theme.mode, "system");
+        assert_eq!(export.profile.theme.accent, "#112233");
+        assert!(export.profile.theme.density.is_none());
+        assert!(profile_theme_set_on_conn(
+            &mut conn,
+            &profile_id,
+            &ProfileThemeInput {
+                mode: "custom".into(),
+                accent: "red".into(),
+                density: Some("loose".into()),
+            }
+        )
+        .is_err());
+        let unchanged = conn
+            .query_row(
+                "SELECT theme_id FROM profiles WHERE id=?1",
+                [&profile_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, "system");
     }
     #[test]
     fn rejects_unknown_target_kinds_and_non_app_arguments() {

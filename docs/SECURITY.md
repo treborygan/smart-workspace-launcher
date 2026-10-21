@@ -9,3 +9,4 @@
 - Export excludes credentials, tokens and launch history unless expressly requested.
 - User can disable history, exclude resources, purge records, or keep Work/Personal in isolated databases if needed.
 - Security tests: zip-slip, decompression bomb, invalid URL protocols, injection args, symlink/out-of-scope folder traversal, changed path after check, concurrent imports and crash recovery.
+- Workspace sequences store only bounded references to resources already authorized in the selected profile. Every run step is revalidated by the regular launch path; sequences cannot carry shell commands, scripts, or arbitrary arguments. Import may create inert sequence definitions but never invokes them. Sequence run request IDs are idempotent so replay cannot repeat completed launch side effects.

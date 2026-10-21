@@ -17,3 +17,5 @@ Light/dark/system, custom color variables, density presets, contrast and focus r
 
 ## Empty/error states
 Network unreachable, moved file, missing default handler, denied access, conflicting hotkey, bad import, unavailable WebView2: provide actionable message and keep UI responsive. No spinner that blocks Quick Launch waiting for a network path.
+
+Workspace sequences are profile-local named lists of existing resources. Users can reorder up to 20 steps, select an optional target per step, and explicitly run the sequence. Show ordered progress and identify the failed step; stop there by default while preserving completed launch events. A retry of the same run request must not repeat launches. Imported sequence definitions are shown for review but never run during import.

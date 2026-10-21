@@ -85,6 +85,29 @@ export interface LaunchEvent extends LaunchResult {
   durationMs?: number | null;
 }
 
+/** Metadata comes only from inspecting the selected target path; it does not observe other apps. */
+export interface ResourceMetadata {
+  resourceId: string;
+  targetId: string;
+  inspectedUtc: string;
+  fileSizeBytes?: number;
+  createdUtc?: string;
+  modifiedUtc?: string;
+  availability: "available" | "missing" | "inaccessible" | "unsupported";
+  provenance: "local-filesystem" | "unsupported";
+  cacheStatus: "fresh" | "cached" | "error";
+  errorCode?: string;
+}
+
+/** Aggregates only launch events recorded by this app on this device. */
+export interface AnalyticsSummary {
+  totalLaunches: number;
+  bySource: Record<string, number>;
+  byStatus: Record<string, number>;
+  firstEventUtc?: string;
+  lastEventUtc?: string;
+}
+
 export interface QuickLaunchHotkeyStatus {
   /** Whether the requested shortcut is currently registered. */
   registered: boolean;
@@ -124,6 +147,7 @@ export interface CommandMap {
   resource_delete: { args: { id: string }; result: void };
   resource_search: { args: SearchRequest; result: Resource[] };
   resource_launch: { args: { request: LaunchRequest }; result: LaunchResult };
+  resource_inspect: { args: { resourceId: string; forceRefresh?: boolean }; result: ResourceMetadata[] };
   profile_list: { args?: undefined; result: Profile[] };
   profile_create: { args: { name: string }; result: Profile };
   profile_switch: { args: { profileId: string }; result: Profile };
@@ -132,6 +156,7 @@ export interface CommandMap {
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
   quick_launch_hotkey_set: { args: { profileId: string; shortcut: string }; result: QuickLaunchHotkeyStatus };
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
+  analytics_summary: { args: { profileId?: string; sinceUtc?: string }; result: AnalyticsSummary };
 }
 
 export interface AppEventMap {

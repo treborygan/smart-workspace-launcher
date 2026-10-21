@@ -885,7 +885,7 @@ fn read_profile_package_with_digest(
             .by_index(index)
             .map_err(|_| package_error("invalid ZIP directory"))?;
         let name = entry.name().to_owned();
-        if !safe_archive_path(&name) || !names.insert(name) {
+        if !safe_archive_path(&name) || !names.insert(name.clone()) {
             return Err(package_error(
                 "archive contains an unsafe or duplicate member path",
             ));
@@ -1405,7 +1405,11 @@ fn export_profile_to_path(
             .map_err(|error| package_error(format!("cannot finish export archive: {error}")))?;
         file.sync_all()
             .map_err(|error| package_error(format!("cannot sync export archive: {error}")))?;
-        if file.metadata()?.len() > PROFILE_ARCHIVE_MAX_COMPRESSED {
+        let compressed_size = file
+            .metadata()
+            .map_err(|error| package_error(format!("cannot inspect export archive: {error}")))?
+            .len();
+        if compressed_size > PROFILE_ARCHIVE_MAX_COMPRESSED {
             return Err(package_error("export exceeds compressed size limit"));
         }
         finalize_export_no_clobber(&temp_path, path)?;
@@ -3491,12 +3495,12 @@ fn search_resources(
 
 const MAX_LAYOUT_BYTES: usize = 1_048_576;
 
-fn valid_uuid(value: &str) -> bool {
+fn valid_layout_uuid(value: &str) -> bool {
     Uuid::parse_str(value).is_ok()
 }
 
 fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
-    if !valid_uuid(&layout.profile_id) {
+    if !valid_layout_uuid(&layout.profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if layout.version != 1 || !matches!(layout.surface.as_str(), "dashboard" | "dock") {
@@ -3509,7 +3513,7 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
     }
     let mut ids = std::collections::HashSet::with_capacity(layout.cards.len());
     for card in &layout.cards {
-        if !valid_uuid(&card.resource_id)
+        if !valid_layout_uuid(&card.resource_id)
             || !ids.insert(&card.resource_id)
             || card.x < 0
             || card.x > 11
@@ -3538,7 +3542,7 @@ fn layout_get_from_conn(
     profile_id: &str,
     surface: &str,
 ) -> Result<DashboardLayout, AppError> {
-    if !valid_uuid(profile_id) {
+    if !valid_layout_uuid(profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if !matches!(surface, "dashboard" | "dock") {
@@ -5851,7 +5855,7 @@ mod tests {
         tx.commit().unwrap();
         conn.execute(
             "UPDATE profiles SET settings_json=?2 WHERE id=?1",
-            params![source_profile, r#"{"apiToken":"secret","accent":"#6858CE"}"#],
+            params![source_profile, r##"{"apiToken":"secret","accent":"#6858CE"}"##],
         )
         .unwrap();
         let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));

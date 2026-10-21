@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T21:13:00Z",
+  "updated_at_utc": "2026-10-21T21:26:34Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -9,7 +9,7 @@
     "state": "ACTIVE",
     "branch": "coordinator/current-main"
   },
-  "active_pull_request": 34,
+  "active_pull_request": 35,
   "subagent_limit": 3,
   "agents": [
     {
@@ -17,33 +17,33 @@
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-008 secure profile archive import/export",
-      "branch": "feature/sw-008-profile-archive",
-      "commit": "adaab02f6115582719d0facbc0721ec362a115cb",
-      "pr": 34,
-      "task": "Backend implemented and QA-approved: package digest/token binding, collision snapshots, safe differing-content remap, Tauri dialog plugin."
+      "issue": "SW-011 hardening, security, integration and performance",
+      "branch": "feature/sw-011-backend-security",
+      "commit": "b42ff26",
+      "pr": null,
+      "task": "SW-011 backend branch ends at b42ff26 with explicit target validation, replay-intent validation, security checks and profile_theme_set. Independent QA re-review pending; no PR/merge until SW-010 dependency is met."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-008 profile archive UI",
-      "branch": "feature/sw-008-profile-ui",
-      "commit": "1c97563483c829ced6460b1148d1d5798e420626",
-      "pr": 34,
-      "task": "Native archive open/save, preview with imported/existing/proposed snapshots, strategy-aware Duplicate/Merge/Replace, explicit confirmation, hash/token-bound commit. Cherry-picked into PR #34 integration commit 6a02e59."
+      "issue": "SW-010 Resource Explorer, Inspector, themes",
+      "branch": "feature/sw-010-ui",
+      "commit": "773ede220e4b992af76c2ec0cd7945c4d1773d0c",
+      "pr": 35,
+      "task": "SW-010 code complete at 773ede2 and ready for review in draft PR #35; docs checkpoint/sync commits follow. 56 frontend tests pass. Remaining scope gaps are declared in PR."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-008 backend/UI review",
+      "issue": "SW-010 final review",
       "branch": "shared-checkout",
-      "commit": "6a02e59",
-      "pr": 34,
-      "task": "Backend re-review approved digest binding and differing-content merge behavior. UI re-review approved strategy-aware conflicts and API token flow; no integration blocker. Independent test run reported typecheck/build/diff pass; tests were initially blocked by concurrent node_modules corruption, then coordinator reran all checks cleanly."
+      "commit": "773ede2",
+      "pr": 35,
+      "task": "SW-010 review passed at code head 773ede2: API contract/profile theme integration, Explorer, CSV, editor, multi-target Inspector, layout changes reviewed. Typecheck, 56 tests, build and diff pass. SW-011 b42ff26 replay guards reviewed; inactive-target idempotency caveat recorded."
     },
     {
       "role": "research",
@@ -73,7 +73,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T21:13:00Z",
+    "at_utc": "2026-10-21T21:21:00Z",
     "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no Windows/PowerShell host",
     "results": [
       {
@@ -143,11 +143,47 @@
       {
         "command": "QA review of SW-008 backend and UI",
         "result": "PASS with no blocking issues. QA separately confirmed digest/token binding, safe merge collision behavior, strategy-aware UI, and API commit token propagation."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
+        "result": "PASS on SW-011 backend branch at f767844."
+      },
+      {
+        "command": "npm run typecheck && npm test -- --run",
+        "result": "PASS on SW-011 branch baseline: TypeScript check and 5 files/38 frontend tests pass."
+      },
+      {
+        "command": "python scripts/qa/profile_archive.py fixtures/valid/example.swprofile",
+        "result": "PASS on SW-011 branch."
+      },
+      {
+        "command": "git diff --check",
+        "result": "PASS on SW-011 branch."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "BLOCKED before project compile: GLib >=2.70 dev package unavailable on Linux."
+      },
+      {
+        "command": "cargo check --target x86_64-pc-windows-gnu --tests",
+        "result": "BLOCKED before project compile: Windows GNU DLL toolchain unavailable; no Windows tests."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
+        "result": "PASS on SW-011 hardening follow-up f1e8bc2. Rust tests remain blocked by missing GLib >=2.70."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check && git diff --check",
+        "result": "PASS on SW-011 latest head b42ff26; explicit target and replay intent regression tests authored but cannot compile without Linux GLib/GObject >=2.70."
+      },
+      {
+        "command": "npm run typecheck && npm test && npm run frontend:build && git diff --check",
+        "result": "PASS on SW-010 follow-up 773ede2; 8 files/56 tests pass, production build and diff check pass. QA final review is pending."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "PR #34 now includes QA-approved SW-008 backend and UI. Durable status/docs are being committed with exact frontend checks. Next complete SW-010/SW-011, then Windows 11 acceptance; V1 remains blocked without Windows.",
+  "next_action": "Draft PR #35 contains SW-010 code and current-main/docs checkpoint; await required review/merge. After merge, rebase/merge SW-011 backend hardening onto updated main and open PR in dependency order. V1 remains blocked pending Windows.",
   "recent_merges": [
     {
       "number": 32,
@@ -178,19 +214,25 @@
       "number": 33,
       "sha": "4873414e1fb1c2e096fedd3d7b44b576831434f4",
       "scope": "SW-007 Inspector and Analytics UI integration"
+    },
+    {
+      "number": 34,
+      "sha": "60fd44f5b0144f66ec05df9cf68922a6dd6e212b",
+      "scope": "SW-008 safe profile archive import/export with native dialogs, preview-bound commit and strategy-aware UI"
     }
   ],
   "open_pull_requests": [
     {
-      "number": 34,
-      "title": "feat(SW-008): secure profile archive import and export",
+      "number": 35,
+      "title": "feat(SW-010): improve Explorer, themes, and responsive dashboard",
       "state": "DRAFT",
-      "head": "feature/sw-008-profile-archive",
-      "sha": "6a02e59 (UI integrated; status docs pending)",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/34",
+      "head": "feature/sw-010-ui",
+      "sha": "pending docs sync commit",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/35",
       "blockers": [
-        "Rust unit tests cannot execute on current Linux host (missing GLib >=2.70)",
-        "No real Windows 11 x64 host; V1 release gate remains blocked"
+        "Bulk delete/duplicate and draggable/resizable/reorderable columns remain out of scope",
+        "Rust tests blocked by missing Linux GLib/GObject 2.70 packages",
+        "No Windows 11 host or DPI/native acceptance"
       ]
     }
   ]

@@ -106,6 +106,24 @@ describe("layout API", () => {
   });
 });
 
+describe("profile theme API", () => {
+  it("persists native theme updates through the typed command and broadcasts profile state", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const updated = { id: "p1", name: "Work", themeId: "dark", settingsJson: JSON.stringify({ quickLaunchShortcut: "Alt+Space", accent: "#112233", density: "compact" }) };
+    invokeTyped.mockResolvedValue(updated);
+    expect(await api.setProfileTheme("p1", { mode: "dark", accent: "#112233", density: "compact" })).toEqual(updated);
+    expect(invokeTyped).toHaveBeenCalledWith("profile_theme_set", { profileId: "p1", theme: { mode: "dark", accent: "#112233", density: "compact" } });
+    expect(emitTyped).toHaveBeenCalledWith("workspace-state-changed", { profileId: "p1" });
+  });
+
+  it("keeps profile theme preferences across browser preview reloads", async () => {
+    expect(await api.setProfileTheme("default", { mode: "light", accent: "#123456", density: "comfortable" })).toMatchObject({ themeId: "light" });
+    expect((await api.profiles())[0]).toMatchObject({ themeId: "light", settingsJson: JSON.stringify({ accent: "#123456", density: "comfortable" }) });
+    await api.setProfileTheme("default", { mode: "dark", accent: "#abcdef" });
+    expect(JSON.parse((await api.profiles())[0].settingsJson)).toEqual({ accent: "#abcdef" });
+  });
+});
+
 describe("metadata and analytics API", () => {
   it("calls the typed inspection and event summary commands with exact payloads", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });

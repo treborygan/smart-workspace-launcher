@@ -97,6 +97,46 @@ describe("AnalyticsView", () => {
     expect(api.analyticsEvents).toHaveBeenLastCalledWith({ profileId: "p1", fromUtc: "2026-02-03T00:00:00.000Z", limit: 50, offset: 0 });
   });
 
+  it("disables Next when exactly one full page matches", async () => {
+    const page = Array.from({ length: 50 }, (_, index) => ({ requestId: `q-${index}`, resourceId: "r1", source: "dock" as const, status: "handed_off" as const, launchedAtUtc: "2026-01-01T10:00:00Z" }));
+    api.analyticsSummary.mockResolvedValue({ totalLaunches: 50, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue(page);
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    const next = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Next")!;
+    expect(next.disabled).toBe(true);
+    expect(host.textContent).toContain("1–50 of 50");
+  });
+
+  it("resets filters across profiles and ignores delayed settings from the previous profile", async () => {
+    let resolveOldSettings!: (settings: { profileId: string; recordingEnabled: boolean; retentionDays: null; excludedResourceIds: string[] }) => void;
+    const oldSettings = new Promise<{ profileId: string; recordingEnabled: boolean; retentionDays: null; excludedResourceIds: string[] }>((resolve) => { resolveOldSettings = resolve; });
+    api.usageSettings.mockImplementation((id: string) => id === "p1" ? oldSettings : Promise.resolve({ profileId: "p2", recordingEnabled: false, retentionDays: 90, excludedResourceIds: [] }));
+    api.resources.mockResolvedValue([resource("r1")]);
+    api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]);
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    const source = host.querySelector<HTMLSelectElement>(".analytics-filters select")!;
+    await act(async () => { source.value = "dock"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(api.analyticsSummary).toHaveBeenLastCalledWith("p1", { source: "dock" });
+
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p2" })));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(api.analyticsSummary).toHaveBeenLastCalledWith("p2", {});
+    expect(host.querySelector<HTMLSelectElement>(".analytics-filters select")!.value).toBe("");
+    expect((host.querySelector<HTMLInputElement>('.usage-recording input[type="checkbox"]')!).checked).toBe(false);
+
+    await act(async () => { resolveOldSettings({ profileId: "p1", recordingEnabled: true, retentionDays: null, excludedResourceIds: [] }); await Promise.resolve(); });
+    expect((host.querySelector<HTMLInputElement>('.usage-recording input[type="checkbox"]')!).checked).toBe(false);
+    const toggle = host.querySelector<HTMLInputElement>('.usage-recording input[type="checkbox"]')!;
+    await act(async () => { toggle.click(); });
+    api.saveUsageSettings.mockImplementation(async (settings) => settings);
+    const save = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Save settings")!;
+    await act(async () => { save.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(api.saveUsageSettings).toHaveBeenCalledWith({ profileId: "p2", recordingEnabled: true, retentionDays: 90, excludedResourceIds: [] });
+    await act(async () => root.render(createElement(AnalyticsView, { profileId: "p1" })));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(api.analyticsSummary).toHaveBeenLastCalledWith("p1", {});
+    expect(host.querySelector<HTMLSelectElement>(".analytics-filters select")!.value).toBe("");
+  });
+
   it("exports the active filters through a chosen CSV destination", async () => {
     api.analyticsSummary.mockResolvedValue({ totalLaunches: 1, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([{ requestId: "1", resourceId: "r1", source: "dock", status: "handed_off", launchedAtUtc: "2026-01-01T10:00:00Z" }]);
     chooseUsageExportPath.mockResolvedValue("C:\\Exports\\usage.csv"); api.exportUsageCsv.mockResolvedValue({ path: "C:\\Exports\\usage.csv", eventCount: 1 });

@@ -3433,6 +3433,14 @@ where
     if let Some(target_id) = request.target_id.as_ref() {
         Uuid::parse_str(target_id)
             .map_err(|_| AppError::Invalid("target id must be a UUID".into()))?;
+        let active_target_belongs_to_resource: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM resource_targets WHERE id=?1 AND resource_id=?2 AND active=1)",
+            params![target_id, request.resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !active_target_belongs_to_resource {
+            return Err(AppError::NotFound);
+        }
     }
     if !["dashboard", "quick_launch", "dock", "explorer", "other"]
         .contains(&request.source.as_str())
@@ -5172,6 +5180,41 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn launch_replay_rejects_unknown_explicit_target_when_original_had_none() {
+        let mut conn = database();
+        let r = resource("No active targets");
+        let target_id = r.targets[0].id.clone();
+        persist_resource(&mut conn, &r, true, None).unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE id=?1",
+            [&target_id],
+        )
+        .unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: r.id.clone(),
+            target_id: None,
+            profile_id: None,
+            source: "dashboard".into(),
+        };
+        let first =
+            launch_event_with(&mut conn, &request, |_| panic!("no target to launch")).unwrap();
+        assert_eq!(first.target_id, None);
+        assert_eq!(first.status, "failed");
+
+        let mut retry = request;
+        retry.target_id = Some(Uuid::new_v4().to_string());
+        assert!(matches!(
+            launch_event_with(&mut conn, &retry, |_| panic!("must not launch")),
+            Err(AppError::NotFound)
+        ));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

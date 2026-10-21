@@ -19,5 +19,8 @@ Tests require **real executed evidence** with commands, outputs, environment, ti
 - W-012: search, tagging, analytics and event once semantics; W-013: offline use/no external network required.
 - W-014: portable ZIP freshly downloaded, extracted and run as standard Windows non-admin user with WebView2 runtime documented.
 
+## GitHub Actions Windows CI
+Approved automated test and preview-build jobs run on **GitHub-hosted Windows Server 2025 x64**, not consumer Windows 11. They exercise Rust, frontend, Python/contract tests and native packaging; evidence is retained as run artifacts. W-001..W-014 still require separate real Windows 11 x64 tests (including default Excel/PDF app handlers, focus/hotkey/tray, multi-monitor/DPI, non-admin and fresh-download usage). Mark any unperformed case BLOCKED/NOT_RUN. See `docs/CI_WINDOWS.md`.
+
 ## Gate
-No Windows real test environment = release BLOCKED. Include evidence paths and logs. No untested EXE labeled V1 ready. See docs/NOTIFICATIONS_AND_RELEASE_GATES.md.
+No verified real Windows 11 acceptance = release BLOCKED, even if GitHub Actions pass. Include evidence paths and logs. No untested EXE labeled V1 ready. See docs/NOTIFICATIONS_AND_RELEASE_GATES.md.

@@ -115,6 +115,7 @@ export interface WorkspaceSequenceStepResult {
 
 export interface WorkspaceSequenceRunResult {
   sequenceId: string;
+  status: "completed" | "failed" | "in_progress";
   totalSteps: number;
   completedSteps: number;
   stoppedAtStepId?: string;
@@ -214,6 +215,7 @@ export interface ProfileImportPreview {
   historyEventCount: number;
   smartCollectionCount: number;
   dynamicShortcutCount: number;
+  workspaceSequenceCount: number;
   profileIdCollision: boolean;
   profileNameCollision: boolean;
   resourceIdCollisions: string[];
@@ -223,6 +225,8 @@ export interface ProfileImportPreview {
   smartCollectionNameCollisions: string[];
   dynamicShortcutIdCollisions: string[];
   dynamicShortcutNameCollisions: string[];
+  workspaceSequenceIdCollisions: string[];
+  workspaceSequenceNameCollisions: string[];
   assetCount: number;
 }
 
@@ -261,7 +265,7 @@ export interface ProfileImportResult {
   reusedResources: number;
   importedLayouts: number;
   importedHistoryEvents: number;
-}
+  importedWorkspaceSequences: number;}
 
 export interface ProfileExportResult {
   path: string;

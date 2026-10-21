@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./components/Icon";
+import { QuickLaunchOverlay } from "./components/QuickLaunchOverlay";
 import { api } from "./lib/api";
-import type { DashboardLayout, ResourcePatch } from "@sw/contracts";
+import type { DashboardLayout, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import "./styles.css";
 
@@ -63,6 +64,10 @@ export default function App() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [cardWidths, setCardWidths] = useState<Record<string, number>>({});
   const [dark, setDark] = useState(false);
+  const [quickLaunchOpen, setQuickLaunchOpen] = useState(false);
+  const [hotkeyStatus, setHotkeyStatus] = useState<QuickLaunchHotkeyStatus | null>(null);
+  const [nativeWindowLabel, setNativeWindowLabel] = useState<string | null>(null);
+  const [quickLaunchSignal, setQuickLaunchSignal] = useState(0);
 
   const reload = async () => {
     try {
@@ -80,14 +85,40 @@ export default function App() {
   };
   useEffect(() => { void reload(); }, []);
   useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) { setNativeWindowLabel("browser"); return; }
+    let cancelled = false;
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      if (cancelled) return;
+      const label = getCurrentWindow().label;
+      setNativeWindowLabel(label);
+      if (label === "quick-launch") setQuickLaunchOpen(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.altKey && event.code === "Space") || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k")) {
-        event.preventDefault(); setSection("Quick Launch"); window.setTimeout(() => document.querySelector<HTMLInputElement>("#global-search")?.focus(), 10);
+      const browserHotkey = event.altKey && event.code === "Space" && !("__TAURI_INTERNALS__" in window);
+      if (browserHotkey || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k")) {
+        event.preventDefault(); setQuickLaunchOpen(true);
       }
-      if (event.key === "Escape") { setShowAdd(false); setQuery(""); }
+      if (event.key === "Escape") { setShowAdd(false); setQuickLaunchOpen(false); setQuery(""); }
     };
     window.addEventListener("keydown", handler); return () => window.removeEventListener("keydown", handler);
   }, []);
+  useEffect(() => {
+    let disposed = false;
+    let unlistenToggle: () => void = () => {};
+    let unlistenStatus: () => void = () => {};
+    const toggleListener = nativeWindowLabel === "quick-launch"
+      ? api.onQuickLaunchToggle(() => { setQuickLaunchOpen(true); setQuickLaunchSignal((value) => value + 1); })
+      : Promise.resolve(() => undefined);
+    Promise.all([toggleListener, api.onQuickLaunchHotkeyStatus((status) => setHotkeyStatus(status))]).then(([toggle, status]) => {
+      if (disposed) { toggle(); status(); return; }
+      unlistenToggle = toggle; unlistenStatus = status;
+      void api.quickLaunchHotkeyStatus().then(setHotkeyStatus).catch(() => undefined);
+    }).catch((e: unknown) => setNotice(e instanceof Error ? `Quick Launch hotkey status unavailable: ${e.message}` : "Quick Launch hotkey status unavailable."));
+    return () => { disposed = true; unlistenToggle(); unlistenStatus(); };
+  }, [nativeWindowLabel]);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   const filtered = useMemo(() => resources.filter((resource) => {
@@ -102,9 +133,9 @@ export default function App() {
     try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
   };
-  const launch = async (resource: Resource) => {
+  const launch = async (resource: Resource, source: "dashboard" | "quick_launch" = "dashboard") => {
     try {
-      const result = await api.launch(resource.id);
+      const result = await api.launch(resource.id, source, activeProfileId);
       if (result.status === "failed") throw new Error(result.errorCode || "The system could not hand off this resource.");
       setResources((current) => current.map((r) => r.id === resource.id ? { ...r, launchCount: (r.launchCount || 0) + 1, lastLaunchedUtc: result.launchedAtUtc } : r));
       setNotice(result.status === "handed_off" ? `Windows accepted the launch request for ${resource.displayName}.` : "Launch request sent.");
@@ -141,12 +172,21 @@ export default function App() {
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not save dashboard layout."); }
   };
 
+  const closeQuickLaunch = () => {
+    setQuickLaunchOpen(false);
+    if (nativeWindowLabel === "quick-launch") void api.hideCurrentWindow();
+  };
+
+  if (nativeWindowLabel === "quick-launch") return quickLaunchOpen
+    ? <QuickLaunchOverlay key={quickLaunchSignal} presentation="window" resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => void launch(resource, "quick_launch")} />
+    : <div className="quick-launch-window" />;
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-symbol"><span /><span /><span /><span /></span><span className="brand-name">Workspace</span></div>
       <div className="profile-select"><span className="profile-avatar">{profiles.find((profile) => profile.id === activeProfileId)?.name?.slice(0, 1) || "P"}</span><span className="profile-label"><b>{profiles.find((profile) => profile.id === activeProfileId)?.name || "Personal"}</b><small>Workspace profile</small></span><Icon name="chevron" size={15} /><select className="profile-switch" aria-label="Switch profile" value={activeProfileId} onChange={(event) => void switchProfile(event.target.value)}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></div>
       <div className="nav-label">WORKSPACE</div>
-      <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
+      <nav aria-label="Primary navigation">{nav.map((item) => <button key={item.label} className={`nav-item ${section === item.label ? "active" : ""}`} onClick={() => item.label === "Quick Launch" ? setQuickLaunchOpen(true) : setSection(item.label)}><Icon name={item.icon} size={18} />{item.label}{item.label === "Quick Launch" && <kbd>⌥ Space</kbd>}</button>)}</nav>
       <div className="nav-label collections-label">COLLECTIONS <button className="tiny-plus" onClick={() => setShowAdd(true)} aria-label="Add collection"><Icon name="plus" size={14} /></button></div>
       {["All resources", "Favorites", "Work", "Web", "Apps"].map((item, index) => <button key={item} className={`collection ${category === item ? "selected" : ""}`} onClick={() => { setCategory(item); setSection("Dashboard"); }}><span className={`collection-dot d${index}`} />{item}<span className="collection-count">{item === "Favorites" ? resources.filter((r) => r.favorite).length : item === "All resources" ? resources.length : resources.filter((r) => r.category === item).length}</span></button>)}
       <div className="sidebar-bottom"><button className="nav-item" onClick={() => setDark(!dark)}><Icon name="moon" size={18} />{dark ? "Light appearance" : "Dark appearance"}</button><button className="nav-item"><Icon name="settings" size={18} />Settings</button><div className="sidebar-user"><div className="user-avatar">A</div><div><b>Alex Morgan</b><small>Local workspace</small></div><button className="icon-button" aria-label="More account options"><Icon name="more" /></button></div></div>
@@ -155,6 +195,7 @@ export default function App() {
     <main className="main-area">
       <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={13} /><b>{section}</b></div><div className="top-actions"><button className="button quiet" onClick={() => setDark(!dark)} aria-label="Toggle theme"><Icon name="moon" size={16} /></button><button className="help-button" aria-label="Help">?</button><button className="profile-chip"><span className="user-avatar mini">A</span><span>Alex</span><Icon name="chevron" size={13} /></button></div></header>
       <div className="content-wrap">
+        {hotkeyStatus && !hotkeyStatus.registered && <div className="hotkey-registration-warning" role="status">{hotkeyStatus.shortcut} could not be registered. Use the Quick Launch button in the sidebar instead.{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
         {section === "Analytics" ? <Analytics resources={resources} /> : section === "Explorer" ? <Explorer resources={filtered} onSelect={(r) => setSelectedId(r.id)} query={query} setQuery={setQuery} onAdd={() => setShowAdd(true)} /> : <>
           <div className="welcome-row"><div><h1>{section === "Quick Launch" ? "Quick Launch" : greeting()}</h1><p>{section === "Quick Launch" ? "Find a resource and open it in its default app." : "Everything you need, right where you left it."}</p></div><button className="button primary add-button" onClick={() => setShowAdd(true)}><Icon name="plus" size={17} /> Add resource</button></div>
           <div className={`search-box ${section === "Quick Launch" ? "command-search" : ""}`}><Icon name="search" size={19} /><input id="global-search" placeholder={section === "Quick Launch" ? "Search resources, aliases, tags…" : "Search your workspace"} value={query} onChange={(e) => setQuery(e.target.value)} /><span className="search-shortcut">{section === "Quick Launch" ? "ESC to close" : "⌘ K"}</span></div>
@@ -176,7 +217,12 @@ export default function App() {
     <aside className="inspector"><div className="inspector-head"><h2>Inspector</h2><button className="icon-button" aria-label="More inspector options"><Icon name="more" /></button></div>
       {selected ? <><div className="inspector-resource"><ResourceMark resource={selected} /><div><h3>{selected.displayName}</h3><span>{selected.resourceType}</span></div></div><button className="button primary inspector-launch" onClick={() => void launch(selected)}><Icon name="arrow" size={16} /> Open resource</button><div className="inspector-section"><div className="inspector-label">LOCATION</div><div className="location-value">{selected.targets[0]?.canonicalUri || "No location available"}</div><button className="subtle-action" onClick={() => navigator.clipboard?.writeText(selected.targets[0]?.canonicalUri || "")}>Copy location</button></div><div className="inspector-section"><div className="inspector-label">CARD SIZE</div><div className="size-options" role="group" aria-label="Dashboard card size">{[{ value: 3, label: "Compact" }, { value: 4, label: "Standard" }, { value: 6, label: "Wide" }].map((item) => <button key={item.value} className={(cardWidths[selected.id] || 4) === item.value ? "chosen" : ""} onClick={() => resizeCard(selected.id, item.value)}>{item.label}</button>)}</div></div><div className="inspector-section"><div className="inspector-label">DETAILS</div><InfoRow label="Collection" value={selected.category || "Uncategorized"} /><InfoRow label="Launches" value={String(selected.launchCount || 0)} /><InfoRow label="Last opened" value={selected.lastLaunchedUtc ? relativeTime(selected.lastLaunchedUtc) : "No launch history"} /></div><div className="inspector-section"><div className="inspector-label">AVAILABILITY</div><div className="availability"><span className="availability-dot" /><span>Not checked</span><small>Metadata is collected in the desktop app</small></div><p className="provenance">File availability and metadata are inspected locally. No background drive scan.</p></div><div className="inspector-footer"><button className="subtle-action" onClick={() => { const name = window.prompt("Resource name", selected.displayName); if (name?.trim()) void update(selected.id, { displayName: name.trim() }); }}>Rename</button><button className="subtle-action danger" onClick={() => void remove(selected)}>Remove</button></div></> : <div className="inspector-empty"><span className="empty-icon"><Icon name="grid" /></span><p>Select a resource to inspect its details.</p></div>}
     </aside>
+<<<<<<< HEAD
     {showAdd && <AddResourceDialog profileId={activeProfileId} onClose={() => setShowAdd(false)} onCreate={(resource) => { const next = [...resources, resource]; setResources(next); setSelectedId(resource.id); void persistLayout(next, cardWidths); setNotice(`${resource.displayName} added to your workspace.`); }} />}
+=======
+    {showAdd && <AddResourceDialog onClose={() => setShowAdd(false)} onCreate={(resource) => { const next = [...resources, resource]; setResources(next); setSelectedId(resource.id); void persistLayout(next, cardWidths); setNotice(`${resource.displayName} added to your workspace.`); }} />}
+    {quickLaunchOpen && <QuickLaunchOverlay key={quickLaunchSignal} resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => void launch(resource, "quick_launch")} />}
+>>>>>>> 9bff0c4 (feat(ui): add native quick launch window)
   </div>;
 }
 

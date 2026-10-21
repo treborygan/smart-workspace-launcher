@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
 }));
 vi.mock("./lib/api", () => ({ api }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: "quick-launch", onFocusChanged: async () => () => undefined }) }));
 import App from "./App";
 
 const timestamp = "2026-10-21T10:00:00.000Z";
@@ -23,9 +24,12 @@ let host: HTMLDivElement;
 
 beforeEach(() => {
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
+  api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
+  api.onQuickLaunchToggle.mockResolvedValue(() => undefined); api.onQuickLaunchHotkeyStatus.mockResolvedValue(() => undefined);
+  api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: true, shortcut: "Alt+Space" });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.clearAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); Reflect.deleteProperty(window, "__TAURI_INTERNALS__"); vi.clearAllMocks(); });
 
 describe("workspace dashboard", () => {
   it("loads the saved resources and exposes the inspector", async () => {
@@ -35,16 +39,51 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Inspector");
   });
 
-  it("opens Quick Launch from the keyboard and filters resources", async () => {
+  it("opens Quick Launch from Ctrl+K and filters resources", async () => {
     await act(async () => { root.render(createElement(App)); });
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 15)); });
-    const input = host.querySelector<HTMLInputElement>("#global-search");
+    const input = host.querySelector<HTMLInputElement>(".quick-launch-search input");
     expect(input).not.toBeNull();
     expect(document.activeElement).toBe(input);
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "calendar"); input!.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
     expect(host.textContent).toContain("Calendar");
-    expect(host.querySelectorAll(".resource-card")).toHaveLength(1);
-    expect(host.querySelector(".resource-card h3")?.textContent).toBe("Calendar");
+    expect(host.querySelectorAll(".quick-launch-result")).toHaveLength(1);
+    expect(host.querySelector(".quick-launch-result b")?.textContent).toBe("Calendar");
+  });
+
+  it("uses Alt+Space as a browser fallback and launches the keyboard selection", async () => {
+    api.launch.mockResolvedValue({ requestId: "launch-1", status: "handed_off", launchedAtUtc: timestamp });
+    await act(async () => { root.render(createElement(App)); });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", key: " ", altKey: true, bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const input = host.querySelector<HTMLInputElement>(".quick-launch-search input")!;
+    expect(document.activeElement).toBe(input);
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(api.launch).toHaveBeenCalledWith("r2", "quick_launch", "p1");
+    expect(host.querySelector(".quick-launch")).toBeNull();
+  });
+
+  it("shows a clear warning when native hotkey registration fails", async () => {
+    api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: false, shortcut: "Alt+Space", errorCode: "hotkey_conflict" });
+    await act(async () => { root.render(createElement(App)); });
+    await act(async () => { await Promise.resolve(); });
+    expect(host.textContent).toContain("Alt+Space could not be registered");
+  });
+
+  it("renders only the standalone quick-launch window and resets it from the native event", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    let toggle: (() => void) | undefined;
+    api.onQuickLaunchToggle.mockImplementation(async (handler: () => void) => { toggle = handler; return () => undefined; });
+    api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: false, shortcut: "Alt+Space", errorCode: "hotkey_conflict" });
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    expect(host.querySelector(".app-shell")).toBeNull();
+    expect(host.querySelector(".quick-launch.in-window")).not.toBeNull();
+    expect(host.textContent).toContain("could not be registered");
+    const input = host.querySelector<HTMLInputElement>(".quick-launch-search input")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "old query"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => { toggle?.(); });
+    expect(host.querySelector<HTMLInputElement>(".quick-launch-search input")?.value).toBe("");
   });
 
   it("restores each profile's own resource ordering when switching", async () => {

@@ -6,6 +6,22 @@ import { api } from "../lib/api";
 
 type DockEdge = "left" | "right" | "top" | "bottom";
 type DockPreferences = { edge: DockEdge; orientation: "vertical" | "horizontal"; monitor: number; iconSize: number; spacing: number; opacity: number; alwaysOnTop: boolean; autoHide: boolean };
+export type DockGeometryInput = Pick<DockPreferences, "edge" | "orientation" | "iconSize" | "spacing"> & { pinCount: number; workArea: { x: number; y: number; width: number; height: number } };
+export function computeDockGeometry({ edge, orientation, iconSize, spacing, pinCount, workArea }: DockGeometryInput) {
+  const cross = iconSize + 24;
+  const along = Math.max(cross, Math.min(Math.max(0, pinCount), 9) * (iconSize + spacing) + 24);
+  const maxWidth = Math.max(1, workArea.width);
+  const maxHeight = Math.max(1, workArea.height);
+  const width = Math.min(maxWidth, Math.max(Math.min(64, maxWidth), orientation === "vertical" ? cross : along));
+  const height = Math.min(maxHeight, Math.max(Math.min(64, maxHeight), orientation === "vertical" ? along : cross));
+  const unclampedX = edge === "left" ? workArea.x : edge === "right" ? workArea.x + workArea.width - width : workArea.x + (workArea.width - width) / 2;
+  const unclampedY = edge === "top" ? workArea.y : edge === "bottom" ? workArea.y + workArea.height - height : workArea.y + (workArea.height - height) / 2;
+  return {
+    width, height,
+    x: Math.min(workArea.x + Math.max(0, workArea.width - width), Math.max(workArea.x, unclampedX)),
+    y: Math.min(workArea.y + Math.max(0, workArea.height - height), Math.max(workArea.y, unclampedY)),
+  };
+}
 const DEFAULTS: DockPreferences = { edge: "right", orientation: "vertical", monitor: 0, iconSize: 48, spacing: 9, opacity: 0.96, alwaysOnTop: true, autoHide: false };
 const prefsKey = (profileId: string) => `swl-dock-preferences-${profileId}-v1`;
 function readPreferences(profileId: string): DockPreferences {
@@ -74,14 +90,9 @@ export function DockWindow({ profileId, profileName, resources, layout, hotkeySt
       const scale = monitor.scaleFactor;
       const origin = area.position.toLogical(scale);
       const extent = area.size.toLogical(scale);
-      const cross = preferences.iconSize + 24;
-      const along = Math.max(preferences.iconSize + 24, Math.min(pinned.length, 9) * (preferences.iconSize + preferences.spacing) + 24);
-      const width = preferences.orientation === "vertical" ? cross : along;
-      const height = preferences.orientation === "vertical" ? along : cross;
-      const x = preferences.edge === "left" ? origin.x : preferences.edge === "right" ? origin.x + extent.width - width : origin.x + (extent.width - width) / 2;
-      const y = preferences.edge === "top" ? origin.y : preferences.edge === "bottom" ? origin.y + extent.height - height : origin.y + (extent.height - height) / 2;
-      await win.setSize(new LogicalSize(width, height));
-      await win.setPosition(new LogicalPosition(x, y));
+      const geometry = computeDockGeometry({ edge: preferences.edge, orientation: preferences.orientation, iconSize: preferences.iconSize, spacing: preferences.spacing, pinCount: pinned.length, workArea: { x: origin.x, y: origin.y, width: extent.width, height: extent.height } });
+      await win.setSize(new LogicalSize(geometry.width, geometry.height));
+      await win.setPosition(new LogicalPosition(geometry.x, geometry.y));
       await win.setAlwaysOnTop(preferences.alwaysOnTop);
     }).catch(() => setError("Could not position the Dock on the selected display."));
     return () => { disposed = true; };

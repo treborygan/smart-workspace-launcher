@@ -3,11 +3,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
-const { api } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+const { api, windowState } = vi.hoisted(() => ({
+  api: { resources: vi.fn(), profiles: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn() },
+  windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: "quick-launch", onFocusChanged: async () => () => undefined }) }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: windowState.label, onFocusChanged: async () => () => undefined }) }));
 import App from "./App";
 
 const timestamp = "2026-10-21T10:00:00.000Z";
@@ -25,7 +26,8 @@ let host: HTMLDivElement;
 beforeEach(() => {
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
   api.search.mockImplementation(async (query: string, _profileId: string, fallback: Resource[]) => query ? fallback.filter((resource) => `${resource.displayName} ${resource.description}`.toLowerCase().includes(query.toLowerCase())) : fallback);
-  api.onQuickLaunchToggle.mockResolvedValue(() => undefined); api.onQuickLaunchHotkeyStatus.mockResolvedValue(() => undefined);
+  windowState.label = "quick-launch";
+  api.onQuickLaunchToggle.mockResolvedValue(() => undefined); api.onQuickLaunchHotkeyStatus.mockResolvedValue(() => undefined); api.onWorkspaceStateChanged.mockResolvedValue(() => undefined);
   api.quickLaunchHotkeyStatus.mockResolvedValue({ registered: true, shortcut: "Alt+Space" });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
@@ -37,6 +39,23 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Roadmap.xlsx");
     expect(host.textContent).toContain("Pinned resources");
     expect(host.textContent).toContain("Inspector");
+  });
+
+  it("refreshes main resources and layouts after a workspace event from another surface", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    windowState.label = "main";
+    let workspaceChanged: ((payload: { profileId: string }) => void) | undefined;
+    api.onWorkspaceStateChanged.mockImplementation(async (handler: (payload: { profileId: string }) => void) => { workspaceChanged = handler; return () => undefined; });
+    const refreshed = resources.map((resource) => resource.id === "r1" ? { ...resource, launchCount: 7, lastLaunchedUtc: "2026-10-21T11:00:00.000Z" } : resource);
+    api.resources.mockResolvedValueOnce(resources).mockResolvedValue(refreshed);
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const analytics = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Analytics"))!;
+    await act(async () => analytics.click());
+    const roadmapCount = () => [...host.querySelectorAll<HTMLElement>(".recent-row")].find((row) => row.textContent?.includes("Roadmap.xlsx"))?.querySelector(".launch-count")?.textContent;
+    expect(roadmapCount()).toBe("2");
+    await act(async () => { workspaceChanged?.({ profileId: "p1" }); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(api.resources).toHaveBeenLastCalledWith("p1");
+    expect(roadmapCount()).toBe("7");
   });
 
   it("opens Quick Launch from Ctrl+K and filters resources", async () => {

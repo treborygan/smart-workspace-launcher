@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardLayout, QuickLaunchHotkeyStatus } from "@sw/contracts";
 import type { Resource } from "../lib/contracts";
-import { createDockAutoHideScheduler, DockWindow } from "./DockWindow";
+import { computeDockGeometry, createDockAutoHideScheduler, DockWindow } from "./DockWindow";
 
 const stamp = "2026-10-21T10:00:00.000Z";
 const resources: Resource[] = [
@@ -69,5 +69,18 @@ describe("DockWindow", () => {
     expect(hide).toHaveBeenCalledTimes(1);
     scheduler.dispose();
     vi.useRealTimers();
+  });
+
+  it("clamps Dock size and edge position to short and offset monitor work areas", () => {
+    const rightEdge = computeDockGeometry({ edge: "right", orientation: "vertical", iconSize: 72, spacing: 20, pinCount: 30, workArea: { x: -1280, y: 40, width: 1280, height: 140 } });
+    expect(rightEdge).toEqual({ x: -96, y: 40, width: 96, height: 140 });
+    expect(rightEdge.x).toBeGreaterThanOrEqual(-1280);
+    expect(rightEdge.x + rightEdge.width).toBeLessThanOrEqual(0);
+    expect(rightEdge.y + rightEdge.height).toBeLessThanOrEqual(180);
+
+    const bottomEdge = computeDockGeometry({ edge: "bottom", orientation: "horizontal", iconSize: 72, spacing: 20, pinCount: 30, workArea: { x: 80, y: -20, width: 110, height: 75 } });
+    expect(bottomEdge).toEqual({ x: 80, y: -20, width: 110, height: 75 });
+    expect(bottomEdge.x + bottomEdge.width).toBeLessThanOrEqual(190);
+    expect(bottomEdge.y + bottomEdge.height).toBeLessThanOrEqual(55);
   });
 });

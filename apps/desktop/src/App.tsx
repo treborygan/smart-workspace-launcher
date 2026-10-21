@@ -156,6 +156,17 @@ export default function App() {
     }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten(); };
   }, [nativeWindowLabel, activeProfileId, profiles]);
+  useEffect(() => {
+    if (nativeWindowLabel !== "main") return;
+    let disposed = false;
+    let unlisten: () => void = () => {};
+    void api.onWorkspaceStateChanged(({ profileId }) => {
+      if (profileId === activeProfileId || profiles.some((profile) => profile.id === profileId)) {
+        void loadProfile(profileId).catch((e: unknown) => setNotice(e instanceof Error ? e.message : "Could not refresh workspace data."));
+      }
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten(); };
+  }, [nativeWindowLabel, activeProfileId, profiles]);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   const filtered = useMemo(() => resources.filter((resource) => {

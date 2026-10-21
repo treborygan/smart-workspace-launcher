@@ -1,6 +1,5 @@
-import { invokeTyped } from "@sw/contracts";
-import type { ResourcePatch } from "@sw/contracts";
-import type { DashboardLayout } from "@sw/contracts";
+import { invokeTyped, listenTyped } from "@sw/contracts";
+import type { DashboardLayout, LaunchSource, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -48,9 +47,45 @@ export const api = {
     if (isNative()) return invokeTyped("resource_delete", { id });
     writeDemo(readDemo().filter((r) => r.id !== id));
   },
-  async launch(id: string): Promise<LaunchResult> {
-    if (isNative()) return invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source: "dashboard" } });
+  async launch(id: string, source: LaunchSource = "dashboard", profileId?: string): Promise<LaunchResult> {
+    if (isNative()) return invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId } });
     throw new Error("Native launch is available in the Windows desktop app. This browser preview does not open local resources.");
+  },
+  async search(query: string, profileId: string | undefined, fallbackResources: Resource[]): Promise<Resource[]> {
+    if (isNative()) return invokeTyped("resource_search", { query, profileId, limit: 20 });
+    const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const ranked = fallbackResources.map((resource) => {
+      const fields = [resource.displayName, resource.description, resource.category, ...resource.aliases, ...resource.tags, ...resource.targets.map((target) => target.canonicalUri)].filter(Boolean).map((value) => value!.toLocaleLowerCase());
+      const score = words.reduce((total, word) => total + Math.max(0, ...fields.map((field) => fuzzyScore(field, word))), 0);
+      return { resource, score };
+    }).filter(({ score }) => words.length === 0 || score > 0)
+      .sort((a, b) => b.score - a.score || Number(b.resource.favorite) - Number(a.resource.favorite) || b.resource.launchCount - a.resource.launchCount);
+    return ranked.slice(0, 20).map(({ resource }) => resource);
+  },
+  onQuickLaunchToggle(handler: () => void): Promise<() => void> {
+    return isNative() ? listenTyped("quick-launch-toggle", handler) : Promise.resolve(() => undefined);
+  },
+  onQuickLaunchHotkeyStatus(handler: (status: QuickLaunchHotkeyStatus) => void): Promise<() => void> {
+    return isNative() ? listenTyped("quick-launch-hotkey-status", handler) : Promise.resolve(() => undefined);
+  },
+  async quickLaunchHotkeyStatus(): Promise<QuickLaunchHotkeyStatus> {
+    if (isNative()) return invokeTyped("quick_launch_hotkey_status");
+    return { registered: true, shortcut: "Alt+Space" };
+  },
+  async setQuickLaunchHotkey(profileId: string, shortcut: string): Promise<QuickLaunchHotkeyStatus> {
+    if (isNative()) return invokeTyped("quick_launch_hotkey_set", { profileId, shortcut });
+    const status = { registered: true, shortcut };
+    localStorage.setItem(`swl-hotkey-${profileId}`, shortcut);
+    return status;
+  },
+  async switchProfile(profileId: string): Promise<Profile> {
+    if (isNative()) return invokeTyped("profile_switch", { profileId });
+    return (await api.profiles()).find((profile) => profile.id === profileId) || (await api.profiles())[0];
+  },
+  async hideCurrentWindow(): Promise<void> {
+    if (!isNative()) return;
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().hide();
   },
   async profiles(): Promise<Profile[]> {
     if (isNative()) return invokeTyped("profile_list");
@@ -69,3 +104,17 @@ export const api = {
     return layout;
   },
 };
+
+function fuzzyScore(value: string, term: string): number {
+  if (value === term) return 1000;
+  if (value.startsWith(term)) return 700 - (value.length - term.length);
+  const substring = value.indexOf(term);
+  if (substring >= 0) return 450 - substring;
+  let cursor = 0; let gaps = 0;
+  for (const char of term) {
+    const next = value.indexOf(char, cursor);
+    if (next < 0) return 0;
+    gaps += next - cursor; cursor = next + 1;
+  }
+  return Math.max(1, 220 - gaps - (value.length - term.length));
+}

@@ -85,6 +85,16 @@ export interface LaunchEvent extends LaunchResult {
   durationMs?: number | null;
 }
 
+export interface QuickLaunchHotkeyStatus {
+  /** Whether the requested shortcut is currently registered. */
+  registered: boolean;
+  /** Requested or configured shortcut. */
+  shortcut: string;
+  /** Previously active shortcut when a replacement failed. */
+  activeShortcut?: string;
+  errorCode?: string;
+}
+
 export interface SearchRequest {
   query: string;
   profileId?: string;
@@ -119,7 +129,15 @@ export interface CommandMap {
   profile_switch: { args: { profileId: string }; result: Profile };
   layout_get: { args: { profileId: string; surface: DashboardLayout["surface"] }; result: DashboardLayout };
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
+  quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
+  quick_launch_hotkey_set: { args: { profileId: string; shortcut: string }; result: QuickLaunchHotkeyStatus };
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
+}
+
+export interface AppEventMap {
+  "quick-launch-toggle": undefined;
+  "quick-launch-hotkey-status": QuickLaunchHotkeyStatus;
+  "workspace-state-changed": { profileId: string };
 }
 
 /** The only frontend entry point for invoking native commands. */
@@ -131,4 +149,21 @@ export async function invokeTyped<K extends keyof CommandMap>(
 ): Promise<CommandMap[K]["result"]> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<CommandMap[K]["result"]>(command, args[0] as Record<string, unknown> | undefined);
+}
+
+export async function listenTyped<K extends keyof AppEventMap>(
+  event: K,
+  handler: (payload: AppEventMap[K]) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<AppEventMap[K]>(event, (message) => handler(message.payload));
+}
+
+/** The only frontend entry point for emitting shared workspace events. */
+export async function emitTyped<K extends keyof AppEventMap>(
+  event: K,
+  payload: AppEventMap[K],
+): Promise<void> {
+  const { emit } = await import("@tauri-apps/api/event");
+  return emit(event, payload);
 }

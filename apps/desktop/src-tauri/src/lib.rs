@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Mutex};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
@@ -180,6 +181,279 @@ pub struct DashboardLayout {
 
 pub struct AppState(pub Mutex<Connection>);
 
+pub struct HotkeyStatusState(pub Mutex<QuickLaunchHotkeyStatus>);
+pub struct ActiveProfileState(pub Mutex<String>);
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickLaunchHotkeyStatus {
+    pub registered: bool,
+    pub shortcut: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_shortcut: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+const QUICK_LAUNCH_HOTKEY_SPEC: &str = "ALT+SPACE";
+const QUICK_LAUNCH_SETTING_KEY: &str = "quickLaunchShortcut";
+
+fn hotkey_error_code(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if [
+        "already registered",
+        "already in use",
+        "conflict",
+        "occupied",
+        "busy",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+    {
+        "hotkey_conflict"
+    } else {
+        "hotkey_registration_failed"
+    }
+}
+
+fn quick_launch_toggle_pressed(_shortcut: &Shortcut, event: &ShortcutEvent) -> bool {
+    event.state() == ShortcutState::Pressed
+}
+
+fn normalize_shortcut(value: &str) -> Result<String, AppError> {
+    if value.trim().is_empty() || value.len() > 80 {
+        return Err(AppError::Invalid(
+            "shortcut must be a nonempty value under 80 bytes".into(),
+        ));
+    }
+    let parsed: Shortcut = value
+        .parse()
+        .map_err(|_| AppError::Invalid("invalid global shortcut syntax".into()))?;
+    Ok(parsed.into_string())
+}
+
+fn switch_hotkey<F, G>(
+    requested: &str,
+    active: Option<&str>,
+    mut register: F,
+    mut unregister: G,
+) -> QuickLaunchHotkeyStatus
+where
+    F: FnMut(&str) -> Result<(), String>,
+    G: FnMut(&str) -> Result<(), String>,
+{
+    let requested = requested.to_owned();
+    if active == Some(requested.as_str()) {
+        return QuickLaunchHotkeyStatus {
+            registered: true,
+            shortcut: requested.clone(),
+            active_shortcut: Some(requested),
+            error_code: None,
+        };
+    }
+    if let Err(error) = register(&requested) {
+        return QuickLaunchHotkeyStatus {
+            registered: false,
+            shortcut: requested,
+            active_shortcut: active.map(str::to_owned),
+            error_code: Some(hotkey_error_code(&error).into()),
+        };
+    }
+    if let Some(active) = active {
+        if let Err(error) = unregister(active) {
+            let rollback = unregister(&requested);
+            let code = if rollback.is_err() {
+                "hotkey_registration_failed"
+            } else {
+                hotkey_error_code(&error)
+            };
+            return QuickLaunchHotkeyStatus {
+                registered: false,
+                shortcut: requested,
+                active_shortcut: Some(active.to_owned()),
+                error_code: Some(code.into()),
+            };
+        }
+    }
+    QuickLaunchHotkeyStatus {
+        registered: true,
+        shortcut: requested.clone(),
+        active_shortcut: Some(requested),
+        error_code: None,
+    }
+}
+
+fn toggle_quick_launch(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("quick-launch") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.hide();
+        return;
+    }
+    if window.show().is_ok() {
+        let _ = window.set_focus();
+        let _ = window.emit("quick-launch-toggle", ());
+    }
+}
+
+fn profile_settings(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, AppError> {
+    let raw: String = conn
+        .query_row(
+            "SELECT settings_json FROM profiles WHERE id=?1",
+            [profile_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    let value: serde_json::Value = serde_json::from_str(&raw)?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::Invalid("profile settings must be a JSON object".into()))
+}
+
+fn profile_shortcut(conn: &Connection, profile_id: &str) -> Result<String, AppError> {
+    let settings = profile_settings(conn, profile_id)?;
+    match settings.get(QUICK_LAUNCH_SETTING_KEY) {
+        Some(value) => value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| AppError::Invalid("quickLaunchShortcut must be a string".into())),
+        None => Ok(QUICK_LAUNCH_HOTKEY_SPEC.into()),
+    }
+}
+
+fn persist_profile_shortcut(
+    conn: &Connection,
+    profile_id: &str,
+    shortcut: &str,
+) -> Result<(), AppError> {
+    let mut settings = profile_settings(conn, profile_id)?;
+    settings.insert(
+        QUICK_LAUNCH_SETTING_KEY.into(),
+        serde_json::Value::String(shortcut.into()),
+    );
+    conn.execute(
+        "UPDATE profiles SET settings_json=?2,updated_utc=?3 WHERE id=?1",
+        params![
+            profile_id,
+            serde_json::Value::Object(settings).to_string(),
+            now_utc()
+        ],
+    )?;
+    Ok(())
+}
+
+fn set_profile_shortcut_with<F, G>(
+    conn: &mut Connection,
+    profile_id: &str,
+    requested: &str,
+    active: Option<&str>,
+    mut register: F,
+    mut unregister: G,
+) -> Result<QuickLaunchHotkeyStatus, AppError>
+where
+    F: FnMut(&str) -> Result<(), String>,
+    G: FnMut(&str) -> Result<(), String>,
+{
+    let mut settings = profile_settings(conn, profile_id)?;
+    let tx = conn.transaction()?;
+    settings.insert(
+        QUICK_LAUNCH_SETTING_KEY.into(),
+        serde_json::Value::String(requested.into()),
+    );
+    tx.execute(
+        "UPDATE profiles SET settings_json=?2,updated_utc=?3 WHERE id=?1",
+        params![
+            profile_id,
+            serde_json::Value::Object(settings).to_string(),
+            now_utc()
+        ],
+    )?;
+    let status = switch_hotkey(requested, active, &mut register, &mut unregister);
+    if !status.registered {
+        drop(tx);
+        return Ok(status);
+    }
+    if let Err(error) = tx.commit() {
+        if let Some(active) = active {
+            let _ = switch_hotkey(active, Some(requested), &mut register, &mut unregister);
+        } else {
+            let _ = unregister(requested);
+        }
+        return Err(AppError::Database(error));
+    }
+    Ok(status)
+}
+
+fn record_active_profile(state: &ActiveProfileState, profile_id: &str) {
+    *state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = profile_id.to_owned();
+}
+
+fn inactive_hotkey_status(requested: &str, active: Option<String>) -> QuickLaunchHotkeyStatus {
+    QuickLaunchHotkeyStatus {
+        registered: false,
+        shortcut: requested.into(),
+        active_shortcut: active,
+        error_code: None,
+    }
+}
+
+fn save_inactive_profile_shortcut(
+    conn: &Connection,
+    profile_id: &str,
+    requested: &str,
+    active: Option<String>,
+) -> Result<QuickLaunchHotkeyStatus, AppError> {
+    persist_profile_shortcut(conn, profile_id, requested)?;
+    Ok(inactive_hotkey_status(requested, active))
+}
+
+fn apply_profile_shortcut(
+    app: &tauri::AppHandle,
+    conn: &Connection,
+    profile_id: &str,
+    status_state: &HotkeyStatusState,
+) -> Result<QuickLaunchHotkeyStatus, AppError> {
+    let raw = profile_shortcut(conn, profile_id)?;
+    let mut stored = status_state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = stored.active_shortcut.clone();
+    let status = match normalize_shortcut(&raw) {
+        Ok(requested) => switch_hotkey(
+            &requested,
+            previous.as_deref(),
+            |shortcut| {
+                app.global_shortcut()
+                    .register(shortcut)
+                    .map_err(|error| error.to_string())
+            },
+            |shortcut| {
+                app.global_shortcut()
+                    .unregister(shortcut)
+                    .map_err(|error| error.to_string())
+            },
+        ),
+        Err(_) => QuickLaunchHotkeyStatus {
+            registered: false,
+            shortcut: raw,
+            active_shortcut: previous,
+            error_code: Some("invalid_shortcut".into()),
+        },
+    };
+    *stored = status.clone();
+    Ok(status)
+}
+
 const MIGRATION: &str = r#"
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -331,8 +605,30 @@ fn load_resource_details(
     resource: &mut Resource,
     profile_id: Option<&str>,
 ) -> Result<(), AppError> {
+    load_resource_details_with_limits(conn, resource, profile_id, false)
+}
+
+fn load_resource_details_bounded(
+    conn: &Connection,
+    resource: &mut Resource,
+    profile_id: Option<&str>,
+) -> Result<(), AppError> {
+    load_resource_details_with_limits(conn, resource, profile_id, true)
+}
+
+fn load_resource_details_with_limits(
+    conn: &Connection,
+    resource: &mut Resource,
+    profile_id: Option<&str>,
+    bounded: bool,
+) -> Result<(), AppError> {
     load_targets(conn, resource)?;
-    let mut stmt=conn.prepare("SELECT kind,value FROM resource_terms WHERE resource_id=?1 ORDER BY kind,value COLLATE NOCASE")?;
+    let query = if bounded {
+        "SELECT kind,value FROM (SELECT kind,value FROM (SELECT kind,value FROM resource_terms WHERE resource_id=?1 AND kind='tag' ORDER BY value COLLATE NOCASE LIMIT 32) UNION ALL SELECT kind,value FROM (SELECT kind,value FROM resource_terms WHERE resource_id=?1 AND kind='alias' ORDER BY value COLLATE NOCASE LIMIT 32))"
+    } else {
+        "SELECT kind,value FROM resource_terms WHERE resource_id=?1 ORDER BY kind,value COLLATE NOCASE"
+    };
+    let mut stmt = conn.prepare(query)?;
     for term in stmt.query_map([&resource.id], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })? {
@@ -670,6 +966,7 @@ fn resource_search(
     profile_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<Resource>, AppError> {
+    validate_search_query(&query)?;
     let is_favorite = query
         .split_whitespace()
         .any(|part| part.eq_ignore_ascii_case("is:favorite"));
@@ -688,6 +985,147 @@ fn resource_search(
     )
 }
 
+const MAX_SEARCH_QUERY_BYTES: usize = 512;
+const MAX_SEARCH_QUERY_CHARS: usize = 128;
+const MAX_SEARCH_CANDIDATES: usize = 250;
+const MAX_SEARCH_FIELD_CHARS: usize = 256;
+const MAX_SEARCH_ALIAS_OR_TAG_FIELDS: usize = 32;
+
+fn validate_search_query(query: &str) -> Result<(), AppError> {
+    if query.len() > MAX_SEARCH_QUERY_BYTES || query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+        return Err(AppError::Invalid(format!(
+            "search query exceeds {MAX_SEARCH_QUERY_CHARS} characters or {MAX_SEARCH_QUERY_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct TextMatch {
+    quality: u8, // exact, prefix, substring, then edit-distance match
+    field: u8,   // name, alias, tag, description
+    distance: usize,
+}
+
+fn edit_distance_at_most(left: &str, right: &str, max_distance: usize) -> Option<usize> {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.len().abs_diff(right.len()) > max_distance {
+        return None;
+    }
+    let cap = max_distance + 1;
+    let mut previous: Vec<usize> = (0..=right.len())
+        .map(|index| if index <= max_distance { index } else { cap })
+        .collect();
+    for (i, left_char) in left.iter().enumerate() {
+        let row = i + 1;
+        let mut current = vec![cap; right.len() + 1];
+        if row <= max_distance {
+            current[0] = row;
+        }
+        let start = row.saturating_sub(max_distance).max(1);
+        let end = (row + max_distance).min(right.len());
+        let mut row_min = current[0];
+        for col in start..=end {
+            current[col] = (previous[col] + 1)
+                .min(current[col - 1] + 1)
+                .min(previous[col - 1] + usize::from(*left_char != right[col - 1]));
+            row_min = row_min.min(current[col]);
+        }
+        if row_min > max_distance {
+            return None;
+        }
+        previous = current;
+    }
+    (previous[right.len()] <= max_distance).then_some(previous[right.len()])
+}
+
+fn best_field_match(query: &str, value: &str, field: u8) -> Option<TextMatch> {
+    let query = query.to_lowercase();
+    let value = value
+        .chars()
+        .take(MAX_SEARCH_FIELD_CHARS)
+        .collect::<String>()
+        .to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    if query == value {
+        return Some(TextMatch {
+            quality: 0,
+            field,
+            distance: 0,
+        });
+    }
+    if value.starts_with(&query) {
+        return Some(TextMatch {
+            quality: 1,
+            field,
+            distance: 0,
+        });
+    }
+    if value.contains(&query) {
+        return Some(TextMatch {
+            quality: 2,
+            field,
+            distance: 0,
+        });
+    }
+
+    let max_distance = if query.chars().count() >= 7 {
+        2
+    } else if query.chars().count() >= 4 {
+        1
+    } else {
+        0
+    };
+    if max_distance == 0 {
+        return None;
+    }
+    let distance = value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| edit_distance_at_most(&query, word, max_distance))
+        .min()?;
+    (distance <= max_distance).then_some(TextMatch {
+        quality: 3,
+        field,
+        distance,
+    })
+}
+
+fn resource_match(query: &str, resource: &Resource) -> Option<TextMatch> {
+    let mut best = best_field_match(query, &resource.display_name, 0);
+    for alias in resource.aliases.iter().take(MAX_SEARCH_ALIAS_OR_TAG_FIELDS) {
+        best = best
+            .into_iter()
+            .chain(best_field_match(query, alias, 1))
+            .min();
+    }
+    for tag in resource.tags.iter().take(MAX_SEARCH_ALIAS_OR_TAG_FIELDS) {
+        best = best
+            .into_iter()
+            .chain(best_field_match(query, tag, 2))
+            .min();
+    }
+    if let Some(description) = &resource.description {
+        best = best
+            .into_iter()
+            .chain(best_field_match(query, description, 3))
+            .min();
+    }
+    best
+}
+
+fn recency_rank(last_launched: Option<&str>) -> i64 {
+    let Some(last) = last_launched else {
+        return i64::MAX;
+    };
+    chrono::DateTime::parse_from_rfc3339(last)
+        .map(|dt| -dt.timestamp())
+        .unwrap_or(i64::MAX)
+}
+
 fn search_resources(
     conn: &Connection,
     q: &str,
@@ -695,28 +1133,52 @@ fn search_resources(
     is_favorite: bool,
     limit: usize,
 ) -> Result<Vec<Resource>, AppError> {
-    let like = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
-    let starts = format!("{}%", q);
-    let sql="SELECT r.id,r.resource_type,r.display_name,r.description,r.icon,r.default_action,r.created_utc,r.updated_utc FROM resources r WHERE (?1='' OR r.display_name LIKE ?2 ESCAPE '\\' OR COALESCE(r.description,'') LIKE ?2 ESCAPE '\\' OR EXISTS(SELECT 1 FROM resource_terms t WHERE t.resource_id=r.id AND t.value LIKE ?2 ESCAPE '\\')) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND pr.profile_id=?3)) AND (?4=0 OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND (?3 IS NULL OR pr.profile_id=?3) AND pr.favorite=1)) ORDER BY CASE WHEN r.display_name=?1 COLLATE NOCASE THEN 0 WHEN r.display_name LIKE ?5 ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 2 END,r.display_name COLLATE NOCASE LIMIT ?6";
-    let mut stmt = conn.prepare(sql)?;
+    let query = q.trim();
+    validate_search_query(query)?;
+    let lowered = query.to_lowercase();
+    let prefix = format!("{lowered}%");
+    let contains = format!("%{lowered}%");
+    let mut stmt = conn.prepare("SELECT r.id,r.resource_type,r.display_name,r.description,r.icon,r.default_action,r.created_utc,r.updated_utc FROM resources r WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND pr.profile_id=?1)) AND (?2=0 OR EXISTS(SELECT 1 FROM profile_resources pr WHERE pr.resource_id=r.id AND (?1 IS NULL OR pr.profile_id=?1) AND pr.favorite=1)) ORDER BY CASE WHEN lower(r.display_name)=?3 THEN 0 WHEN lower(r.display_name) LIKE ?4 THEN 1 WHEN lower(r.display_name) LIKE ?5 THEN 2 WHEN EXISTS(SELECT 1 FROM resource_terms a WHERE a.resource_id=r.id AND a.kind='alias' AND lower(a.value) LIKE ?5) OR EXISTS(SELECT 1 FROM resource_terms t WHERE t.resource_id=r.id AND t.kind='tag' AND lower(t.value) LIKE ?5) THEN 3 ELSE 4 END, r.display_name COLLATE NOCASE LIMIT ?6")?;
     let rows = stmt.query_map(
         params![
-            q,
-            like,
             profile_id,
             if is_favorite { 1i64 } else { 0i64 },
-            starts,
-            limit.clamp(1, 500) as i64
+            lowered,
+            prefix,
+            contains,
+            MAX_SEARCH_CANDIDATES as i64
         ],
         resource_from_row,
     )?;
-    let mut result = Vec::new();
+    let mut ranked = Vec::new();
     for row in rows {
         let mut resource = row?;
-        load_resource_details(conn, &mut resource, profile_id)?;
-        result.push(resource);
+        load_resource_details_bounded(conn, &mut resource, profile_id)?;
+        let text_match = if query.is_empty() {
+            Some(TextMatch {
+                quality: 4,
+                field: 0,
+                distance: 0,
+            })
+        } else {
+            resource_match(query, &resource)
+        };
+        if let Some(text_match) = text_match {
+            ranked.push((
+                text_match,
+                !resource.favorite,
+                recency_rank(resource.last_launched_utc.as_deref()),
+                resource.display_name.to_lowercase(),
+                resource,
+            ));
+        }
     }
-    Ok(result)
+    ranked.sort_by(|a, b| (&a.0, a.1, a.2, &a.3).cmp(&(&b.0, b.1, b.2, &b.3)));
+    Ok(ranked
+        .into_iter()
+        .take(limit.clamp(1, 500))
+        .map(|(_, _, _, _, resource)| resource)
+        .collect())
 }
 
 const MAX_LAYOUT_BYTES: usize = 1_048_576;
@@ -938,17 +1400,82 @@ fn profile_create(state: State<'_, AppState>, name: String) -> Result<Profile, A
 }
 
 #[tauri::command]
-fn profile_switch(state: State<'_, AppState>, profile_id: String) -> Result<Profile, AppError> {
+fn profile_switch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    hotkey_status: State<'_, HotkeyStatusState>,
+    active_profile: State<'_, ActiveProfileState>,
+    profile_id: String,
+) -> Result<Profile, AppError> {
     Uuid::parse_str(&profile_id)
         .map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
     let conn = lock(&state)?;
-    conn.query_row(
+    let profile = conn.query_row(
         "SELECT id,name,theme_id,settings_json,created_utc,updated_utc FROM profiles WHERE id=?1",
-        [profile_id],
-        profile_from_row,
-    )
-    .optional()?
-    .ok_or(AppError::NotFound)
+        [&profile_id], profile_from_row,
+    ).optional()?.ok_or(AppError::NotFound)?;
+    let status = apply_profile_shortcut(&app, &conn, &profile_id, &hotkey_status)?;
+    // A registration conflict leaves the old shortcut active, while selecting the requested profile still succeeds.
+    record_active_profile(&active_profile, &profile_id);
+    let _ = app.emit("quick-launch-hotkey-status", status);
+    Ok(profile)
+}
+
+#[tauri::command]
+fn quick_launch_hotkey_set(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    hotkey_status: State<'_, HotkeyStatusState>,
+    active_profile: State<'_, ActiveProfileState>,
+    profile_id: String,
+    shortcut: String,
+) -> Result<QuickLaunchHotkeyStatus, AppError> {
+    Uuid::parse_str(&profile_id)
+        .map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
+    let requested = normalize_shortcut(&shortcut)?;
+    let mut conn = lock(&state)?;
+    let active_id = active_profile
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut status_state = hotkey_status
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if profile_id != active_id {
+        let status = save_inactive_profile_shortcut(
+            &conn,
+            &profile_id,
+            &requested,
+            status_state.active_shortcut.clone(),
+        )?;
+        drop(status_state);
+        let _ = app.emit("quick-launch-hotkey-status", &status);
+        return Ok(status);
+    }
+
+    let previous = status_state.active_shortcut.clone();
+    let status = set_profile_shortcut_with(
+        &mut conn,
+        &profile_id,
+        &requested,
+        previous.as_deref(),
+        |value| {
+            app.global_shortcut()
+                .register(value)
+                .map_err(|error| error.to_string())
+        },
+        |value| {
+            app.global_shortcut()
+                .unregister(value)
+                .map_err(|error| error.to_string())
+        },
+    )?;
+    *status_state = status.clone();
+    drop(status_state);
+    let _ = app.emit("quick-launch-hotkey-status", &status);
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1040,6 +1567,15 @@ where
         params![event_id, status, error_code, message, duration_ms],
     )?;
     Ok(conn.query_row("SELECT request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,message,duration_ms FROM launch_events WHERE id=?1",[event_id],launch_event_from_row)?)
+}
+
+#[tauri::command]
+fn quick_launch_hotkey_status(state: State<'_, HotkeyStatusState>) -> QuickLaunchHotkeyStatus {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 #[tauri::command]
@@ -1148,11 +1684,54 @@ fn launch_target(_app: &tauri::AppHandle, _target: &ResourceTarget) -> Result<()
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if quick_launch_toggle_pressed(shortcut, &event) {
+                        toggle_quick_launch(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             let path = app.path().app_local_data_dir()?.join("launcher.sqlite3");
             let conn = open_database(&path).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let default_id =
+                default_profile_id(&conn).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let desired = profile_shortcut(&conn, &default_id).unwrap_or_else(|error| {
+                eprintln!("Could not load default profile shortcut: {error}");
+                QUICK_LAUNCH_HOTKEY_SPEC.into()
+            });
             app.manage(AppState(Mutex::new(conn)));
+            let status = match normalize_shortcut(&desired) {
+                Ok(requested) => switch_hotkey(
+                    &requested,
+                    None,
+                    |value| {
+                        app.global_shortcut()
+                            .register(value)
+                            .map_err(|error| error.to_string())
+                    },
+                    |_| Ok(()),
+                ),
+                Err(_) => QuickLaunchHotkeyStatus {
+                    registered: false,
+                    shortcut: desired,
+                    active_shortcut: None,
+                    error_code: Some("invalid_shortcut".into()),
+                },
+            };
+            if !status.registered {
+                eprintln!(
+                    "Global shortcut {} failed: {}",
+                    status.shortcut,
+                    status.error_code.as_deref().unwrap_or("unknown")
+                );
+            }
+            app.manage(HotkeyStatusState(Mutex::new(status.clone())));
+            app.manage(ActiveProfileState(Mutex::new(default_id)));
+            let _ = app.emit("quick-launch-hotkey-status", status);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1167,15 +1746,42 @@ pub fn run() {
             profile_switch,
             layout_get,
             layout_save,
+            quick_launch_hotkey_status,
+            quick_launch_hotkey_set,
             analytics_query
-        ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Smart Workspace Launcher");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("failed to build Smart Workspace Launcher");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            let registered = handle
+                .try_state::<HotkeyStatusState>()
+                .map(|state| {
+                    state
+                        .0
+                        .lock()
+                        .map(|status| status.registered)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if registered {
+                if let Err(error) = handle
+                    .global_shortcut()
+                    .unregister(QUICK_LAUNCH_HOTKEY_SPEC)
+                {
+                    eprintln!("Global shortcut cleanup failed: {error}");
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri_plugin_global_shortcut::{Code, Modifiers};
 
     fn database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1398,6 +2004,87 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn search_ranks_exact_prefix_substring_and_typo_matches() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        for name in ["Calendar", "Calendar Notes", "Planning Calendar"] {
+            let resource = resource(name);
+            persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        }
+        let exact_prefix = search_resources(&conn, "calendar", Some(&pid), false, 20).unwrap();
+        assert_eq!(exact_prefix[0].display_name, "Calendar");
+        assert_eq!(exact_prefix[1].display_name, "Calendar Notes");
+        assert_eq!(exact_prefix[2].display_name, "Planning Calendar");
+        let typo = search_resources(&conn, "calender", Some(&pid), false, 20).unwrap();
+        assert!(typo
+            .iter()
+            .any(|resource| resource.display_name == "Calendar"));
+    }
+
+    #[test]
+    fn search_rejects_queries_over_byte_or_character_caps() {
+        assert!(validate_search_query(&"x".repeat(MAX_SEARCH_QUERY_CHARS + 1)).is_err());
+        assert!(validate_search_query(&"é".repeat(MAX_SEARCH_QUERY_BYTES / 2 + 1)).is_err());
+        assert!(validate_search_query(&"é".repeat(MAX_SEARCH_QUERY_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn search_candidate_cap_bounds_scoring_but_keeps_requested_output_limit() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        for index in (0..MAX_SEARCH_CANDIDATES + 5).rev() {
+            let resource = resource(&format!("Work item {index:04}"));
+            persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        }
+        let results = search_resources(&conn, "work", Some(&pid), false, 500).unwrap();
+        assert_eq!(results.len(), MAX_SEARCH_CANDIDATES);
+        assert_eq!(results[0].display_name, "Work item 0000");
+        assert_eq!(results.last().unwrap().display_name, "Work item 0249");
+        let limited = search_resources(&conn, "work", Some(&pid), false, 3).unwrap();
+        assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn bounded_edit_distance_handles_typo_threshold_and_long_mismatch() {
+        assert_eq!(edit_distance_at_most("calender", "calendar", 2), Some(1));
+        assert_eq!(edit_distance_at_most("calendar", "calendars", 1), Some(1));
+        assert_eq!(edit_distance_at_most("calendar", "unrelated", 2), None);
+        assert_eq!(edit_distance_at_most("a", &"b".repeat(300), 2), None);
+    }
+
+    #[test]
+    fn search_uses_favorites_then_local_launch_recency_as_tiebreakers() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        let older = resource("Work Alpha");
+        let favorite = resource("Work Beta");
+        let newer = resource("Work Gamma");
+        for resource in [&older, &favorite, &newer] {
+            persist_resource(&mut conn, resource, true, Some(&pid)).unwrap();
+        }
+        conn.execute(
+            "UPDATE profile_resources SET favorite=1 WHERE profile_id=?1 AND resource_id=?2",
+            params![pid, favorite.id],
+        )
+        .unwrap();
+        for (resource, timestamp) in [
+            (&older, "2026-10-19T00:00:00Z"),
+            (&newer, "2026-10-20T00:00:00Z"),
+        ] {
+            conn.execute("INSERT INTO launch_events(id,request_id,resource_id,source,launched_at_utc,status) VALUES (?1,?2,?3,'dashboard',?4,'handed_off')", params![Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),resource.id,timestamp]).unwrap();
+        }
+        let results = search_resources(&conn, "work", Some(&pid), false, 20).unwrap();
+        assert_eq!(results[0].display_name, "Work Beta");
+        conn.execute(
+            "UPDATE profile_resources SET favorite=0 WHERE profile_id=?1",
+            [&pid],
+        )
+        .unwrap();
+        let results = search_resources(&conn, "work", Some(&pid), false, 20).unwrap();
+        assert_eq!(results[0].display_name, "Work Gamma");
     }
 
     #[test]
@@ -1764,6 +2451,138 @@ mod tests {
         )
         .unwrap();
         assert!(layout_get_from_conn(&conn, &valid.profile_id, "dock").is_err());
+    }
+
+    #[test]
+    fn quick_launch_hotkey_uses_alt_space_and_only_toggles_on_press() {
+        let shortcut: Shortcut = QUICK_LAUNCH_HOTKEY_SPEC.parse().unwrap();
+        assert!(shortcut.matches(Modifiers::ALT, Code::Space));
+        let pressed = ShortcutEvent {
+            id: shortcut.id(),
+            state: ShortcutState::Pressed,
+        };
+        let released = ShortcutEvent {
+            id: shortcut.id(),
+            state: ShortcutState::Released,
+        };
+        assert!(quick_launch_toggle_pressed(&shortcut, &pressed));
+        assert!(!quick_launch_toggle_pressed(&shortcut, &released));
+        let other = Shortcut::new(Some(Modifiers::ALT), Code::KeyA);
+        assert!(quick_launch_toggle_pressed(&other, &pressed)); // Registered shortcut identity is owned by plugin dispatch.
+    }
+
+    #[test]
+    fn quick_launch_hotkey_status_reports_success_and_conflict() {
+        let success = switch_hotkey("alt+space", None, |_| Ok(()), |_| Ok(()));
+        assert!(success.registered);
+        assert_eq!(success.shortcut, "alt+space");
+        assert_eq!(success.active_shortcut.as_deref(), Some("alt+space"));
+        assert_eq!(success.error_code, None);
+        let conflict = switch_hotkey(
+            "ctrl+space",
+            Some("alt+space"),
+            |_| Err("hotkey already registered by another app".into()),
+            |_| Ok(()),
+        );
+        assert!(!conflict.registered);
+        assert_eq!(conflict.shortcut, "ctrl+space");
+        assert_eq!(conflict.active_shortcut.as_deref(), Some("alt+space"));
+        assert_eq!(conflict.error_code.as_deref(), Some("hotkey_conflict"));
+    }
+
+    #[test]
+    fn hotkey_conflict_preserves_profile_settings_and_active_registration() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        conn.execute("UPDATE profiles SET settings_json='{\"theme\":\"dark\",\"quickLaunchShortcut\":\"alt+space\"}' WHERE id=?1", [&pid]).unwrap();
+        let mut register_calls = Vec::new();
+        let mut unregister_calls = Vec::new();
+        let status = set_profile_shortcut_with(
+            &mut conn,
+            &pid,
+            "ctrl+space",
+            Some("alt+space"),
+            |shortcut| {
+                register_calls.push(shortcut.to_owned());
+                Err("already registered".into())
+            },
+            |shortcut| {
+                unregister_calls.push(shortcut.to_owned());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!status.registered);
+        assert_eq!(status.active_shortcut.as_deref(), Some("alt+space"));
+        assert_eq!(register_calls, vec!["ctrl+space"]);
+        assert!(unregister_calls.is_empty());
+        let settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM profiles WHERE id=?1",
+                [&pid],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&settings).unwrap();
+        assert_eq!(settings[QUICK_LAUNCH_SETTING_KEY], "alt+space");
+        assert_eq!(settings["theme"], "dark");
+    }
+
+    #[test]
+    fn inactive_profile_hotkey_is_persisted_without_registration() {
+        let conn = database();
+        let pid = profile(&conn);
+        assert_eq!(
+            profile_shortcut(&conn, &pid).unwrap(),
+            QUICK_LAUNCH_HOTKEY_SPEC
+        );
+        let status =
+            save_inactive_profile_shortcut(&conn, &pid, "ctrl+space", Some("alt+space".into()))
+                .unwrap();
+        assert_eq!(profile_shortcut(&conn, &pid).unwrap(), "ctrl+space");
+        assert!(!status.registered);
+        assert_eq!(status.shortcut, "ctrl+space");
+        assert_eq!(status.active_shortcut.as_deref(), Some("alt+space"));
+        assert_eq!(status.error_code, None);
+    }
+
+    #[test]
+    fn profile_shortcut_swap_registers_before_unregistering_old() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let status = switch_hotkey(
+            "ctrl+space",
+            Some("alt+space"),
+            |value| {
+                calls.borrow_mut().push(format!("register:{value}"));
+                Ok(())
+            },
+            |value| {
+                calls.borrow_mut().push(format!("unregister:{value}"));
+                Ok(())
+            },
+        );
+        assert!(status.registered);
+        assert_eq!(status.active_shortcut.as_deref(), Some("ctrl+space"));
+        assert_eq!(
+            *calls.borrow(),
+            vec!["register:ctrl+space", "unregister:alt+space"]
+        );
+    }
+
+    #[test]
+    fn profile_switch_keeps_selection_when_shortcut_conflicts() {
+        let active_profile = ActiveProfileState(Mutex::new("old-profile".into()));
+        let conflict = switch_hotkey(
+            "ctrl+space",
+            Some("alt+space"),
+            |_| Err("already registered".into()),
+            |_| Ok(()),
+        );
+        record_active_profile(&active_profile, "requested-profile");
+        assert_eq!(*active_profile.0.lock().unwrap(), "requested-profile");
+        assert!(!conflict.registered);
+        assert_eq!(conflict.active_shortcut.as_deref(), Some("alt+space"));
+        assert_eq!(conflict.error_code.as_deref(), Some("hotkey_conflict"));
     }
 
     #[test]

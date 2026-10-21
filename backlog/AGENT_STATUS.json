@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T19:35:00Z",
+  "updated_at_utc": "2026-10-21T19:44:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,7 +13,7 @@
     "number": 26,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/26",
     "state": "DRAFT",
-    "head_commit": "458b0d3"
+    "head_commit": "a4285cb"
   },
   "subagent_limit": 3,
   "agents": [
@@ -22,33 +22,33 @@
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-003",
+      "issue": "SW-002/SW-003/SW-004",
       "branch": "feature/sw-001-core",
-      "commit": "458b0d3",
+      "commit": "7ffcdef",
       "pr": null,
-      "task": "SW-003 backend follow-up integrated: DTO fields, migration v2, CRUD/search/profile membership, launch history/analytics and Rust tests; native compile blocked by platform/toolchain prerequisites"
+      "task": "Resource/profile persistence, launch analytics, Tauri macro fix, SQLite layouts with validation and test coverage; Windows-target Rust tests type-checked with compiler shims, not built/run"
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-006/SW-010",
+      "issue": "SW-006/SW-010/SW-004",
       "branch": "feature/sw-002-ui",
-      "commit": "f1b3669",
+      "commit": "0a8cdd1",
       "pr": null,
-      "task": "Dashboard, Explorer shell and typed contract integration; partial UX"
+      "task": "Dashboard/Explorer/Inspector and profile-scoped layout persistence using native commands with browser fallback; five UI tests"
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
       "state": "COMPLETE",
-      "issue": "SW-008",
+      "issue": "SW-008/SW-004",
       "branch": "shared-checkout",
       "commit": null,
       "pr": null,
-      "task": "Python profile archive fixture validator and 7 security/schema tests; not production importer"
+      "task": "11 archive contract tests and independent SW-004 layout review; verified Core fixes, no blocking findings; notes raw IPC cap remains host-controlled"
     },
     {
       "role": "research",
@@ -78,9 +78,29 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T19:35:00Z",
+    "at_utc": "2026-10-21T19:44:00Z",
     "environment": "Debian 13 x86_64, Node 24.19.0, npm 11.9.0, Rust 1.99.1 stable; Chromium Linux browser preview",
     "results": [
+      {
+        "command": "npm run lint",
+        "result": "PASS (TypeScript check)"
+      },
+      {
+        "command": "npm test",
+        "result": "PASS (5 UI/API tests)"
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS"
+      },
+      {
+        "command": "python -m unittest discover -s tests -v",
+        "result": "PASS (11 profile archive contract harness tests only)"
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS (no binary or Windows runtime assertion)"
+      },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check",
         "result": "PASS"
@@ -90,39 +110,23 @@
         "result": "PASS"
       },
       {
-        "command": "npm run lint",
-        "result": "PASS (TypeScript check)"
-      },
-      {
-        "command": "npm test",
-        "result": "PASS (2 tests)"
-      },
-      {
-        "command": "npm run frontend:build",
-        "result": "PASS"
-      },
-      {
-        "command": "python -m unittest discover -s tests -v",
-        "result": "PASS (11 archive contract tests only)"
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS; no compiled app or Windows runtime tests"
+        "command": "env CC_x86_64_pc_windows_gnu=cc CC_x86_64-pc-windows-gnu=cc RC_x86_64_pc_windows_gnu=/tmp/windres cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --tests",
+        "result": "PASS Rust type-check including test code using host cc, fake windres and ephemeral placeholder icon; not a Windows build and did not run tests"
       },
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
-        "result": "BLOCKED by missing glib-2.0/GTK development libraries"
+        "result": "BLOCKED: Debian GTK/GLib development libraries are unavailable"
       },
       {
-        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu",
-        "result": "BLOCKED: direct rerun stopped in bundled SQLite build because x86_64-w64-mingw32-gcc is absent; Core separately reports a deeper attempted check (using a temporary tool setup) hit E0255 duplicate Tauri generated command macros under Rust 1.99.0"
+        "command": "python scripts/check_release_gate.py",
+        "result": "BLOCKED as expected (exit 2); no real Windows 11 verification"
       },
       {
-        "command": "Playwright Chromium dashboard capture",
-        "result": "PASS Linux browser preview saved to artifacts/screenshots/dashboard-linux-preview.png; synthetic demo content, not native app evidence"
+        "command": "Playwright Chromium dashboard screenshot",
+        "result": "PASS Linux browser preview at artifacts/screenshots/dashboard-linux-preview.png; synthetic demo data only"
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Resolve Rust/Tauri macro compile issue on supported toolchain; expand production import/export, layouts, hotkey, metadata and UI; obtain provisioned Windows 11 x64 host before V1 acceptance."
+  "next_action": "Implement SW-005 true OS global hotkey/search; SW-007 bounded metadata and analytics; production SW-008 importer/exporter with preview and transaction rollback; then SW-009 Dock/SW-011 integration, and obtain a Windows 11 x64 acceptance host for SW-012. V1 remains BLOCKED."
 }

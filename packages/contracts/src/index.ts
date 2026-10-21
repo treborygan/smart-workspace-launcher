@@ -2,7 +2,7 @@
 export type ResourceType = "file" | "folder" | "app" | "shortcut" | "url";
 export type TargetKind = ResourceType;
 export type LaunchStatus = "requested" | "handed_off" | "failed";
-export type LaunchSource = "dashboard" | "quick_launch" | "dock" | "explorer" | "other";
+export type LaunchSource = "dashboard" | "quick_launch" | "dock" | "explorer" | "sequence" | "other";
 
 export interface ResourceTarget {
   id: string;
@@ -90,6 +90,35 @@ export interface DynamicShortcut {
   name: string;
   resourceId: string;
   targetId?: string;
+}
+
+/** A profile-local ordered sequence of existing resource references; steps never contain executable commands. */
+export interface WorkspaceSequenceStep {
+  id: string;
+  resourceId: string;
+  targetId?: string;
+}
+
+export interface WorkspaceSequence {
+  id: string;
+  profileId: string;
+  name: string;
+  steps: WorkspaceSequenceStep[];
+}
+
+export interface WorkspaceSequenceStepResult {
+  stepId: string;
+  resourceId: string;
+  targetId?: string;
+  result: LaunchResult;
+}
+
+export interface WorkspaceSequenceRunResult {
+  sequenceId: string;
+  totalSteps: number;
+  completedSteps: number;
+  stoppedAtStepId?: string;
+  steps: WorkspaceSequenceStepResult[];
 }
 
 export interface LaunchRequest {
@@ -258,6 +287,10 @@ export interface CommandMap {
   dynamic_shortcut_list: { args: { profileId: string }; result: DynamicShortcut[] };
   dynamic_shortcut_save: { args: { shortcut: DynamicShortcut }; result: DynamicShortcut };
   dynamic_shortcut_delete: { args: { profileId: string; id: string }; result: void };
+  workspace_sequence_list: { args: { profileId: string }; result: WorkspaceSequence[] };
+  workspace_sequence_save: { args: { sequence: WorkspaceSequence }; result: WorkspaceSequence };
+  workspace_sequence_delete: { args: { profileId: string; id: string }; result: void };
+  workspace_sequence_run: { args: { profileId: string; id: string; requestId: string }; result: WorkspaceSequenceRunResult };
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
   profile_import_preview: { args: { packagePath: string; targetProfileId?: string }; result: ProfileImportPreview };

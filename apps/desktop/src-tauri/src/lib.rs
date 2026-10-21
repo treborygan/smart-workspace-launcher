@@ -398,7 +398,8 @@ pub struct ProfileImportPreview {
     pub preview_token: String,
     pub profile_id: String,
     pub profile_name: String,
-    pub target_profile_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_profile_id: Option<String>,
     pub resource_count: usize,
     pub layout_count: usize,
     pub history_event_count: usize,
@@ -1422,8 +1423,7 @@ fn profile_import_preview_from_conn(
     package_sha256: &str,
     target_profile_id: Option<&str>,
 ) -> Result<ProfileImportPreview, AppError> {
-    let target_profile_id = target_profile_id.unwrap_or(&package.profile.id);
-    if target_profile_id != package.profile.id.as_str() {
+    if let Some(target_profile_id) = target_profile_id {
         valid_uuid(target_profile_id, "target profile id")?;
         let target_exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
@@ -1497,10 +1497,14 @@ fn profile_import_preview_from_conn(
         if id_exists {
             smart_collection_id_collisions.push(collection.id.clone());
         }
-        let name_exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
-            params![target_profile_id, collection.name], |row| row.get::<_, i64>(0),
-        )? != 0;
+        let name_exists: bool = if let Some(target_profile_id) = target_profile_id {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM smart_collections WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+                params![target_profile_id, collection.name], |row| row.get::<_, i64>(0),
+            )? != 0
+        } else {
+            false
+        };
         if name_exists {
             smart_collection_name_collisions.push(collection.name.clone());
         }
@@ -1516,10 +1520,14 @@ fn profile_import_preview_from_conn(
         if id_exists {
             dynamic_shortcut_id_collisions.push(shortcut.id.clone());
         }
-        let name_exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
-            params![target_profile_id, shortcut.name], |row| row.get::<_, i64>(0),
-        )? != 0;
+        let name_exists: bool = if let Some(target_profile_id) = target_profile_id {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+                params![target_profile_id, shortcut.name], |row| row.get::<_, i64>(0),
+            )? != 0
+        } else {
+            false
+        };
         if name_exists {
             dynamic_shortcut_name_collisions.push(shortcut.name.clone());
         }
@@ -1529,7 +1537,7 @@ fn profile_import_preview_from_conn(
         preview_token: String::new(),
         profile_id: package.profile.id.clone(),
         profile_name: package.profile.name.clone(),
-        target_profile_id: target_profile_id.to_string(),
+        target_profile_id: target_profile_id.map(str::to_string),
         resource_count: package.resources.resources.len(),
         layout_count: package.layouts.layouts.len(),
         history_event_count: package
@@ -2226,6 +2234,16 @@ fn import_profile_package_from_path(
     expected_package_sha256: &str,
     expected_preview_token: &str,
 ) -> Result<ProfileImportResult, AppError> {
+    if strategy == "duplicate" && target_profile_id.is_some() {
+        return Err(AppError::Invalid(
+            "duplicate imports do not use a target profile".into(),
+        ));
+    }
+    if strategy != "duplicate" && target_profile_id.is_none() {
+        return Err(AppError::Invalid(
+            "merge and replace imports require a target profile".into(),
+        ));
+    }
     let (package, package_sha256) = read_profile_package_with_digest(package_path)?;
     if package_sha256 != expected_package_sha256 {
         return Err(package_error(
@@ -5493,9 +5511,9 @@ mod tests {
         };
         package.profile.smart_collections = vec![collection.clone()];
         package.profile.dynamic_shortcuts = vec![shortcut.clone()];
-        validate_package_fields(&package).unwrap();
-
         let target_profile = profile(&conn);
+        package.profile.id = target_profile.clone();
+        validate_package_fields(&package).unwrap();
         install_package_resource(&mut conn, &package, &target_profile);
         smart_collection_save_on_conn(
             &mut conn,
@@ -5521,6 +5539,9 @@ mod tests {
 
         let default_preview =
             profile_import_preview_from_conn(&conn, &package, &"a".repeat(64), None).unwrap();
+        assert_eq!(default_preview.target_profile_id, None);
+        assert!(default_preview.smart_collection_name_collisions.is_empty());
+        assert!(default_preview.dynamic_shortcut_name_collisions.is_empty());
         let targeted_preview = profile_import_preview_from_conn(
             &conn,
             &package,
@@ -5528,7 +5549,7 @@ mod tests {
             Some(&target_profile),
         )
         .unwrap();
-        assert_eq!(targeted_preview.target_profile_id, target_profile);
+        assert_eq!(targeted_preview.target_profile_id, Some(target_profile));
         assert_eq!(targeted_preview.smart_collection_count, 1);
         assert_eq!(targeted_preview.dynamic_shortcut_count, 1);
         assert_eq!(
@@ -5566,6 +5587,25 @@ mod tests {
         );
         let (parsed, digest) = read_profile_package_with_digest(&path).unwrap();
         let preview = profile_import_preview_from_conn(&conn, &parsed, &digest, None).unwrap();
+
+        let profile_count_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert!(matches!(
+            import_profile_package_from_path(
+                &mut conn,
+                &path,
+                "merge",
+                None,
+                &preview.package_sha256,
+                &preview.preview_token,
+            ),
+            Err(AppError::Invalid(_))
+        ));
+        let profile_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(profile_count_after, profile_count_before);
 
         let local_profile = Uuid::new_v4().to_string();
         let timestamp = now_utc();

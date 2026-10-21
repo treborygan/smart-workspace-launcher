@@ -179,7 +179,7 @@ export interface ProfileImportPreview {
   previewToken: string;
   profileId: string;
   profileName: string;
-  targetProfileId: string;
+  targetProfileId?: string;
   resourceCount: number;
   layoutCount: number;
   historyEventCount: number;

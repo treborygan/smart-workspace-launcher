@@ -28,16 +28,16 @@ try {
     Write-Host "Rust: $(rustc --version); Cargo: $(cargo --version)"
   }
 
-  Invoke-Checked 'npm' @('ci')
-  Invoke-Checked 'npm' @('run', 'lint')
-  Invoke-Checked 'npm' @('test')
-  Invoke-Checked 'python' @('-m', 'pip', 'install', '-r', 'requirements-test.txt')
-  Invoke-Checked 'python' @('-m', 'unittest', 'discover', '-s', 'tests', '-v')
-  Invoke-Checked 'python' @('scripts/verify_handoff.py')
+  Invoke-Checked -Command 'npm' -Arguments @('ci')
+  Invoke-Checked -Command 'npm' -Arguments @('run', 'lint')
+  Invoke-Checked -Command 'npm' -Arguments @('test')
+  Invoke-Checked -Command 'python' -Arguments @('-m', 'pip', 'install', '-r', 'requirements-test.txt')
+  Invoke-Checked -Command 'python' -Arguments @('-m', 'unittest', 'discover', '-s', 'tests', '-v')
+  Invoke-Checked -Command 'python' -Arguments @('scripts/verify_handoff.py')
 
   if (-not $SkipCargo) {
-    Invoke-Checked 'cargo' @('fmt', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml', '--check')
-    Invoke-Checked 'cargo' @('test', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml')
+    Invoke-Checked -Command 'cargo' -Arguments @('fmt', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml', '--check')
+    Invoke-Checked -Command 'cargo' -Arguments @('test', '--locked', '--manifest-path', 'apps/desktop/src-tauri/Cargo.toml')
   }
 
   Write-Host "`nCross-platform verification commands passed. Windows acceptance evidence must still be collected separately." -ForegroundColor Green

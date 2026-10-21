@@ -8,7 +8,7 @@ SW-011 changes include input/path validation, HTTPS credential rejection, launch
 
 Environment: Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1. No PowerShell or real Windows 11 x64 host is available. No executable/package/release/READY notice exists. V1 remains BLOCKED; `.github/workflows/` remains absent.
 
-SW-015 is underway on `/workspace/sw015-integration`, branch `feature/sw-015-usage-retention`, stacked atop SW-014 PR #38. Frozen typed contract was committed separately as `TBD`; Core (`/workspace/sw015-core`), UI and QA have bounded tasks in isolated worktrees. Contract includes profile-local UTC filters/pagination, recording/retention/exclusions, explicit purge, CSV export; idempotency guards must remain independent from retained analytics and survive purge/recording opt-out.
+SW-015 is underway on `/workspace/sw015-integration`, branch `feature/sw-015-usage-retention`, stacked atop SW-014 PR #38. Frozen typed contract and durable checkpoint are committed as `784e3511b2537ae331cfa056eaa86c916b5f1070`; Core (`/workspace/sw015-core`), UI and QA have bounded tasks in isolated worktrees. Contract includes profile-local UTC filters/pagination, recording/retention/exclusions, explicit purge, CSV export; idempotency guards must remain independent from retained analytics and survive purge/recording opt-out.
 
 ## Resume actions
 

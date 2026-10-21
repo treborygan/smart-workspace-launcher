@@ -3842,6 +3842,26 @@ mod tests {
         let _ = std::fs::remove_file(mismatch_path);
     }
 
+    #[test]
+    fn production_zip_reader_rejects_expanded_member_over_limit_within_archive_limit() {
+        let package = package("url");
+        let mut entries = serialized_documents(&package);
+        let mut payload = Vec::with_capacity(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1);
+        let mut state = 0x9e37_79b9_u32;
+        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize - 1024) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            payload.push(state as u8);
+        }
+        payload.extend(std::iter::repeat_n(0u8, 1025));
+        entries.push(("oversized.bin", payload));
+        let path = write_test_archive_with_compression(&entries, CompressionMethod::Deflated);
+        assert!(std::fs::metadata(&path).unwrap().len() <= PROFILE_ARCHIVE_MAX_COMPRESSED);
+        assert!(read_profile_package(&path).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
     fn profile(conn: &Connection) -> String {
         let id = Uuid::new_v4().to_string();
         let ts = now_utc();

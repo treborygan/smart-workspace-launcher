@@ -2,18 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./components/Icon";
 import { QuickLaunchOverlay } from "./components/QuickLaunchOverlay";
+import { DockWindow } from "./components/DockWindow";
 import { api } from "./lib/api";
 import type { DashboardLayout, QuickLaunchHotkeyStatus, ResourcePatch } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import "./styles.css";
 
-type Section = "Dashboard" | "Quick Launch" | "Explorer" | "Analytics";
+type Section = "Dashboard" | "Quick Launch" | "Explorer" | "Analytics" | "Dock";
 type ShortcutDraft = { value: string; dirty: boolean };
 const nav = [
   { label: "Dashboard" as const, icon: "grid" as const },
   { label: "Quick Launch" as const, icon: "search" as const },
   { label: "Explorer" as const, icon: "folder" as const },
   { label: "Analytics" as const, icon: "chart" as const },
+  { label: "Dock" as const, icon: "grid" as const },
 ];
 
 function ResourceMark({ resource }: { resource: Resource }) {
@@ -64,6 +66,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dragId, setDragId] = useState<string | null>(null);
   const [cardWidths, setCardWidths] = useState<Record<string, number>>({});
+  const [dockLayout, setDockLayout] = useState<DashboardLayout | null>(null);
   const [dark, setDark] = useState(false);
   const [quickLaunchOpen, setQuickLaunchOpen] = useState(false);
   const [hotkeyStatus, setHotkeyStatus] = useState<QuickLaunchHotkeyStatus | null>(null);
@@ -77,25 +80,25 @@ export default function App() {
   try { configuredShortcut = JSON.parse(selectedProfile?.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
   const shortcutDraft = shortcutDrafts[activeProfileId]?.value ?? configuredShortcut;
 
-  const loadProfile = async (preferredProfileId?: string) => {
+  const loadProfile = async (preferredProfileId?: string, activateProfile = false) => {
     const availableProfiles = await api.profiles();
     const rememberedProfile = preferredProfileId || localStorage.getItem("swl-active-profile");
     const profile = availableProfiles.find((item) => item.id === rememberedProfile) || availableProfiles[0];
-    if (profile) await api.switchProfile(profile.id);
+    if (profile && activateProfile) await api.switchProfile(profile.id);
     if (profile) {
       let configured = "Alt+Space";
       try { configured = JSON.parse(profile.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
       setShortcutDrafts((current) => current[profile.id] ? current : { ...current, [profile.id]: { value: configured, dirty: false } });
     }
-    const [items, layout] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null)]);
+    const [items, layout, dock] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null), profile ? api.layout(profile.id, "dock") : Promise.resolve(null)]);
     const restored = restoreLayout(items, layout);
-    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths);
+    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setDockLayout(dock);
     if (profile) localStorage.setItem("swl-active-profile", profile.id);
     setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
     return profile?.id || "";
   };
   const reload = async () => {
-    try { await loadProfile(); }
+    try { await loadProfile(undefined, true); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not connect to the local workspace."); }
     finally { setLoading(false); }
   };
@@ -142,6 +145,17 @@ export default function App() {
     }).catch((e: unknown) => setNotice(e instanceof Error ? `Quick Launch hotkey status unavailable: ${e.message}` : "Quick Launch hotkey status unavailable."));
     return () => { disposed = true; unlistenToggle(); unlistenStatus(); };
   }, [nativeWindowLabel, activeProfileId]);
+  useEffect(() => {
+    if (nativeWindowLabel !== "dock") return;
+    let disposed = false;
+    let unlisten: () => void = () => {};
+    void api.onWorkspaceStateChanged(({ profileId }) => {
+      if (profileId === activeProfileId || profiles.some((profile) => profile.id === profileId)) {
+        void loadProfile(profileId).catch((e: unknown) => setNotice(e instanceof Error ? e.message : "Could not refresh Dock workspace data."));
+      }
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten(); };
+  }, [nativeWindowLabel, activeProfileId, profiles]);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
 
   const filtered = useMemo(() => resources.filter((resource) => {
@@ -155,6 +169,16 @@ export default function App() {
   const update = async (id: string, patch: ResourcePatch) => {
     try { const changed = await api.update(id, { ...patch, profileId: activeProfileId }); setResources((current) => current.map((r) => r.id === id ? changed : r)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not update resource."); }
+  };
+  const toggleDockPin = async (resource: Resource) => {
+    if (!activeProfileId) return;
+    const cards = dockLayout?.profileId === activeProfileId ? [...dockLayout.cards] : [];
+    const existing = cards.findIndex((card) => card.resourceId === resource.id);
+    if (existing >= 0) cards.splice(existing, 1);
+    else cards.push({ resourceId: resource.id, x: 0, y: cards.length, w: 1, h: 1, type: "icon" });
+    const layout: DashboardLayout = { profileId: activeProfileId, surface: "dock", version: 1, cards: cards.map((card, index) => ({ ...card, x: 0, y: index })) };
+    try { const saved = await api.saveLayout(layout); setDockLayout(saved); }
+    catch (e) { setNotice(e instanceof Error ? e.message : "Could not update Dock pins."); }
   };
   const launch = async (resource: Resource, source: "dashboard" | "quick_launch" = "dashboard"): Promise<string | null> => {
     try {
@@ -189,7 +213,14 @@ export default function App() {
   };
   const remove = async (resource: Resource) => {
     if (!window.confirm(`Remove “${resource.displayName}” from this workspace?`)) return;
-    try { await api.remove(resource.id); const next = resources.filter((r) => r.id !== resource.id); setResources(next); setSelectedId(null); await persistLayout(next, cardWidths); }
+    try {
+      await api.remove(resource.id, activeProfileId);
+      const next = resources.filter((r) => r.id !== resource.id); setResources(next); setSelectedId(null); await persistLayout(next, cardWidths);
+      if (dockLayout?.profileId === activeProfileId && dockLayout.cards.some((card) => card.resourceId === resource.id)) {
+        const nextDock: DashboardLayout = { ...dockLayout, cards: dockLayout.cards.filter((card) => card.resourceId !== resource.id) };
+        setDockLayout(await api.saveLayout(nextDock));
+      }
+    }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not remove resource."); }
   };
   const reorder = (overId: string) => {
@@ -201,10 +232,14 @@ export default function App() {
   const resizeCard = (id: string, width: number) => {
     const next = { ...cardWidths, [id]: width }; setCardWidths(next); void persistLayout(resources, next);
   };
+  const openDock = async () => {
+    try { await api.setDockVisibility(true); }
+    catch (e) { setNotice(e instanceof Error ? e.message : "Could not open the workspace Dock."); }
+  };
   const switchProfile = async (profileId: string) => {
     if (profileId === activeProfileId) return;
     setLoading(true); setNotice("");
-    try { await loadProfile(profileId); setQuery(""); }
+    try { await loadProfile(profileId, true); setQuery(""); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
     finally { setLoading(false); }
   };
@@ -218,6 +253,8 @@ export default function App() {
     setQuickLaunchOpen(false);
     if (nativeWindowLabel === "quick-launch") void api.hideCurrentWindow();
   };
+
+  if (nativeWindowLabel === "dock") return <DockWindow profileId={activeProfileId} profileName={profiles.find((profile) => profile.id === activeProfileId)?.name || "Workspace"} resources={resources} layout={dockLayout} hotkeyStatus={hotkeyStatus} onLaunch={(resource) => api.launch(resource.id, "dock", activeProfileId)} onClose={() => void api.hideCurrentWindow()} onRefresh={() => void loadProfile().catch((e: unknown) => setNotice(e instanceof Error ? e.message : "Could not refresh Dock data."))} />;
 
   if (nativeWindowLabel === "quick-launch") return quickLaunchOpen
     ? <QuickLaunchOverlay key={quickLaunchSignal} presentation="window" resources={resources} profileId={activeProfileId} hotkeyStatus={hotkeyStatus} onClose={closeQuickLaunch} onLaunch={(resource) => launch(resource, "quick_launch")} />
@@ -238,7 +275,7 @@ export default function App() {
       <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><Icon name="chevron" size={13} /><b>{section}</b></div><div className="top-actions"><button className="button quiet" onClick={() => setDark(!dark)} aria-label="Toggle theme"><Icon name="moon" size={16} /></button><button className="help-button" aria-label="Help">?</button><button className="profile-chip"><span className="user-avatar mini">A</span><span>Alex</span><Icon name="chevron" size={13} /></button></div></header>
       <div className="content-wrap">
         {hotkeyStatus && !hotkeyStatus.registered && <div className="hotkey-registration-warning" role="status">{hotkeyStatus.shortcut} could not be registered. {hotkeyStatus.activeShortcut ? `${hotkeyStatus.activeShortcut} remains active.` : "Use the Quick Launch button in the sidebar instead."}{hotkeyStatus.errorCode ? ` (${hotkeyStatus.errorCode})` : ""}</div>}
-        {section === "Analytics" ? <Analytics resources={resources} /> : section === "Explorer" ? <Explorer resources={filtered} onSelect={(r) => setSelectedId(r.id)} query={query} setQuery={setQuery} onAdd={() => setShowAdd(true)} /> : <>
+        {section === "Analytics" ? <Analytics resources={resources} /> : section === "Explorer" ? <Explorer resources={filtered} onSelect={(r) => setSelectedId(r.id)} query={query} setQuery={setQuery} onAdd={() => setShowAdd(true)} /> : section === "Dock" ? <section className="dock-manager"><div className="welcome-row"><div><h1>Workspace Dock</h1><p>Choose the resources pinned in the independent floating Dock.</p></div><button className="button primary" onClick={() => void openDock()}>Open Dock</button></div><div className="dock-manager-list">{resources.map((resource) => { const pinned = dockLayout?.cards.some((card) => card.resourceId === resource.id) || false; return <label className="dock-manager-row" key={resource.id}><input type="checkbox" checked={pinned} onChange={() => void toggleDockPin(resource)} /><span><b>{resource.displayName}</b><small>{resource.targets[0]?.canonicalUri || resource.description}</small></span><em>{resource.resourceType}</em></label>; })}{resources.length === 0 && <p className="empty-state">Add resources before pinning them to the Dock.</p>}</div></section> : <>
           <div className="welcome-row"><div><h1>{section === "Quick Launch" ? "Quick Launch" : greeting()}</h1><p>{section === "Quick Launch" ? "Find a resource and open it in its default app." : "Everything you need, right where you left it."}</p></div><button className="button primary add-button" onClick={() => setShowAdd(true)}><Icon name="plus" size={17} /> Add resource</button></div>
           <div className={`search-box ${section === "Quick Launch" ? "command-search" : ""}`}><Icon name="search" size={19} /><input id="global-search" placeholder={section === "Quick Launch" ? "Search resources, aliases, tags…" : "Search your workspace"} value={query} onChange={(e) => setQuery(e.target.value)} /><span className="search-shortcut">{section === "Quick Launch" ? "ESC to close" : "⌘ K"}</span></div>
           <div className="section-heading"><div><h2>{query ? "Search results" : category === "Favorites" ? "Favorites" : "Pinned resources"}</h2><span>{filtered.length} {filtered.length === 1 ? "resource" : "resources"}</span></div><button className="text-button" onClick={() => { setSection("Explorer"); setCategory("All resources"); }}>View all <Icon name="arrow" size={15} /></button></div>

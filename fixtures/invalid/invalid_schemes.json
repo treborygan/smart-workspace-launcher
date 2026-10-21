@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "resources": [
+    {
+      "schema_version": 1,
+      "id": "927e0560-6ef3-452f-a6be-5ad7a5683b6c",
+      "name": "Bad URL",
+      "type": "url",
+      "targets": [
+        {
+          "id": "7b68773c-bd1d-44f6-bc4a-eab0f0dcd14d",
+          "kind": "url",
+          "value": "javascript:alert(1)",
+          "priority": 0
+        }
+      ]
+    }
+  ]
+}

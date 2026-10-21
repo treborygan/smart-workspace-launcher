@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "layouts": [
+    {
+      "breakpoint": "desktop",
+      "cards": [
+        {
+          "resource_id": "927e0560-6ef3-452f-a6be-5ad7a5683b6c",
+          "x": 0,
+          "y": 0,
+          "w": 3,
+          "h": 2,
+          "type": "info"
+        }
+      ]
+    }
+  ]
+}

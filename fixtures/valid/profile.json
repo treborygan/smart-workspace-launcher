@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "7aef2e25-9400-4a6f-ab6b-b89742a1d0ad",
+  "name": "Demo Work",
+  "description": "Synthetic sample profile only",
+  "theme": {
+    "mode": "dark",
+    "accent": "#3864CF",
+    "density": "balanced"
+  },
+  "settings": {
+    "dock_enabled": false
+  },
+  "memberships": [
+    "927e0560-6ef3-452f-a6be-5ad7a5683b6c"
+  ]
+}

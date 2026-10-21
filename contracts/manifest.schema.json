@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "exported_at_utc",
+    "profile_file",
+    "resources_file",
+    "layouts_file"
+  ],
+  "properties": {
+    "format": {
+      "const": "swprofile"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "exported_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "app_version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "profile_file": {
+      "const": "profile.json"
+    },
+    "resources_file": {
+      "const": "resources.json"
+    },
+    "layouts_file": {
+      "const": "layouts.json"
+    },
+    "include_history": {
+      "type": "boolean",
+      "default": false
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 2500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^assets/icons/[a-f0-9]{64}\\.(png|ico)$"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

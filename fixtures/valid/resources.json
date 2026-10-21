@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "resources": [
+    {
+      "schema_version": 1,
+      "id": "927e0560-6ef3-452f-a6be-5ad7a5683b6c",
+      "name": "Demo Report",
+      "type": "file",
+      "description": "A harmless synthetic example, not a real workbook.",
+      "tags": [
+        "demo"
+      ],
+      "aliases": [
+        "test-report"
+      ],
+      "icon": "file-spreadsheet",
+      "targets": [
+        {
+          "id": "7b68773c-bd1d-44f6-bc4a-eab0f0dcd14d",
+          "kind": "file",
+          "value": "C:\\Example\\Demo Report.xlsx",
+          "priority": 0
+        }
+      ]
+    }
+  ]
+}

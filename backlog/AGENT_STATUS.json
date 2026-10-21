@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "project": "treborygan/smart-workspace-launcher",
+  "updated_at_utc": null,
+  "overall_status": "AWAITING_CODEX_ENVIRONMENT",
+  "coordinator": {
+    "model": "gpt-6-luna",
+    "reasoning_effort": "medium",
+    "state": "NOT_RUNNING"
+  },
+  "subagent_limit": 3,
+  "agents": [
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "NOT_RUNNING",
+      "issue": null,
+      "branch": null,
+      "pr": null
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "NOT_RUNNING",
+      "issue": null,
+      "branch": null,
+      "pr": null
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "NOT_RUNNING",
+      "issue": null,
+      "branch": null,
+      "pr": null
+    },
+    {
+      "role": "research",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "state": "NOT_RUNNING",
+      "issue": null,
+      "branch": null,
+      "pr": null
+    },
+    {
+      "role": "release",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "NOT_RUNNING",
+      "issue": null,
+      "branch": null,
+      "pr": null
+    }
+  ],
+  "milestones": {
+    "V1.0": "NOT_STARTED",
+    "V1.1": "NOT_STARTED",
+    "V1.2": "NOT_STARTED",
+    "V2.0": "NOT_STARTED"
+  },
+  "v1_gate": "BLOCKED",
+  "v1_notice_sent": false,
+  "last_test_run": null,
+  "next_action": "Connect a capable Codex environment and run CODEX_KICKOFF.md"
+}

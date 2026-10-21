@@ -1,0 +1,11 @@
+{
+  "format": "swprofile",
+  "schema_version": 1,
+  "exported_at_utc": "2026-10-21T12:00:00Z",
+  "app_version": "0.0-fixture",
+  "profile_file": "profile.json",
+  "resources_file": "resources.json",
+  "layouts_file": "layouts.json",
+  "include_history": false,
+  "assets": []
+}

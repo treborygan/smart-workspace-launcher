@@ -1,0 +1,10 @@
+{
+  "gate": "BLOCKED",
+  "windows_smoke": "NOT_RUN",
+  "artifact_sha256": null,
+  "release_url": null,
+  "asset_url": null,
+  "evidence_refs": [],
+  "verified_at_utc": null,
+  "notes": "Do not edit to PASS without independently verifiable real Windows 11 evidence and tested release artifact."
+}

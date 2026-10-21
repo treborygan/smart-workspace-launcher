@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "issues": [
+    {
+      "id": "SW-001",
+      "title": "SW-001: Bootstrap Tauri 2/React/Rust monorepo and local commands",
+      "area": "core",
+      "milestone": "M0",
+      "depends_on": [],
+      "body": "## Objective\nImplement bootstrap tauri 2/react/rust monorepo and local commands as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nNone\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-002",
+      "title": "SW-002: Implement SQLite schema, migrations and typed domain",
+      "area": "core",
+      "milestone": "M0",
+      "depends_on": [
+        "SW-001"
+      ],
+      "body": "## Objective\nImplement implement sqlite schema, migrations and typed domain as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-001\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-003",
+      "title": "SW-003: Resource CRUD, resolver and Windows Shell launch",
+      "area": "core",
+      "milestone": "M1",
+      "depends_on": [
+        "SW-002"
+      ],
+      "body": "## Objective\nImplement resource crud, resolver and windows shell launch as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-002\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-004",
+      "title": "SW-004: Profile CRUD, memberships and layout persistence",
+      "area": "core",
+      "milestone": "M1",
+      "depends_on": [
+        "SW-002"
+      ],
+      "body": "## Objective\nImplement profile crud, memberships and layout persistence as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-002\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-005",
+      "title": "SW-005: FTS search and hotkey Quick Launch",
+      "area": "frontend",
+      "milestone": "M1",
+      "depends_on": [
+        "SW-003"
+      ],
+      "body": "## Objective\nImplement fts search and hotkey quick launch as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-003\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-006",
+      "title": "SW-006: Resizable Dashboard grid and card editor",
+      "area": "frontend",
+      "milestone": "M2",
+      "depends_on": [
+        "SW-004"
+      ],
+      "body": "## Objective\nImplement resizable dashboard grid and card editor as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-004\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-007",
+      "title": "SW-007: Metadata cache, health and usage analytics",
+      "area": "core",
+      "milestone": "M3",
+      "depends_on": [
+        "SW-003"
+      ],
+      "body": "## Objective\nImplement metadata cache, health and usage analytics as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-003\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-008",
+      "title": "SW-008: Secure .swprofile export/import with preview",
+      "area": "core",
+      "milestone": "M3",
+      "depends_on": [
+        "SW-004"
+      ],
+      "body": "## Objective\nImplement secure .swprofile export/import with preview as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-004\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-009",
+      "title": "SW-009: Independent Dock and shared UI state",
+      "area": "frontend",
+      "milestone": "M2",
+      "depends_on": [
+        "SW-005",
+        "SW-004"
+      ],
+      "body": "## Objective\nImplement independent dock and shared ui state as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-005, SW-004\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-010",
+      "title": "SW-010: Resource Explorer, Inspector, light/dark themes",
+      "area": "frontend",
+      "milestone": "M2",
+      "depends_on": [
+        "SW-006"
+      ],
+      "body": "## Objective\nImplement resource explorer, inspector, light/dark themes as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-006\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-011",
+      "title": "SW-011: Hardening, security, integration and performance",
+      "area": "qa",
+      "milestone": "M3",
+      "depends_on": [
+        "SW-007",
+        "SW-008",
+        "SW-009",
+        "SW-010"
+      ],
+      "body": "## Objective\nImplement hardening, security, integration and performance as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-007, SW-008, SW-009, SW-010\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-012",
+      "title": "SW-012: Windows release verification and portable packaging",
+      "area": "release",
+      "milestone": "M4",
+      "depends_on": [
+        "SW-011"
+      ],
+      "body": "## Objective\nImplement windows release verification and portable packaging as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-011\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-013",
+      "title": "SW-013: Dynamic shortcuts and smart collections",
+      "area": "core",
+      "milestone": "V1.1",
+      "depends_on": [
+        "SW-012"
+      ],
+      "body": "## Objective\nImplement dynamic shortcuts and smart collections as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-012\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-014",
+      "title": "SW-014: Workspace action sequences",
+      "area": "core",
+      "milestone": "V1.1",
+      "depends_on": [
+        "SW-012"
+      ],
+      "body": "## Objective\nImplement workspace action sequences as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-012\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-015",
+      "title": "SW-015: Usage exports, dashboards and retention",
+      "area": "frontend",
+      "milestone": "V1.1",
+      "depends_on": [
+        "SW-012"
+      ],
+      "body": "## Objective\nImplement usage exports, dashboards and retention as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-012\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-016",
+      "title": "SW-016: Related resource graph and workspace snapshots",
+      "area": "frontend",
+      "milestone": "V1.1",
+      "depends_on": [
+        "SW-013",
+        "SW-014"
+      ],
+      "body": "## Objective\nImplement related resource graph and workspace snapshots as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-013, SW-014\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-017",
+      "title": "SW-017: Duplicate and relocation assistant",
+      "area": "core",
+      "milestone": "V1.2",
+      "depends_on": [
+        "SW-013"
+      ],
+      "body": "## Objective\nImplement duplicate and relocation assistant as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-013\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-018",
+      "title": "SW-018: Start Menu and directory/bookmark import assistant",
+      "area": "core",
+      "milestone": "V1.2",
+      "depends_on": [
+        "SW-013"
+      ],
+      "body": "## Objective\nImplement start menu and directory/bookmark import assistant as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-013\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-019",
+      "title": "SW-019: Custom dashboard widget templates",
+      "area": "frontend",
+      "milestone": "V1.2",
+      "depends_on": [
+        "SW-016"
+      ],
+      "body": "## Objective\nImplement custom dashboard widget templates as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-016\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-020",
+      "title": "SW-020: Per-device paths and advanced portable migration",
+      "area": "core",
+      "milestone": "V1.2",
+      "depends_on": [
+        "SW-017",
+        "SW-018"
+      ],
+      "body": "## Objective\nImplement per-device paths and advanced portable migration as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-017, SW-018\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-021",
+      "title": "SW-021: Permissioned extension SDK and registry",
+      "area": "core",
+      "milestone": "V2.0",
+      "depends_on": [
+        "SW-019",
+        "SW-020"
+      ],
+      "body": "## Objective\nImplement permissioned extension sdk and registry as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-019, SW-020\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-022",
+      "title": "SW-022: Optional selective profile synchronization",
+      "area": "core",
+      "milestone": "V2.0",
+      "depends_on": [
+        "SW-020",
+        "SW-021"
+      ],
+      "body": "## Objective\nImplement optional selective profile synchronization as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-020, SW-021\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-023",
+      "title": "SW-023: Optional authenticated remote companion",
+      "area": "core",
+      "milestone": "V2.0",
+      "depends_on": [
+        "SW-021"
+      ],
+      "body": "## Objective\nImplement optional authenticated remote companion as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-021\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-024",
+      "title": "SW-024: Optional AI-assisted organization",
+      "area": "frontend",
+      "milestone": "V2.0",
+      "depends_on": [
+        "SW-021"
+      ],
+      "body": "## Objective\nImplement optional ai-assisted organization as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-021\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    },
+    {
+      "id": "SW-025",
+      "title": "SW-025: Advanced integration, Windows regression and final release",
+      "area": "release",
+      "milestone": "V2.0",
+      "depends_on": [
+        "SW-022",
+        "SW-023",
+        "SW-024"
+      ],
+      "body": "## Objective\nImplement advanced integration, windows regression and final release as defined in the source-of-truth documents, integrating real application code rather than a standalone prototype.\n\n## Dependencies\nSW-022, SW-023, SW-024\n\n## Acceptance criteria\n- Implemented source + automated focused tests for affected behavior.\n- Exact commands, results, and test evidence in GitHub PR.\n- Requirements and security docs respected; no confidential fixtures.\n- Windows-only checks marked NOT_RUN/BLOCKED until verified on Windows.\n- Update backlog/STATUS.md accurately; no GitHub Actions.\n\n## Source of truth\nAGENTS.md, docs/PRODUCT_REQUIREMENTS.md, docs/ARCHITECTURE.md, docs/TEST_AND_ACCEPTANCE.md, backlog/ROADMAP.md."
+    }
+  ]
+}

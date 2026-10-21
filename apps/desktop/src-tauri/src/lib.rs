@@ -3446,9 +3446,18 @@ where
         if existing.resource_id != request.resource_id
             || existing.profile_id != request.profile_id
             || existing.source != request.source
-            || request.target_id.as_ref().is_some_and(|target_id| existing.target_id.as_ref() != Some(target_id))
         {
             return Err(AppError::Invalid("launch request ID was already used for a different action".into()));
+        }
+        let resolved_target: Option<String> = conn
+            .query_row(
+                "SELECT id FROM resource_targets WHERE resource_id=?1 AND active=1 AND (?2 IS NULL OR id=?2) ORDER BY priority DESC LIMIT 1",
+                params![request.resource_id, request.target_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing.target_id != resolved_target {
+            return Err(AppError::Invalid("launch request ID was already used for a different target".into()));
         }
         return Ok(existing);
     }
@@ -5104,7 +5113,14 @@ mod tests {
     fn launch_request_replay_rejects_reused_id_and_checks_profile_membership() {
         let mut conn = database();
         let pid = profile(&conn);
-        let allowed = resource("Allowed resource");
+        let mut allowed = resource("Allowed resource");
+        let mut lower_priority_target = allowed.targets[0].clone();
+        lower_priority_target.id = Uuid::new_v4().to_string();
+        lower_priority_target.priority = 1;
+        let mut default_target = allowed.targets[0].clone();
+        default_target.id = Uuid::new_v4().to_string();
+        default_target.priority = 10;
+        allowed.targets = vec![lower_priority_target.clone(), default_target];
         let disallowed = resource("Other profile resource");
         persist_resource(&mut conn, &allowed, true, Some(&pid)).unwrap();
         persist_resource(&mut conn, &disallowed, true, None).unwrap();
@@ -5115,7 +5131,28 @@ mod tests {
             profile_id: Some(pid.clone()),
             source: "dashboard".into(),
         };
+        let explicit_lower_priority = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: allowed.id.clone(),
+            target_id: Some(lower_priority_target.id),
+            profile_id: Some(pid.clone()),
+            source: "dashboard".into(),
+        };
+        launch_event_with(&mut conn, &explicit_lower_priority, |_| Ok(())).unwrap();
+        let mut target_intent_changed = explicit_lower_priority.clone();
+        target_intent_changed.target_id = None;
+        assert!(matches!(
+            launch_event_with(&mut conn, &target_intent_changed, |_| panic!(
+                "must not relaunch"
+            )),
+            Err(AppError::Invalid(_))
+        ));
+
         launch_event_with(&mut conn, &request, |_| Ok(())).unwrap();
+        assert!(launch_event_with(&mut conn, &request, |_| panic!(
+            "idempotent replay must not relaunch"
+        ))
+        .is_ok());
         let mut reused_id = request.clone();
         reused_id.resource_id = disallowed.id.clone();
         assert!(launch_event_with(&mut conn, &reused_id, |_| panic!("must not relaunch")).is_err());
@@ -5134,7 +5171,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     #[test]

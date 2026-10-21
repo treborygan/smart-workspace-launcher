@@ -18,7 +18,10 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## In progress
 
-- SW-013 (issue #12) implementation and final independent QA are complete locally; feature PR creation is next. It adds profile-scoped bounded AND-filter smart collections, named shortcuts to existing profile resources and optional active owned targets, Quick Launch integration, profile archive round trips, target-bound preview tokens and import collision details. Archive imports do not execute package content. No per-resource/global OS hotkeys are included; the existing global Quick Launch hotkey remains.
+- SW-013 PR #37 is open against `main` (head `f8fbb3d`); final independent QA passed. GitHub review submissions are not yet present.
+- SW-014 implementation is proceeding cross-platform on a stacked feature branch atop SW-013; SW-012 remains a Windows-only release blocker and is not claimed complete.
+
+- SW-013 (issue #12) implementation and final independent QA are complete locally; PR #37 is open; independent QA passed. GitHub review is pending. It adds profile-scoped bounded AND-filter smart collections, named shortcuts to existing profile resources and optional active owned targets, Quick Launch integration, profile archive round trips, target-bound preview tokens and import collision details. Archive imports do not execute package content. No per-resource/global OS hotkeys are included; the existing global Quick Launch hotkey remains.
 
 ## Verification evidence
 

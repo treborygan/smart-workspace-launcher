@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T21:51:30Z",
+  "updated_at_utc": "2026-10-21T21:54:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -9,7 +9,13 @@
     "state": "ACTIVE",
     "branch": "feature/sw-013-dynamic-collections"
   },
-  "active_pull_request": null,
+  "active_pull_request": {
+    "number": 37,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/37",
+    "state": "OPEN",
+    "head_sha": "f8fbb3d81e6de2d26d650bfe547b8be7b2647104",
+    "review_status": "internal QA passed; GitHub review pending"
+  },
   "subagent_limit": 3,
   "agents": [
     {
@@ -111,7 +117,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Complete QA, open and merge reviewed SW-013 PR, then continue SW-014..SW-025 cross-platform tasks in dependency order. SW-012 Windows acceptance remains blocked until real Windows 11 x64 is available; do not package or announce V1.",
+  "next_action": "SW-013 PR #37 is open; await GitHub review and merge. SW-014 cross-platform implementation is underway atop SW-013 PR head. Keep SW-012/V1 BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -159,5 +165,13 @@
       "scope": "SW-011 launch/input validation, replay intent guards, and SQLite hardening"
     }
   ],
-  "open_pull_requests": []
+  "open_pull_requests": [
+    {
+      "number": 37,
+      "issue": "SW-013",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/37",
+      "state": "OPEN",
+      "head_sha": "f8fbb3d81e6de2d26d650bfe547b8be7b2647104"
+    }
+  ]
 }

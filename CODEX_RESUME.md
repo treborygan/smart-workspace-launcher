@@ -1,23 +1,35 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-22 01:50 UTC
+## Checkpoint — 2026-10-22 01:59 UTC
 
-Repository: `treborygan/smart-workspace-launcher`. Continue implementation, do not replace it with another plan or a mock. Read `backlog/AGENT_STATUS.json` and `backlog/STATUS.md` first. Current branch/worktree: `/workspace/sw018-integration`, `feature/sw-018-discovery-import`, based on SW-017 branch. Core owns only `apps/desktop/src-tauri/**`; UI commits `85418f3` and `1172761` are complete; QA independently cleared UI and is assigned backend review. Root owns contracts, shared status, integration and PRs. Maximum three active subagents.
+Continue the implementation, not a plan or web mock. Canonical state: `backlog/AGENT_STATUS.json`, human status: `backlog/STATUS.md`. Repository `treborygan/smart-workspace-launcher`; current branch/worktree `/workspace/sw018-integration`, `feature/sw-018-discovery-import`.
 
-### Review state
+### PR tracking
 
-As checked via GitHub review and review-thread APIs on 2026-10-22, PR #38 (SW-014) and #41 (SW-015) are OPEN with no submitted reviews or inline review threads. Do not merge before review. PR #42 (SW-016) is OPEN_DRAFT; its body now includes the schema-v10 migration test correction commit `d90204f`. PR #43 (SW-017) is OPEN_DRAFT on base #42, current branch head `a2fad7a`; it includes the SW-018 contract-doc commit. PR #39 is closed as superseded with no merged code. No review requests or comments were sent.
+As checked via GitHub review and inline-thread APIs on 2026-10-22 01:58 UTC, PR #38 (SW-014) and PR #41 (SW-015) remain OPEN with no reviews or inline threads. PR #42 (SW-016) and #43 (SW-017) are OPEN_DRAFT; #43 carries frozen SW-018 contract documentation for the next stacked feature. PR #44 (SW-018) is OPEN_DRAFT, based on `feature/sw-017-duplicate-relocation`; code implementation head `1ec5a7a`. PR #39 is closed as superseded without merged code. No review requests or GitHub comments were sent. Do not merge the stack without reviews and dependency-order checks.
 
-### SW-018 contract and work
+### SW-018 complete implementation checkpoint
 
-Issue #17, `SW-018: Start Menu and directory/bookmark import assistant`, was selected from backlog and GitHub. Contract freeze: `docs/DECISIONS.md`, `docs/DATA_MODEL.md`, commit `a2fad7a`. Shared typed Tauri command boundary: commit `d9cfc33`, `packages/contracts/src/index.ts`.
+Issue #17 is implemented on `feature/sw-018-discovery-import`. Core/UI/QA assignments are complete. Core implementation commit `9ccdd7f` plus coordinator mapped-network rejection and risk disclosure commit `1ec5a7a`; UI commits `85418f3`, `1172761`; contract/type commits `a2fad7a`, `d9cfc33`. PR #44 is open, draft, at current code head `1ec5a7a` before this status-only checkpoint.
 
-Contract: explicit user-selected directory, Start Menu folder, or Netscape-format HTTPS bookmark source; scans bounded to depth 4, 1,000 entries and 4 MiB bookmark input; no symlink/reparse traversal or network/whole-drive scans; allow only inert folder/file/HTTPS candidates; Windows `.lnk` metadata reading must never resolve/execute targets; preview provenance/duplicate match, explicit candidate selection and duplicate strategy, re-scan token validation and one transaction/rollback on commit. No candidate auto-launches.
+The importer requires an explicit local directory/Start Menu/bookmark selection, explicit scan, review, candidate choice and commit. It supports folders/files, safe HTTPS `.url` shortcuts and Netscape-format HTTPS bookmarks. It uses cap-std/cap-fs-ext 4.0.3 handle-relative descendant traversal, rejects observed symlinks/reparse points and network paths, and caps depth 4, entries 1,000 and bookmark bytes 4 MiB. Windows `.lnk` metadata is read without Resolve/ShellExecute and nonempty shortcut arguments are rejected. No import action auto-launches.
 
-UI is committed at `85418f3` plus `1172761`, with source picker, scan/preview/selection/policy/explicit commit and controls disabled during commit. Shared typed IPC keys: `resource_import_scan`, `resource_import_commit`. Core is correcting initial QA findings: stream directory entries rather than unbounded `collect`, use `take(max+1)` for bookmark and `.url` data, and check containment/reparse status around traversal. Core has added a metadata-only Windows COM `.lnk` reader (no Resolve/ShellExecute). QA is reviewing final stable code. Do not claim pass until final implementation head is checked.
+Commit rescans the source and binds freshness to source/candidate data, current profile and existing-target match map. It validates selected IDs and applies resource/target/profile inserts in a SQLite transaction; any failure rolls back all. UI supports skip-existing/create-duplicate and disables mutable controls while commit is pending.
 
-### Latest checks
+QA passes SW-018 with no merge blocker. Residual medium same-user race: selected root is initially opened from an ambient path after validation; Windows `.lnk` content is read handle-relative, but COM `IPersistFile::Load` reads by absolute path. This is documented; descendants/ordinary file reads use handle-relative no-follow opens. No race-free-isolation claim. No Windows execution evidence.
 
-On UI/frozen contract branch: `npm ci --cache /tmp/swl-npm-cache` PASS; `npm run typecheck` PASS; `npm test -- --run` PASS, 14 files / 115 tests; `npm run frontend:build` PASS with existing nonfatal Vite dynamic-import warning; `python scripts/verify_handoff.py` PASS (consistency only). A mid-edit cargo fmt check failed on unformatted active Core lines; rerun after Core formatting. Rust tests cannot compile here due absent GLib/GObject >=2.70 development files. Environment Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1. No PowerShell or real Windows 11 x64 host; Windows GNU checks cannot run without MinGW.
+### Verification evidence and limits
 
-V1 remains BLOCKED; no Windows binary/release/READY notice. Do not use GitHub Actions absent explicit user authorization. Continue SW-019..SW-025 after SW-018 in roadmap dependency order; track #38/#41 review state. Keep `backlog/AGENT_STATUS.json` and this file current.
+- `npm ci --cache /tmp/swl-npm-cache` PASS.
+- `npm run typecheck` PASS; `npm test -- --run` PASS (14 files / 115 tests).
+- `npm run frontend:build` PASS with existing nonfatal Vite dynamic-import warning.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `git diff --check`, and `python scripts/verify_handoff.py` PASS. Handoff verifies catalog/schema/fixtures, not runtime behavior.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import --lib` BLOCKED before project compile: missing GLib/GObject >=2.70 development files (`glib-2.0.pc`).
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib` BLOCKED: MinGW compiler unavailable.
+- `python scripts/check_release_gate.py` outputs `NOT READY: BLOCKED` (exit 2). Environment Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99; no PowerShell or real Windows 11 x64.
+
+V1/SW-012 is BLOCKED: no Windows Shell acceptance, package, or READY notice. No GitHub Actions were added by this continuation.
+
+### Next work
+
+Continue SW-019 (issue #18, widget templates) after SW-016 dependency, branch stacked behind SW-018. Freeze typed contract first, then explicitly spawn Core/UI/QA within the three-agent limit. Continue SW-020..SW-025 in roadmap dependency order. Track reviews for #38/#41. Keep V1 blocked until actual Windows 11 x64 acceptance.

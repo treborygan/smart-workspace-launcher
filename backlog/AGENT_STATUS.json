@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T01:50:00Z",
+  "updated_at_utc": "2026-10-22T01:59:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -10,12 +10,12 @@
     "branch": "feature/sw-018-discovery-import"
   },
   "active_pull_request": {
-    "number": 43,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/43",
+    "number": 44,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/44",
     "state": "OPEN_DRAFT",
-    "head_sha": "a2fad7ab5a8581d8d5b0e7019699c0c3b5e7fdb4",
-    "base": "feature/sw-016-resource-graph",
-    "review_status": "SW-017 independent QA passed; awaiting external review. SW-016 migration test correction is included."
+    "head_sha": "1ec5a7a",
+    "base": "feature/sw-017-duplicate-relocation",
+    "review_status": "Independent SW-018 QA passed with no merge blocker. Backend tests blocked before application compilation by missing GLib; Windows x64 checks unavailable. Medium same-user root/.lnk path race documented."
   },
   "subagent_limit": 3,
   "agents": [
@@ -206,12 +206,12 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-018 backend",
       "branch": "feature/sw-018-discovery-import",
-      "commit": null,
+      "commit": "9ccdd7f",
       "pr": null,
-      "task": "Implementing depth/count/byte-bounded discovery and stale-preview transactional import; fixing audit findings around unbounded directory collection and file growth."
+      "task": "Capability-relative bounded scanner, HTTPS-only bookmark/.url parsing, metadata-only Windows .lnk reading, profile+duplicate-bound stale-preview token, transactional commit and Rust tests authored. Residual medium root/.lnk path race documented."
     },
     {
       "role": "ui",
@@ -222,18 +222,18 @@
       "branch": "feature/sw-018-discovery-import",
       "commit": "1172761",
       "pr": null,
-      "task": "Implemented accessible scan/preview/selection/commit UI with duplicate policy and pending-commit locking; full frontend suite passed."
+      "task": "Explicit discovery scan/preview/selection/policy/commit UI with typed Tauri APIs, status/error handling and controls locked during commit."
     },
     {
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-018 independent QA",
       "branch": "feature/sw-018-discovery-import",
       "commit": null,
       "pr": null,
-      "task": "UI passes independent review. Reviewing corrected backend scanner for memory bounds, reparse/TOCTOU safety, URL allowlist, stale preview, atomicity and no auto-execution."
+      "task": "Independent QA passed with no merge blocker; reviewed caps, URL schemes, symlinks/out-of-root, duplicate/profile token, transaction rollback, UI, and documented residual root/.lnk race."
     }
   ],
   "milestones": {
@@ -245,37 +245,53 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T01:49:51Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64 host; Windows GNU target installed but MinGW compiler absent; GLib >=2.70 development files absent.",
+    "at_utc": "2026-10-22T01:59:00Z",
+    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64; MinGW absent; GLib >=2.70 development files absent.",
     "results": [
       {
-        "command": "npm run typecheck && npm test -- --run",
-        "result": "PASS on SW-018 UI commits 85418f3 and 1172761: 14 files / 115 tests."
+        "command": "npm ci --cache /tmp/swl-npm-cache",
+        "result": "PASS."
+      },
+      {
+        "command": "npm run typecheck",
+        "result": "PASS on SW-018 UI/API."
+      },
+      {
+        "command": "npm test -- --run",
+        "result": "PASS, 14 files / 115 tests."
       },
       {
         "command": "npm run frontend:build",
-        "result": "PASS on SW-018 UI; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS: handoff file presence, 25 issue catalog, models, schemas, fixtures; does not execute application/runtime tests."
+        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "INTERIM FAIL while Core was editing Windows .lnk code; two formatting differences. Rerun after Core stabilizes."
+        "result": "PASS on final SW-018 code head after network-source guard."
       },
       {
-        "command": "Rust SW-018 tests",
-        "result": "NOT_YET_RUN on stable code. Cargo compilation remains blocked in this environment by missing GLib/GObject >=2.70 development files."
+        "command": "git diff --check",
+        "result": "PASS."
       },
       {
-        "command": "Windows acceptance / packaging",
-        "result": "NOT_RUN; real Windows 11 x64 and PowerShell unavailable. V1 remains BLOCKED."
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS; handoff/catalog/schema/fixture consistency only."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import --lib",
+        "result": "BLOCKED before app compilation: missing GLib/GObject >=2.70 development files (glib-2.0.pc). Rust tests authored but NOT_RUN."
+      },
+      {
+        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
+        "result": "BLOCKED: x86_64-w64-mingw32-gcc is missing."
+      },
+      {
+        "command": "python scripts/check_release_gate.py",
+        "result": "BLOCKED as expected: NOT READY: BLOCKED (exit 2). No real Windows 11 x64 host."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Complete SW-018 Core bounded scanner and preview-bound transaction on feature/sw-018-discovery-import; have QA review the stable backend; run feasible checks; push/open a draft PR atop SW-017. UI is complete at 1172761. PR #38 and #41 remain open without reviews/inline threads (checked 2026-10-22); #42/#43 are stacked drafts. V1 remains BLOCKED without actual Windows 11 x64 acceptance.",
+  "next_action": "Continue SW-019 (#18 widget templates) after SW-016, stacked behind SW-018 PR #44. SW-018 (#17) implementation is complete on feature/sw-018-discovery-import; PR #44 is open draft, independent QA passed. Continue tracking open PR #38/#41 reviews (both had no reviews/threads at 2026-10-22 01:58 UTC), then SW-020..SW-025 in dependency order. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -335,7 +351,7 @@
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
       "head_sha": "fb22dff",
-      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22."
+      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC."
     },
     {
       "number": 39,
@@ -353,7 +369,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f47",
       "base": "feature/sw-014-action-sequences",
-      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22; stacked on #38."
+      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC; stacked on #38."
     },
     {
       "number": 42,
@@ -362,7 +378,7 @@
       "state": "OPEN_DRAFT",
       "head_sha": "d90204f",
       "base": "feature/sw-015-usage-retention",
-      "note": "SW-016 independent QA passed; migration test corrected for schema v10 in d90204f; draft; backend tests blocked by missing GLib."
+      "note": "SW-016 QA passed; schema-v10 migration assertion fixed in d90204f. Open draft."
     },
     {
       "number": 43,
@@ -371,7 +387,16 @@
       "state": "OPEN_DRAFT",
       "head_sha": "a2fad7a",
       "base": "feature/sw-016-resource-graph",
-      "note": "Independent QA passed on implementation head 72690bb. Current branch also carries SW-018 contract doc commit a2fad7a; SW-018 implementation is stacked on this branch. Native Rust tests blocked by GLib; V1 remains blocked."
+      "note": "SW-017 QA passed; open draft. Includes SW-018 contract document baseline."
+    },
+    {
+      "number": 44,
+      "issue": "SW-018",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/44",
+      "state": "OPEN_DRAFT",
+      "head_sha": "1ec5a7a",
+      "base": "feature/sw-017-duplicate-relocation",
+      "note": "Implementation/independent QA complete; tests/Windows limitations and medium root/.lnk race documented."
     }
   ]
 }

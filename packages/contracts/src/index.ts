@@ -329,11 +329,32 @@ export interface LayoutCard {
   type: "icon" | "compact" | "info" | "group";
 }
 
+/** Built-in dashboard data views. Configurations contain IDs and bounded display options only. */
+export type WidgetTemplate =
+  | { id: string; name: string; kind: "resource_shortcuts"; config: { resourceIds: string[] } }
+  | { id: string; name: string; kind: "recent_launches"; config: { limit: number } }
+  | { id: string; name: string; kind: "launch_summary"; config: { period: "7d" | "30d" | "all" } }
+  | { id: string; name: string; kind: "related_resources"; config: { resourceId: string; limit: number } };
+
+/** A positioned dashboard instance of a profile-local, inert widget template. */
+export interface DashboardWidget {
+  id: string;
+  templateId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface DashboardLayout {
   profileId: string;
   surface: "dashboard" | "dock";
   version: number;
   cards: LayoutCard[];
+  /** Omitted only by layouts saved before SW-019. */
+  widgetTemplates?: WidgetTemplate[];
+  /** Omitted only by layouts saved before SW-019. */
+  widgets?: DashboardWidget[];
 }
 
 export type ProfileImportStrategy = "duplicate" | "merge" | "replace";

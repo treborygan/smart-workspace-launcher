@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 03:06 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 03:13 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -82,4 +82,6 @@ Independent Core QA findings on `b8a48ff`: integration is held pending opaque on
 
 Integrated SW-021 Core follow-up: `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1`, `python scripts/verify_handoff.py`, `git diff --check` — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` — BLOCKED before app compilation because `glib-2.0.pc` / `gobject-2.0.pc` >=2.70 are absent and `PKG_CONFIG_PATH` is unset; tests authored but NOT_RUN. Independent contract/Core/UI QA PASS. Release gate remains BLOCKED.
 
-Latest extended SW-021 security review (03:05 UTC) found two additional P2 merge blockers: Wasm structural compilation complexity needs explicit caps beyond file size, and package/module work must not hold the app-wide SQLite mutex. Core is implementing both in its isolated worktree; keep PR #47 draft and do not merge yet.
+Latest extended SW-021 security review (03:12 UTC) PASS after Core commit `d23d008`: Wasm structure limits are enforced before semantic validation; Wasmi compiles once only on explicit run; package parsing and guest execution do not hold the app-wide SQLite mutex. Prior token, ZIP, output, pointer/profile, and truncation remediations remain covered. PR #47 remains a draft because app Rust tests cannot compile on this host.
+
+SW-021 integrated verification (b47e916): frontend typecheck, 17 files / 137 tests, production build — PASS; Rust fmt, Cargo metadata, handoff verification and diff checks — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` BLOCKED before crate compilation: missing `glib-2.0.pc` and `gobject-2.0.pc` >=2.70 (tests authored but NOT_RUN). Windows GNU `cargo check` BLOCKED at bundled SQLite due absent MinGW GCC. Independent contract/Core/UI/extended security reviews PASS. Release gate remains BLOCKED.

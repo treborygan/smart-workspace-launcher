@@ -247,6 +247,7 @@ pub struct RegisteredExtension {
     pub granted_capabilities: Vec<ExtensionCapability>,
     pub enabled: bool,
     pub installed_utc: String,
+    pub module_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -261,6 +262,45 @@ const EXTENSION_SDK_VERSION: &str = "1.0.0";
 const EXTENSION_MANIFEST_MAX_BYTES: usize = 4096;
 const EXTENSION_ID_MAX_BYTES: usize = 255;
 const EXTENSION_CAPABILITY_MAX_ITEMS: usize = 2;
+const EXTENSION_PACKAGE_MAX_BYTES: usize = 2_150_400;
+const EXTENSION_MODULE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const EXTENSION_JSON_MAX_BYTES: usize = 64 * 1024;
+const EXTENSION_FUEL: u64 = 1_000_000;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionPackagePreviewRequest {
+    pub package_path: String,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionPackagePreview {
+    pub manifest: ExtensionManifest,
+    pub package_sha256: String,
+    pub module_sha256: String,
+    pub module_size_bytes: usize,
+    pub preview_token: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionPackageInstallRequest {
+    pub package_path: String,
+    pub package_sha256: String,
+    pub preview_token: String,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionRunResult {
+    pub extension_id: String,
+    pub suggestions: Vec<ExtensionSuggestion>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionSuggestion {
+    pub title: String,
+    pub reason: String,
+    pub resource_ids: Vec<String>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3741,6 +3781,9 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (11,'sw020-device-path-mappings-v1',?1)",[now_utc()])?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS extension_registry (id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, sdk_version TEXT NOT NULL, description TEXT NOT NULL, requested_capabilities_json TEXT NOT NULL, granted_capabilities_json TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)), installed_utc TEXT NOT NULL);")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (12,'sw021-extension-registry-v1',?1)",[now_utc()])?;
+    ensure_column(conn, "extension_registry", "module_wasm", "BLOB")?;
+    ensure_column(conn, "extension_registry", "module_sha256", "TEXT")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (13,'sw021-extension-wasm-runtime-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -6164,10 +6207,592 @@ fn validate_extension_manifest(
     Ok(manifest)
 }
 
+struct ExtensionPackageContents {
+    manifest: ExtensionManifest,
+    module: Vec<u8>,
+    package_sha256: String,
+    module_sha256: String,
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn extension_result_uuid_is_valid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
+        && (0..36).all(|index| {
+            [8, 13, 18, 23].contains(&index)
+                || (index != 14 && index != 19 && bytes[index].is_ascii_hexdigit())
+                || (index == 14 && matches!(bytes[index], b'1'..=b'5'))
+                || (index == 19
+                    && matches!(bytes[index].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b'))
+        })
+}
+
+fn extension_package_contents(path: &str) -> Result<ExtensionPackageContents, AppError> {
+    if path.trim().is_empty() || path.len() > 32_768 {
+        return Err(AppError::Invalid("invalid extension package path".into()));
+    }
+    let path = Path::new(path);
+    let link_meta = std::fs::symlink_metadata(path)
+        .map_err(|e| AppError::Package(format!("cannot inspect package: {e}")))?;
+    if link_meta.file_type().is_symlink()
+        || !link_meta.is_file()
+        || link_meta.len() as usize > EXTENSION_PACKAGE_MAX_BYTES
+    {
+        return Err(AppError::Package(
+            "package must be a regular file no larger than 2.1 MiB".into(),
+        ));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| AppError::Package(format!("cannot resolve package: {e}")))?;
+    let file = File::open(&canonical)
+        .map_err(|e| AppError::Package(format!("cannot read package: {e}")))?;
+    let opened_meta = file
+        .metadata()
+        .map_err(|e| AppError::Package(format!("cannot inspect package: {e}")))?;
+    if !opened_meta.is_file() || opened_meta.len() > EXTENSION_PACKAGE_MAX_BYTES as u64 {
+        return Err(AppError::Package(
+            "package must be a regular file no larger than 2.1 MiB".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened_meta.len() as usize);
+    file.take((EXTENSION_PACKAGE_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| AppError::Package(format!("cannot read package: {e}")))?;
+    if bytes.len() > EXTENSION_PACKAGE_MAX_BYTES {
+        return Err(AppError::Package("package exceeds 2.1 MiB".into()));
+    }
+    let package_sha256 = digest_hex(&bytes);
+    let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice()))
+        .map_err(|_| AppError::Package("package is not a valid ZIP archive".into()))?;
+    if archive.len() != 2 {
+        return Err(AppError::Package(
+            "package must contain exactly manifest.json and module.wasm".into(),
+        ));
+    }
+    let mut manifest_bytes = None;
+    let mut module = None;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|_| AppError::Package("invalid ZIP entry".into()))?;
+        let name = entry.name().to_string();
+        if entry.is_dir()
+            || entry.enclosed_name().is_none()
+            || name.contains('/')
+            || name.contains('\\')
+        {
+            return Err(AppError::Package(
+                "directories and nested or unsafe paths are rejected".into(),
+            ));
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(AppError::Package("symbolic links are rejected".into()));
+        }
+        let limit = match name.as_str() {
+            "manifest.json" => EXTENSION_MANIFEST_MAX_BYTES,
+            "module.wasm" => EXTENSION_MODULE_MAX_BYTES,
+            _ => return Err(AppError::Package("unexpected ZIP entry".into())),
+        };
+        if entry.size() as usize > limit {
+            return Err(AppError::Package("ZIP entry exceeds its size limit".into()));
+        }
+        let mut content = Vec::with_capacity(entry.size() as usize);
+        entry
+            .take((limit + 1) as u64)
+            .read_to_end(&mut content)
+            .map_err(|_| AppError::Package("cannot decompress package entry".into()))?;
+        if content.len() > limit {
+            return Err(AppError::Package(
+                "decompressed ZIP entry exceeds its size limit".into(),
+            ));
+        }
+        match name.as_str() {
+            "manifest.json" if manifest_bytes.is_none() => manifest_bytes = Some(content),
+            "module.wasm" if module.is_none() => module = Some(content),
+            _ => return Err(AppError::Package("duplicate ZIP entry".into())),
+        }
+    }
+    let raw_manifest =
+        manifest_bytes.ok_or_else(|| AppError::Package("manifest.json is required".into()))?;
+    let manifest: ExtensionManifest = serde_json::from_slice(&raw_manifest).map_err(|_| {
+        AppError::Package("manifest.json does not match the extension manifest contract".into())
+    })?;
+    let manifest = validate_extension_manifest(manifest)?;
+    let module = module.ok_or_else(|| AppError::Package("module.wasm is required".into()))?;
+    validate_extension_module(&module)?;
+    let module_sha256 = digest_hex(&module);
+    Ok(ExtensionPackageContents {
+        manifest,
+        module,
+        package_sha256,
+        module_sha256,
+    })
+}
+
+fn validate_extension_module(bytes: &[u8]) -> Result<(), AppError> {
+    if bytes.is_empty() || bytes.len() > EXTENSION_MODULE_MAX_BYTES {
+        return Err(AppError::Package("Wasm module size is invalid".into()));
+    }
+    let mut saw_module = false;
+    let mut declared_memories = 0usize;
+    let mut declared_tables = 0usize;
+    for payload in wasmparser::Parser::new(0).parse_all(bytes) {
+        match payload.map_err(|_| AppError::Package("Wasm module is malformed".into()))? {
+            wasmparser::Payload::Version {
+                encoding: wasmparser::Encoding::Module,
+                ..
+            } => saw_module = true,
+            wasmparser::Payload::Version { .. } => {
+                return Err(AppError::Package(
+                    "Wasm components are not supported".into(),
+                ))
+            }
+            wasmparser::Payload::StartSection { .. } => {
+                return Err(AppError::Package(
+                    "Wasm start sections are not supported".into(),
+                ))
+            }
+            wasmparser::Payload::MemorySection(section) => {
+                declared_memories = section.count() as usize
+            }
+            wasmparser::Payload::TableSection(section) => {
+                declared_tables = section.count() as usize;
+                if declared_tables > 1 {
+                    return Err(AppError::Package(
+                        "Wasm module may declare at most one table".into(),
+                    ));
+                }
+                for table in section {
+                    let table = table
+                        .map_err(|_| AppError::Package("Wasm table section is malformed".into()))?;
+                    if table.ty.table64
+                        || table.ty.initial > 1024
+                        || table.ty.maximum.is_some_and(|max| max > 1024)
+                    {
+                        return Err(AppError::Package(
+                            "Wasm table exceeds its element bound".into(),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if !saw_module || declared_memories != 1 || declared_tables > 1 {
+        return Err(AppError::Package("invalid Wasm module".into()));
+    }
+    let mut config = wasmi::Config::default();
+    config.consume_fuel(true);
+    config.set_max_recursion_depth(128);
+    config.set_max_stack_height(64 * 1024);
+    let engine = wasmi::Engine::new(&config);
+    let module = wasmi::Module::new(&engine, bytes)
+        .map_err(|_| AppError::Package("Wasm module is not supported by this runtime".into()))?;
+    if module.imports().next().is_some() {
+        return Err(AppError::Package("Wasm imports are prohibited".into()));
+    }
+    let exports = module.exports().collect::<Vec<_>>();
+    if exports.len() != 3 {
+        return Err(AppError::Package(
+            "Wasm module must export exactly memory, alloc and handle".into(),
+        ));
+    }
+    let memory = module
+        .get_export("memory")
+        .and_then(|ty| ty.memory().copied())
+        .ok_or_else(|| AppError::Package("Wasm memory export is required".into()))?;
+    if memory.is_64() || memory.minimum() > 2 || memory.maximum().is_none_or(|max| max > 2) {
+        return Err(AppError::Package(
+            "Wasm memory must be limited to at most two pages".into(),
+        ));
+    }
+    for (name, params, results) in [
+        (
+            "alloc",
+            vec![wasmi::ValType::I32],
+            vec![wasmi::ValType::I32],
+        ),
+        (
+            "handle",
+            vec![wasmi::ValType::I32, wasmi::ValType::I32],
+            vec![wasmi::ValType::I64],
+        ),
+    ] {
+        let f = module
+            .get_export(name)
+            .and_then(|ty| ty.func().cloned())
+            .ok_or_else(|| AppError::Package(format!("Wasm {name} export is required")))?;
+        if f.params() != params.as_slice() || f.results() != results.as_slice() {
+            return Err(AppError::Package(format!(
+                "Wasm {name} export has the wrong signature"
+            )));
+        }
+    }
+    if exports
+        .iter()
+        .any(|export| !["memory", "alloc", "handle"].contains(&export.name()))
+    {
+        return Err(AppError::Package(
+            "unknown Wasm exports are rejected".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn preview_extension_package(
+    request: ExtensionPackagePreviewRequest,
+) -> Result<ExtensionPackagePreview, AppError> {
+    let contents = extension_package_contents(&request.package_path)?;
+    Ok(ExtensionPackagePreview {
+        manifest: contents.manifest,
+        package_sha256: contents.package_sha256.clone(),
+        module_sha256: contents.module_sha256,
+        module_size_bytes: contents.module.len(),
+        preview_token: contents.package_sha256,
+    })
+}
+
+fn extension_package_install_on_conn(
+    conn: &Connection,
+    request: ExtensionPackageInstallRequest,
+) -> Result<RegisteredExtension, AppError> {
+    let contents = extension_package_contents(&request.package_path)?;
+    if request.package_sha256 != contents.package_sha256
+        || request.preview_token != contents.package_sha256
+    {
+        return Err(AppError::Invalid(
+            "package changed after preview; preview it again".into(),
+        ));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM extension_registry WHERE id=?1)",
+        [&contents.manifest.id],
+        |r| r.get::<_, i64>(0).map(|v| v != 0),
+    )?;
+    if exists {
+        return Err(AppError::Invalid(
+            "extension ID is already installed; remove it before reinstalling".into(),
+        ));
+    }
+    tx.execute("INSERT INTO extension_registry(id,name,version,sdk_version,description,requested_capabilities_json,granted_capabilities_json,enabled,installed_utc,module_wasm,module_sha256) VALUES (?1,?2,?3,?4,?5,?6,'[]',0,?7,?8,?9)", params![contents.manifest.id,contents.manifest.name,contents.manifest.version,contents.manifest.sdk_version,contents.manifest.description,serde_json::to_string(&contents.manifest.requested_capabilities)?,now_utc(),contents.module,contents.module_sha256])?;
+    tx.commit()?;
+    extension_registry_list_on_conn(conn)?
+        .into_iter()
+        .find(|e| e.id == contents.manifest.id)
+        .ok_or(AppError::NotFound)
+}
+
+fn extension_package_install(
+    state: State<'_, AppState>,
+    request: ExtensionPackageInstallRequest,
+) -> Result<RegisteredExtension, AppError> {
+    extension_package_install_on_conn(&lock(&state)?, request)
+}
+
+fn extension_invocation_json(
+    conn: &Connection,
+    profile_id: &str,
+    grants: &[ExtensionCapability],
+) -> Result<serde_json::Value, AppError> {
+    Uuid::parse_str(profile_id).map_err(|_| AppError::Invalid("invalid profile ID".into()))?;
+    let profile_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |r| r.get::<_, i64>(0).map(|v| v != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let mut root =
+        serde_json::json!({"sdkVersion":EXTENSION_SDK_VERSION,"grantedCapabilities":grants});
+    if grants.contains(&ExtensionCapability::WorkspaceSummaryRead) {
+        let (resources, favorites): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(favorite),0) FROM profile_resources WHERE profile_id=?1",
+            [profile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        root["workspaceSummary"] =
+            serde_json::json!({"resourceCount":resources,"favoriteCount":favorites});
+    }
+    if grants.contains(&ExtensionCapability::ResourceMetadataRead) {
+        root["resourceMetadata"] = serde_json::json!({"resources":[],"truncated":false});
+        let mut stmt=conn.prepare("SELECT r.id,r.display_name,r.resource_type,pr.category,pr.favorite FROM profile_resources pr JOIN resources r ON r.id=pr.resource_id WHERE pr.profile_id=?1 ORDER BY r.id LIMIT 201")?;
+        let rows = stmt.query_map([profile_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, bool>(4)?,
+            ))
+        })?;
+        let mut summaries = Vec::new();
+        let mut truncated = false;
+        for (index, row) in rows.enumerate() {
+            let (id, name, resource_type, category, favorite) = row?;
+            if index >= 200 {
+                truncated = true;
+                break;
+            }
+            let mut tags_stmt=conn.prepare("SELECT value FROM resource_terms WHERE resource_id=?1 AND kind='tag' ORDER BY value COLLATE NOCASE LIMIT 32")?;
+            let tags = tags_stmt
+                .query_map([&id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let item = serde_json::json!({"id":id,"displayName":name,"resourceType":resource_type,"category":category,"tags":tags,"favorite":favorite});
+            summaries.push(item);
+            root["resourceMetadata"] =
+                serde_json::json!({"resources":summaries.clone(),"truncated":false});
+            if serde_json::to_vec(&root)?.len() > EXTENSION_JSON_MAX_BYTES {
+                summaries.pop();
+                truncated = true;
+                break;
+            }
+        }
+        root["resourceMetadata"] = serde_json::json!({"resources":summaries,"truncated":truncated});
+    }
+    if serde_json::to_vec(&root)?.len() > EXTENSION_JSON_MAX_BYTES {
+        return Err(AppError::Invalid(
+            "extension invocation input exceeds 64 KiB".into(),
+        ));
+    }
+    Ok(root)
+}
+
+fn run_extension_module(module_bytes: &[u8], input: &[u8]) -> Result<Vec<u8>, AppError> {
+    validate_extension_module(module_bytes)?;
+    let mut config = wasmi::Config::default();
+    config.consume_fuel(true);
+    config.set_max_recursion_depth(128);
+    config.set_max_stack_height(64 * 1024);
+    let engine = wasmi::Engine::new(&config);
+    let module = wasmi::Module::new(&engine, module_bytes)
+        .map_err(|_| AppError::Package("Wasm module could not be compiled".into()))?;
+    let limits = wasmi::StoreLimitsBuilder::new()
+        .memory_size(2 * 65536)
+        .memories(1)
+        .table_elements(1024)
+        .tables(1)
+        .instances(1)
+        .build();
+    let mut store = wasmi::Store::new(&engine, limits);
+    store.limiter(|limits| limits);
+    store
+        .set_fuel(EXTENSION_FUEL)
+        .map_err(|_| AppError::Package("could not configure Wasm fuel limit".into()))?;
+    let instance = wasmi::Instance::new(&mut store, &module, &[])
+        .map_err(|_| AppError::Package("Wasm module instantiation failed".into()))?;
+    let memory = instance
+        .get_memory(&store, "memory")
+        .ok_or_else(|| AppError::Package("Wasm memory export missing".into()))?;
+    let alloc = instance
+        .get_typed_func::<i32, i32>(&store, "alloc")
+        .map_err(|_| AppError::Package("Wasm alloc ABI invalid".into()))?;
+    let handle = instance
+        .get_typed_func::<(i32, i32), i64>(&store, "handle")
+        .map_err(|_| AppError::Package("Wasm handle ABI invalid".into()))?;
+    if input.len() > EXTENSION_JSON_MAX_BYTES {
+        return Err(AppError::Invalid(
+            "extension invocation input exceeds 64 KiB".into(),
+        ));
+    }
+    let input_len = i32::try_from(input.len())
+        .map_err(|_| AppError::Invalid("extension input too large".into()))?;
+    let input_ptr = alloc
+        .call(&mut store, input_len)
+        .map_err(|_| AppError::Package("extension allocation failed or exceeded fuel".into()))?;
+    let input_offset = u32::try_from(input_ptr)
+        .map_err(|_| AppError::Package("extension returned invalid input pointer".into()))?
+        as usize;
+    if input_offset
+        .checked_add(input.len())
+        .is_none_or(|end| end > memory.data(&store).len())
+    {
+        return Err(AppError::Package(
+            "extension input pointer is out of bounds".into(),
+        ));
+    }
+    memory
+        .write(&mut store, input_offset, input)
+        .map_err(|_| AppError::Package("extension input memory write failed".into()))?;
+    let packed = handle
+        .call(&mut store, (input_ptr, input_len))
+        .map_err(|_| AppError::Package("extension execution trapped or exceeded fuel".into()))?
+        as u64;
+    let output_offset = (packed >> 32) as u32 as usize;
+    let output_len = packed as u32 as usize;
+    if output_len > EXTENSION_JSON_MAX_BYTES
+        || output_offset
+            .checked_add(output_len)
+            .is_none_or(|end| end > memory.data(&store).len())
+    {
+        return Err(AppError::Package(
+            "extension output pointer or length is invalid".into(),
+        ));
+    }
+    let mut output = vec![0; output_len];
+    memory
+        .read(&store, output_offset, &mut output)
+        .map_err(|_| AppError::Package("extension output memory read failed".into()))?;
+    std::str::from_utf8(&output)
+        .map_err(|_| AppError::Package("extension output is not UTF-8".into()))?;
+    Ok(output)
+}
+
+fn extension_registry_run_on_conn(
+    conn: &Connection,
+    extension_id: &str,
+    profile_id: &str,
+) -> Result<ExtensionRunResult, AppError> {
+    validate_extension_id(extension_id)?;
+    let (enabled,manifest_json,granted_json,module,module_sha): (bool,String,String,Option<Vec<u8>>,Option<String>)=conn.query_row("SELECT enabled,requested_capabilities_json,granted_capabilities_json,module_wasm,module_sha256 FROM extension_registry WHERE id=?1",[extension_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(AppError::NotFound)?;
+    if !enabled {
+        return Err(AppError::Invalid("extension is disabled".into()));
+    }
+    let requested: Vec<ExtensionCapability> = serde_json::from_str(&manifest_json)?;
+    let grants: Vec<ExtensionCapability> = serde_json::from_str(&granted_json)?;
+    if grants.len() > EXTENSION_CAPABILITY_MAX_ITEMS
+        || grants.iter().any(|g| !requested.contains(g))
+        || grants
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != grants.len()
+    {
+        return Err(AppError::Invalid(
+            "stored extension permission policy is invalid".into(),
+        ));
+    }
+    let module = module
+        .ok_or_else(|| AppError::Invalid("extension package has no executable module".into()))?;
+    if module_sha.as_deref() != Some(digest_hex(&module).as_str()) {
+        return Err(AppError::Invalid(
+            "stored extension module integrity check failed".into(),
+        ));
+    }
+    let input = extension_invocation_json(conn, profile_id, &grants)?;
+    let input_bytes = serde_json::to_vec(&input)?;
+    let output = run_extension_module(&module, &input_bytes)?;
+    let parsed: serde_json::Value = serde_json::from_slice(&output)
+        .map_err(|_| AppError::Package("extension output is not valid JSON".into()))?;
+    if parsed
+        .as_object()
+        .is_none_or(|o| o.len() != 1 || !o.contains_key("suggestions"))
+    {
+        return Err(AppError::Package(
+            "extension output contains unknown fields".into(),
+        ));
+    }
+    let list = parsed["suggestions"]
+        .as_array()
+        .ok_or_else(|| AppError::Package("extension suggestions must be an array".into()))?;
+    if list.len() > 20 {
+        return Err(AppError::Package(
+            "extension returned too many suggestions".into(),
+        ));
+    }
+    let mut suggestions = Vec::new();
+    for item in list {
+        if item.as_object().is_none_or(|o| {
+            o.len() != 3
+                || !o.contains_key("title")
+                || !o.contains_key("reason")
+                || !o.contains_key("resourceIds")
+        }) {
+            return Err(AppError::Package(
+                "extension suggestion fields are invalid".into(),
+            ));
+        }
+        let title = item["title"]
+            .as_str()
+            .ok_or_else(|| AppError::Package("suggestion title must be text".into()))?;
+        let reason = item["reason"]
+            .as_str()
+            .ok_or_else(|| AppError::Package("suggestion reason must be text".into()))?;
+        if title.trim().is_empty()
+            || title.chars().count() > 80
+            || title.chars().any(char::is_control)
+            || reason.trim().is_empty()
+            || reason.chars().count() > 160
+            || reason.chars().any(char::is_control)
+        {
+            return Err(AppError::Package(
+                "suggestion text is empty, too long or contains controls".into(),
+            ));
+        }
+        let ids = item["resourceIds"]
+            .as_array()
+            .ok_or_else(|| AppError::Package("suggestion resourceIds must be an array".into()))?;
+        if ids.len() > 12 {
+            return Err(AppError::Package(
+                "suggestion references too many resources".into(),
+            ));
+        }
+        let mut resource_ids = Vec::new();
+        for id in ids {
+            let id = id
+                .as_str()
+                .ok_or_else(|| AppError::Package("suggestion resource ID must be text".into()))?;
+            if !extension_result_uuid_is_valid(id) {
+                return Err(AppError::Package(
+                    "suggestion contains invalid resource ID".into(),
+                ));
+            }
+            if resource_ids.contains(&id.to_string()) {
+                return Err(AppError::Package(
+                    "suggestion contains duplicate resource IDs".into(),
+                ));
+            }
+            let belongs:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",params![profile_id,id],|r|r.get::<_,i64>(0).map(|v|v!=0))?;
+            if !belongs {
+                return Err(AppError::Package(
+                    "suggestion references a resource outside the selected profile".into(),
+                ));
+            }
+            resource_ids.push(id.to_string());
+        }
+        suggestions.push(ExtensionSuggestion {
+            title: title.to_string(),
+            reason: reason.to_string(),
+            resource_ids,
+        });
+    }
+    Ok(ExtensionRunResult {
+        extension_id: extension_id.to_string(),
+        suggestions,
+    })
+}
+
+#[tauri::command]
+fn extension_package_preview(
+    request: ExtensionPackagePreviewRequest,
+) -> Result<ExtensionPackagePreview, AppError> {
+    preview_extension_package(request)
+}
+#[tauri::command]
+fn extension_registry_run(
+    state: State<'_, AppState>,
+    extension_id: String,
+    profile_id: String,
+) -> Result<ExtensionRunResult, AppError> {
+    extension_registry_run_on_conn(&lock(&state)?, &extension_id, &profile_id)
+}
+
 fn extension_registry_list_on_conn(
     conn: &Connection,
 ) -> Result<Vec<RegisteredExtension>, AppError> {
-    let mut statement = conn.prepare("SELECT id,name,version,sdk_version,description,requested_capabilities_json,granted_capabilities_json,enabled,installed_utc FROM extension_registry ORDER BY name COLLATE NOCASE,id")?;
+    let mut statement = conn.prepare("SELECT id,name,version,sdk_version,description,requested_capabilities_json,granted_capabilities_json,enabled,installed_utc,module_sha256 FROM extension_registry ORDER BY name COLLATE NOCASE,id")?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -6179,6 +6804,7 @@ fn extension_registry_list_on_conn(
             row.get::<_, String>(6)?,
             row.get::<_, bool>(7)?,
             row.get::<_, String>(8)?,
+            row.get::<_, Option<String>>(9)?,
         ))
     })?;
     let mut extensions = Vec::new();
@@ -6193,6 +6819,7 @@ fn extension_registry_list_on_conn(
             granted,
             enabled,
             installed_utc,
+            module_sha256,
         ) = row?;
         extensions.push(RegisteredExtension {
             id,
@@ -6204,6 +6831,7 @@ fn extension_registry_list_on_conn(
             granted_capabilities: serde_json::from_str(&granted)?,
             enabled,
             installed_utc,
+            module_sha256,
         });
     }
     Ok(extensions)
@@ -6333,14 +6961,6 @@ fn extension_registry_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<RegisteredExtension>, AppError> {
     extension_registry_list_on_conn(&lock(&state)?)
-}
-
-#[tauri::command]
-fn extension_registry_register(
-    state: State<'_, AppState>,
-    manifest: ExtensionManifest,
-) -> Result<RegisteredExtension, AppError> {
-    extension_registry_register_on_conn(&lock(&state)?, manifest)
 }
 
 #[tauri::command]
@@ -9638,10 +10258,12 @@ pub fn run() {
             device_path_mapping_commit,
             device_path_mapping_delete,
             extension_registry_list,
-            extension_registry_register,
+            extension_package_preview,
+            extension_package_install,
             extension_registry_permissions_set,
             extension_registry_enabled_set,
             extension_registry_remove,
+            extension_registry_run,
             resource_import_scan,
             resource_import_commit,
             resource_delete,
@@ -13707,7 +14329,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -13725,6 +14347,8 @@ mod tests {
             |row| row.get(0),
         ).unwrap();
         assert_eq!(extension_registry_exists, 1);
+        let module_column: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('extension_registry') WHERE name='module_wasm'",[],|r|r.get(0)).unwrap();
+        assert_eq!(module_column, 1);
         assert!(extension_registry_list_on_conn(&conn).unwrap().is_empty());
         let relationship_table: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='resource_relationships'",
@@ -13782,6 +14406,177 @@ mod tests {
             description: "Summarizes the current workspace.".into(),
             requested_capabilities: vec![ExtensionCapability::WorkspaceSummaryRead],
         }
+    }
+
+    fn write_extension_fixture(path: &Path, module: &[u8]) {
+        let file = File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let manifest = serde_json::to_vec(&extension_manifest_fixture()).unwrap();
+        zip.start_file("manifest.json", options).unwrap();
+        zip.write_all(&manifest).unwrap();
+        zip.start_file("module.wasm", options).unwrap();
+        zip.write_all(module).unwrap();
+        zip.finish().unwrap();
+    }
+
+    fn extension_wat(output: &str) -> Vec<u8> {
+        let escaped = serde_json::to_string(output).unwrap();
+        let wasm = format!(
+            r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const {}) (data (i32.const 64) {}))"#,
+            (64u64 << 32) | output.len() as u64,
+            escaped
+        );
+        wat::parse_str(wasm).unwrap()
+    }
+
+    #[test]
+    fn extension_runtime_rejects_imports_start_sections_and_bad_abi() {
+        assert!(extension_result_uuid_is_valid(
+            "dc6b205a-56a8-4de0-9d77-921e9ddf78f1"
+        ));
+        assert!(!extension_result_uuid_is_valid(
+            "00000000-0000-0000-0000-000000000000"
+        ));
+        let imported = wat::parse_str(r#"(module (import "env" "x" (func)) (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
+        assert!(validate_extension_module(&imported).is_err());
+        let start = wat::parse_str(r#"(module (memory (export "memory") 1 2) (func $init) (start $init) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
+        assert!(validate_extension_module(&start)
+            .unwrap_err()
+            .to_string()
+            .contains("start sections"));
+        let wrong = wat::parse_str(r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i64) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
+        assert!(validate_extension_module(&wrong).is_err());
+        let table = wat::parse_str(r#"(module (memory (export "memory") 1 2) (table 1025 funcref) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
+        assert!(validate_extension_module(&table).is_err());
+    }
+
+    #[test]
+    fn extension_package_preview_and_install_bind_content_and_default_off() {
+        let path = std::env::temp_dir().join(format!("swl-extension-{}.swext", Uuid::new_v4()));
+        write_extension_fixture(&path, &extension_wat(r#"{"suggestions":[]}"#));
+        let preview = preview_extension_package(ExtensionPackagePreviewRequest {
+            package_path: path.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(preview.preview_token, preview.package_sha256);
+        let reviewed_hash = preview.package_sha256.clone();
+        let reviewed_token = preview.preview_token.clone();
+        let conn = database();
+        let installed = extension_package_install_on_conn(
+            &conn,
+            ExtensionPackageInstallRequest {
+                package_path: path.display().to_string(),
+                package_sha256: reviewed_hash.clone(),
+                preview_token: reviewed_token.clone(),
+            },
+        )
+        .unwrap();
+        assert!(!installed.enabled);
+        assert_eq!(
+            installed.granted_capabilities,
+            Vec::<ExtensionCapability>::new()
+        );
+        assert_eq!(
+            installed.module_sha256.as_deref(),
+            Some(preview.module_sha256.as_str())
+        );
+        let stale = extension_package_install_on_conn(
+            &conn,
+            ExtensionPackageInstallRequest {
+                package_path: path.display().to_string(),
+                package_sha256: "0".repeat(64),
+                preview_token: "0".repeat(64),
+            },
+        );
+        assert!(stale.is_err());
+        assert!(extension_package_install_on_conn(
+            &conn,
+            ExtensionPackageInstallRequest {
+                package_path: path.display().to_string(),
+                package_sha256: reviewed_hash.clone(),
+                preview_token: reviewed_token.clone()
+            }
+        )
+        .is_err());
+        write_extension_fixture(
+            &path,
+            &extension_wat(
+                r#"{"suggestions":[{"title":"changed","reason":"package","resourceIds":[]}] }"#,
+            ),
+        );
+        assert!(extension_package_install_on_conn(
+            &conn,
+            ExtensionPackageInstallRequest {
+                package_path: path.display().to_string(),
+                package_sha256: reviewed_hash,
+                preview_token: reviewed_token
+            }
+        )
+        .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn extension_runtime_executes_bounded_module_and_validates_result() {
+        let output = run_extension_module(
+            &extension_wat(r#"{"suggestions":[]}"#),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap()["suggestions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let invalid = run_extension_module(
+            &extension_wat(
+                r#"{"suggestions":[{"title":"bad\ntext","reason":"ok","resourceIds":[]}]}"#,
+            ),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#,
+        )
+        .unwrap();
+        let conn = database();
+        let pid = profile(&conn);
+        let ext = extension_registry_register_on_conn(&conn, extension_manifest_fixture()).unwrap();
+        let invalid_module = extension_wat(
+            r#"{"suggestions":[{"title":"bad\\ntext","reason":"ok","resourceIds":[]}]}"#,
+        );
+        conn.execute(
+            "UPDATE extension_registry SET enabled=1,module_wasm=?2,module_sha256=?3 WHERE id=?1",
+            params![ext.id, invalid_module, digest_hex(&invalid_module)],
+        )
+        .unwrap();
+        let invalid_json = String::from_utf8(invalid).unwrap();
+        assert!(invalid_json.contains("bad\\ntext"));
+        assert!(extension_registry_run_on_conn(&conn, &ext.id, &pid).is_err());
+        let looping = wat::parse_str(r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) (loop $forever (br $forever)) i64.const 0))"#).unwrap();
+        assert!(run_extension_module(
+            &looping,
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn extension_invocation_omits_ungranted_fields_and_includes_granted_data() {
+        let conn = database();
+        let pid = profile(&conn);
+        let none = extension_invocation_json(&conn, &pid, &[]).unwrap();
+        assert!(none.get("resourceMetadata").is_none());
+        assert!(none.get("workspaceSummary").is_none());
+        let summary =
+            extension_invocation_json(&conn, &pid, &[ExtensionCapability::WorkspaceSummaryRead])
+                .unwrap();
+        assert!(summary.get("workspaceSummary").is_some());
+        assert!(summary.get("resourceMetadata").is_none());
+        let metadata =
+            extension_invocation_json(&conn, &pid, &[ExtensionCapability::ResourceMetadataRead])
+                .unwrap();
+        assert!(metadata.get("resourceMetadata").is_some());
+        assert!(metadata.get("workspaceSummary").is_none());
     }
 
     #[test]

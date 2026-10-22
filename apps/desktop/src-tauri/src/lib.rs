@@ -4111,6 +4111,20 @@ fn resource_relocation_commit_on_conn(
         }
         resource_ids.insert(change.resource_id.clone());
     }
+    if !resource_ids.is_empty() {
+        let updated_utc = now_utc();
+        for resource_id in &resource_ids {
+            let updated = tx.execute(
+                "UPDATE resources SET updated_utc=?2 WHERE id=?1 AND EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?3 AND resource_id=?1)",
+                params![resource_id, updated_utc, current.profile_id],
+            )?;
+            if updated != 1 {
+                return Err(AppError::Invalid(
+                    "relocation resource changed while applying the preview".into(),
+                ));
+            }
+        }
+    }
     tx.commit()?;
     Ok(ResourceRelocationResult {
         updated_target_count: current.changes.len(),
@@ -10789,6 +10803,11 @@ mod tests {
             persist_resource(&mut conn, item, true, Some(&profile_id)).unwrap();
         }
         persist_resource(&mut conn, &other_profile, true, Some(&other_profile_id)).unwrap();
+        conn.execute(
+            "UPDATE resources SET updated_utc='before-relocation' WHERE id IN (?1,?2)",
+            params![file.id, folder.id],
+        )
+        .unwrap();
 
         let preview = resource_relocation_preview_on_conn(
             &conn,
@@ -10816,6 +10835,23 @@ mod tests {
         let applied = resource_relocation_commit_on_conn(&mut conn, &preview).unwrap();
         assert_eq!(applied.updated_target_count, 2);
         assert_eq!(applied.updated_resource_ids.len(), 2);
+        let timestamps = applied
+            .updated_resource_ids
+            .iter()
+            .map(|resource_id| {
+                conn.query_row(
+                    "SELECT updated_utc FROM resources WHERE id=?1",
+                    [resource_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(timestamps.len(), 2);
+        assert!(timestamps
+            .iter()
+            .all(|timestamp| timestamp != "before-relocation"));
+        assert_eq!(timestamps[0], timestamps[1]);
         let stored: String = conn
             .query_row(
                 "SELECT canonical_uri FROM resource_targets WHERE id=?1",

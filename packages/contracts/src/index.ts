@@ -463,6 +463,33 @@ export interface ProfileExportResult {
   historyEventCount: number;
 }
 
+/**
+ * Declarative capabilities for the extension registry. The current app only
+ * stores user grants; it does not execute third-party extension code.
+ */
+export type ExtensionCapability = "resource_metadata.read" | "workspace_summary.read";
+
+export interface ExtensionManifest {
+  id: string;
+  name: string;
+  version: string;
+  sdkVersion: string;
+  description: string;
+  requestedCapabilities: ExtensionCapability[];
+}
+
+export interface RegisteredExtension extends ExtensionManifest {
+  grantedCapabilities: ExtensionCapability[];
+  enabled: boolean;
+  installedUtc: string;
+}
+
+export interface ExtensionPermissionUpdate {
+  extensionId: string;
+  manifestVersion: string;
+  grantedCapabilities: ExtensionCapability[];
+}
+
 export interface CommandMap {
   resource_list: { args: { profileId?: string }; result: Resource[] };
   resource_create: { args: { resource: ResourceInput }; result: Resource };
@@ -496,6 +523,11 @@ export interface CommandMap {
   device_path_mapping_preview: { args: { request: DevicePathMappingPreviewRequest }; result: DevicePathMappingPreview };
   device_path_mapping_commit: { args: { preview: DevicePathMappingPreview }; result: DevicePathMapping };
   device_path_mapping_delete: { args: { id: string }; result: void };
+  extension_registry_list: { args?: undefined; result: RegisteredExtension[] };
+  extension_registry_register: { args: { manifest: ExtensionManifest }; result: RegisteredExtension };
+  extension_registry_permissions_set: { args: { update: ExtensionPermissionUpdate }; result: RegisteredExtension };
+  extension_registry_enabled_set: { args: { extensionId: string; enabled: boolean }; result: RegisteredExtension };
+  extension_registry_remove: { args: { extensionId: string }; result: void };
   resource_import_scan: { args: { request: ResourceImportScanRequest }; result: ResourceImportScanResult };
   resource_import_commit: { args: { request: ResourceImportCommitRequest }; result: ResourceImportCommitResult };
   workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };

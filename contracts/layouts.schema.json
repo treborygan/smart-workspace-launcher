@@ -79,9 +79,102 @@
                 }
               }
             }
+          },
+          "widget_templates": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "name", "kind", "config"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "[^\\s]" },
+                    "kind": { "const": "resource_shortcuts" },
+                    "config": {
+                      "type": "object", "additionalProperties": false,
+                      "required": ["resourceIds"],
+                      "properties": { "resourceIds": { "type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": { "type": "string", "format": "uuid" } } }
+                    }
+                  }
+                },
+                {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["id", "name", "kind", "config"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "[^\\s]" },
+                    "kind": { "const": "recent_launches" },
+                    "config": { "type": "object", "additionalProperties": false, "required": ["limit"], "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 20 } } }
+                  }
+                },
+                {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["id", "name", "kind", "config"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "[^\\s]" },
+                    "kind": { "const": "launch_summary" },
+                    "config": { "type": "object", "additionalProperties": false, "required": ["period"], "properties": { "period": { "enum": ["7d", "30d", "all"] } } }
+                  }
+                },
+                {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["id", "name", "kind", "config"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "[^\\s]" },
+                    "kind": { "const": "related_resources" },
+                    "config": { "type": "object", "additionalProperties": false, "required": ["resourceId", "limit"], "properties": { "resourceId": { "type": "string", "format": "uuid" }, "limit": { "type": "integer", "minimum": 1, "maximum": 12 } } }
+                  }
+                }
+              ]
+            }
+          },
+          "widgets": {
+            "type": "array", "maxItems": 50,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["id", "templateId", "x", "y", "w", "h"],
+              "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "templateId": { "type": "string", "format": "uuid" },
+                "x": { "type": "integer", "minimum": 0, "maximum": 11 },
+                "y": { "type": "integer", "minimum": 0, "maximum": 9999 },
+                "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+                "h": { "type": "integer", "minimum": 1, "maximum": 100 }
+              },
+              "oneOf": [
+                { "properties": { "x": { "const": 0 }, "w": { "maximum": 12 } } },
+                { "properties": { "x": { "const": 1 }, "w": { "maximum": 11 } } },
+                { "properties": { "x": { "const": 2 }, "w": { "maximum": 10 } } },
+                { "properties": { "x": { "const": 3 }, "w": { "maximum": 9 } } },
+                { "properties": { "x": { "const": 4 }, "w": { "maximum": 8 } } },
+                { "properties": { "x": { "const": 5 }, "w": { "maximum": 7 } } },
+                { "properties": { "x": { "const": 6 }, "w": { "maximum": 6 } } },
+                { "properties": { "x": { "const": 7 }, "w": { "maximum": 5 } } },
+                { "properties": { "x": { "const": 8 }, "w": { "maximum": 4 } } },
+                { "properties": { "x": { "const": 9 }, "w": { "maximum": 3 } } },
+                { "properties": { "x": { "const": 10 }, "w": { "maximum": 2 } } },
+                { "properties": { "x": { "const": 11 }, "w": { "maximum": 1 } } }
+              ]
+            }
           }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "surface": { "const": "dock" } }, "required": ["surface"] },
+            "then": {
+              "properties": {
+                "widget_templates": { "maxItems": 0 },
+                "widgets": { "maxItems": 0 }
+              }
+            }
+          }
+        ]
         }
       }
     }
   }
-}

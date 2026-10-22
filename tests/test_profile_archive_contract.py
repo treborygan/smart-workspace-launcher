@@ -8,6 +8,7 @@ import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from jsonschema import Draft202012Validator, FormatChecker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "qa"))
@@ -15,6 +16,7 @@ from profile_archive import ProfileArchiveError, validate_profile_archive  # noq
 
 
 VALID = ROOT / "fixtures" / "valid" / "example.swprofile"
+VALID_WIDGETS = ROOT / "fixtures" / "valid" / "widgets.swprofile"
 BAD_TRAVERSAL = ROOT / "fixtures" / "invalid" / "bad_archive.zip"
 
 
@@ -65,10 +67,149 @@ def make_unsupported_compression_package():
     return package
 
 
+def validate_layout_schema(document):
+    schema = json.loads((ROOT / "contracts" / "layouts.schema.json").read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    return list(validator.iter_errors(document))
+
+
 class ProfileArchiveContractTests(unittest.TestCase):
     def test_valid_fixture_is_accepted(self):
         result = validate_profile_archive(VALID)
         self.assertEqual(result["manifest.json"]["format"], "swprofile")
+
+    def test_legacy_layout_without_widget_fields_remains_valid(self):
+        result = validate_profile_archive(VALID)
+        self.assertNotIn("widget_templates", result["layouts.json"]["layouts"][0])
+        self.assertNotIn("widgets", result["layouts.json"]["layouts"][0])
+
+    def test_valid_widget_archive_round_trips_without_changing_contract_data(self):
+        result = validate_profile_archive(VALID_WIDGETS)
+        layout = result["layouts.json"]["layouts"][0]
+        self.assertEqual(len(layout["widget_templates"]), 4)
+        self.assertEqual(len(layout["widgets"]), 4)
+        package = make_package(changes={name: document for name, document in result.items()})
+        try:
+            self.assertEqual(validate_profile_archive(package), result)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_layout_schema_accepts_valid_dashboard_widget(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        self.assertEqual(validate_layout_schema(layouts), [])
+
+    def test_layout_schema_rejects_widgets_on_dock(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        layouts["layouts"][0]["surface"] = "dock"
+        self.assertNotEqual(validate_layout_schema(layouts), [])
+
+    def test_layout_schema_rejects_widget_that_overflows_grid(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        layouts["layouts"][0]["widgets"][0].update(x=11, w=2)
+        self.assertNotEqual(validate_layout_schema(layouts), [])
+
+    def test_widget_templates_and_instances_reject_duplicate_or_cross_colliding_ids(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        layout = layouts["layouts"][0]
+        duplicate_template = json.loads(json.dumps(layouts))
+        duplicate_template["layouts"][0]["widget_templates"][1]["id"] = duplicate_template["layouts"][0]["widget_templates"][0]["id"]
+        package = make_package(changes={"layouts.json": duplicate_template})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget template IDs must be unique"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+        duplicate_widget = json.loads(json.dumps(layouts))
+        duplicate_widget["layouts"][0]["widgets"][1]["id"] = duplicate_widget["layouts"][0]["widgets"][0]["id"]
+        package = make_package(changes={"layouts.json": duplicate_widget})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget IDs must be unique"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+        cross_collision = json.loads(json.dumps(layouts))
+        cross_collision["layouts"][0]["widgets"][0]["id"] = cross_collision["layouts"][0]["widget_templates"][0]["id"]
+        package = make_package(changes={"layouts.json": cross_collision})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget template and instance IDs must be distinct"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_widget_instance_must_reference_a_template_in_same_layout(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        layouts["layouts"][0]["widgets"][0]["templateId"] = "76fc9183-203d-48b2-b737-46e7c75b5f0d"
+        package = make_package(changes={"layouts.json": layouts})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget instance refers to an unknown template"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_widget_resource_references_must_be_profile_members(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        profile = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("profile.json"))
+        # The referenced resource remains present in resources.json, so this checks
+        # profile membership rather than only resource existence.
+        profile["memberships"] = []
+        package = make_package(changes={"layouts.json": layouts, "profile.json": profile})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget resource is not a profile member"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+        related_only = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        profile["memberships"] = []
+        related_only["layouts"][0]["widget_templates"] = [
+            template for template in related_only["layouts"][0]["widget_templates"]
+            if template["kind"] == "related_resources"
+        ]
+        related_only["layouts"][0]["widgets"] = [
+            widget for widget in related_only["layouts"][0]["widgets"]
+            if widget["templateId"] == related_only["layouts"][0]["widget_templates"][0]["id"]
+        ]
+        package = make_package(changes={"layouts.json": related_only, "profile.json": profile})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "widget resource is not a profile member"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_widget_resource_references_must_be_valid_uuids(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        layouts["layouts"][0]["widget_templates"][0]["config"]["resourceIds"][0] = "not-a-uuid"
+        package = make_package(changes={"layouts.json": layouts})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "layouts.schema.json"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_widget_geometry_must_fit_the_twelve_column_grid(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        layouts["layouts"][0]["widgets"][0].update(x=11, w=2)
+        package = make_package(changes={"layouts.json": layouts})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "(?:layouts.schema.json|widget exceeds the 12-column grid)"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
+
+    def test_dock_layout_cannot_contain_widget_templates_or_instances(self):
+        layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))
+        layouts["layouts"][0]["surface"] = "dock"
+        package = make_package(changes={"layouts.json": layouts})
+        try:
+            with self.assertRaisesRegex(ProfileArchiveError, "(?:layouts.schema.json|Dock layouts cannot contain widgets)"):
+                validate_profile_archive(package)
+        finally:
+            package.unlink(missing_ok=True)
 
     def test_valid_workspace_sequence_is_accepted_and_inert(self):
         profile = json.loads(zipfile.ZipFile(VALID).read("profile.json"))

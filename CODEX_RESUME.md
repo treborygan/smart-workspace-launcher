@@ -1,35 +1,23 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-22 01:59 UTC
+## Checkpoint — 2026-10-22 02:02 UTC
 
-Continue the implementation, not a plan or web mock. Canonical state: `backlog/AGENT_STATUS.json`, human status: `backlog/STATUS.md`. Repository `treborygan/smart-workspace-launcher`; current branch/worktree `/workspace/sw018-integration`, `feature/sw-018-discovery-import`.
+Continue implementation, not a plan or browser mock. Canonical state: `backlog/AGENT_STATUS.json`; human state: `backlog/STATUS.md`. Repository is `treborygan/smart-workspace-launcher`. Current coordinator worktree is `/workspace/sw018-integration`, branch `feature/sw-019-widget-templates`, based on the SW-018 integration branch. Contract commits `431fa55` (types/decisions), `3202298` (archive casing), and `a20003a` (Dock/geometry/name schema bounds) are pushed. Core and UI worktrees are `/workspace/sw019-core` (`feature/sw-019-core`) and `/workspace/sw019-ui` (`feature/sw-019-ui`), both based on `431fa55`.
 
-### PR tracking
+## PR review tracking
 
-As checked via GitHub review and inline-thread APIs on 2026-10-22 01:58 UTC, PR #38 (SW-014) and PR #41 (SW-015) remain OPEN with no reviews or inline threads. PR #42 (SW-016) and #43 (SW-017) are OPEN_DRAFT; #43 carries frozen SW-018 contract documentation for the next stacked feature. PR #44 (SW-018) is OPEN_DRAFT, based on `feature/sw-017-duplicate-relocation`; code implementation head `1ec5a7a`. PR #39 is closed as superseded without merged code. No review requests or GitHub comments were sent. Do not merge the stack without reviews and dependency-order checks.
+As checked through GitHub review and inline-thread APIs at 2026-10-22 02:01 UTC, PR #38 (SW-014) and #41 (SW-015) are OPEN and still have no submitted reviews or inline threads. Independent QA reviewed both current code heads read-only and found no actionable correctness/security blocker. A non-blocking scale concern for SW-015 is that CSV export holds the shared database lock while writing potentially large unlimited-retention exports. Do not merge these stacked changes without external review and dependency-order checks. PR #42 (SW-016) and #43 (SW-017) are OPEN_DRAFT; PR #44 (SW-018) is OPEN_DRAFT and follows #43. PR #39 was closed as superseded. No review requests/comments were sent.
 
-### SW-018 complete implementation checkpoint
+## SW-018 state
 
-Issue #17 is implemented on `feature/sw-018-discovery-import`. Core/UI/QA assignments are complete. Core implementation commit `9ccdd7f` plus coordinator mapped-network rejection and risk disclosure commit `1ec5a7a`; UI commits `85418f3`, `1172761`; contract/type commits `a2fad7a`, `d9cfc33`. PR #44 is open, draft, at current code head `1ec5a7a` before this status-only checkpoint.
+Issue #17 is implemented and independently QA-reviewed on PR #44. Implementation branch `feature/sw-018-discovery-import` has code commit `1ec5a7a`, followed by status checkpoint commit `1cae52c`; PR #44 head is `1cae52c0d6c8a8496f5b9e198030171081724af5`. See backlog status for implementation detail, test evidence and the documented medium same-user root/.lnk path race.
 
-The importer requires an explicit local directory/Start Menu/bookmark selection, explicit scan, review, candidate choice and commit. It supports folders/files, safe HTTPS `.url` shortcuts and Netscape-format HTTPS bookmarks. It uses cap-std/cap-fs-ext 4.0.3 handle-relative descendant traversal, rejects observed symlinks/reparse points and network paths, and caps depth 4, entries 1,000 and bookmark bytes 4 MiB. Windows `.lnk` metadata is read without Resolve/ShellExecute and nonempty shortcut arguments are rejected. No import action auto-launches.
+## SW-019 in progress
 
-Commit rescans the source and binds freshness to source/candidate data, current profile and existing-target match map. It validates selected IDs and applies resource/target/profile inserts in a SQLite transaction; any failure rolls back all. UI supports skip-existing/create-duplicate and disables mutable controls while commit is pending.
+The correct GitHub issue is #19 (issue #18 is SW-007). SW-016 code/QA is available on draft PR #42 and is the direct roadmap dependency. Contract is frozen on `feature/sw-019-widget-templates`: `431fa55` adds the typed contract, `3202298` aligns nested archive fields to camelCase, and `a20003a` enforces Dock-empty, widget x+w geometry and nonblank template names in the archive schema. Types: built-in resource shortcuts, recent launches, launch summary, and related resources; at most 20 templates and 50 dashboard instances, bounded profile-local references and dimensions. Widgets are dashboard-only inert app-rendered data views, persisted inside the existing layout, snapshot and manual archive shape; older layouts without widget data deserialize as empty. There are no scripts/arbitrary HTML/SQL/URLs/executable payloads. Independent contract QA confirmed the casing and called out runtime gates: globally unique template/instance IDs, valid template references, profile membership for resource IDs, plus old layout/archive/snapshot compatibility. Core owns Rust validation/snapshot/archive handling; UI owns dashboard manager/rendering; QA owns archive harness regressions; root owns integration/status. Three active subagent cap is enforced.
 
-QA passes SW-018 with no merge blocker. Residual medium same-user race: selected root is initially opened from an ambient path after validation; Windows `.lnk` content is read handle-relative, but COM `IPersistFile::Load` reads by absolute path. This is documented; descendants/ordinary file reads use handle-relative no-follow opens. No race-free-isolation claim. No Windows execution evidence.
+## Environment and gates
 
-### Verification evidence and limits
+Environment is Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1 stable. There is no PowerShell, no real Windows 11 x64 host and no MinGW compiler; GLib/GObject >=2.70 development libraries are also missing. Frontend execution is available; Rust app compilation and native Windows acceptance are not. `python scripts/verify_handoff.py` passes consistency checks only. `python scripts/check_release_gate.py` reports BLOCKED. V1/SW-012 remains BLOCKED; do not claim Windows build/runtime/package/release/READY evidence.
 
-- `npm ci --cache /tmp/swl-npm-cache` PASS.
-- `npm run typecheck` PASS; `npm test -- --run` PASS (14 files / 115 tests).
-- `npm run frontend:build` PASS with existing nonfatal Vite dynamic-import warning.
-- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `git diff --check`, and `python scripts/verify_handoff.py` PASS. Handoff verifies catalog/schema/fixtures, not runtime behavior.
-- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import --lib` BLOCKED before project compile: missing GLib/GObject >=2.70 development files (`glib-2.0.pc`).
-- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib` BLOCKED: MinGW compiler unavailable.
-- `python scripts/check_release_gate.py` outputs `NOT READY: BLOCKED` (exit 2). Environment Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99; no PowerShell or real Windows 11 x64.
-
-V1/SW-012 is BLOCKED: no Windows Shell acceptance, package, or READY notice. No GitHub Actions were added by this continuation.
-
-### Next work
-
-Continue SW-019 (issue #18, widget templates) after SW-016 dependency, branch stacked behind SW-018. Freeze typed contract first, then explicitly spawn Core/UI/QA within the three-agent limit. Continue SW-020..SW-025 in roadmap dependency order. Track reviews for #38/#41. Keep V1 blocked until actual Windows 11 x64 acceptance.
+No GitHub Actions were added. Continue SW-019, then SW-020 through SW-025 in dependency order while updating canonical state. See `docs/MULTI_AGENT_WORKFLOW.md`, `docs/CODEX_RUNTIME_SETUP.md` and `docs/NOTIFICATIONS_AND_RELEASE_GATES.md` for binding constraints.

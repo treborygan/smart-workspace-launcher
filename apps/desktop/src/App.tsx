@@ -14,8 +14,9 @@ import { DynamicShortcutsManager } from "./components/DynamicShortcutsManager";
 import { WorkspaceSequencesManager } from "./components/WorkspaceSequencesManager";
 import { WorkspaceMapManager } from "./components/WorkspaceMapManager";
 import { ResourceImportAssistant } from "./components/ResourceImportAssistant";
+import { DashboardWidgets } from "./components/DashboardWidgets";
 import { api } from "./lib/api";
-import type { DashboardLayout, DynamicShortcut, QuickLaunchHotkeyStatus, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, SmartCollection, WorkspaceSequence, WorkspaceSnapshot } from "@sw/contracts";
+import type { DashboardLayout, DashboardWidget, DynamicShortcut, QuickLaunchHotkeyStatus, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, SmartCollection, WidgetTemplate, WorkspaceSequence, WorkspaceSnapshot } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import { matchesSmartCollection } from "./lib/smartCollections";
 import { DEFAULT_THEME, resolveAppearance, themeForProfile } from "./lib/profileTheme";
@@ -79,6 +80,8 @@ export default function App() {
   const [workspaceSequences, setWorkspaceSequences] = useState<WorkspaceSequence[]>([]);
   const [resourceRelationships, setResourceRelationships] = useState<ResourceRelationship[]>([]);
   const [workspaceSnapshots, setWorkspaceSnapshots] = useState<WorkspaceSnapshot[]>([]);
+  const [widgetTemplates, setWidgetTemplates] = useState<WidgetTemplate[]>([]);
+  const [dashboardWidgets, setDashboardWidgets] = useState<DashboardWidget[]>([]);
   const [selectedSmartCollections, setSelectedSmartCollections] = useState<Record<string, string | null>>({});
   const [activeProfileId, setActiveProfileId] = useState(() => localStorage.getItem("swl-active-profile") || "default");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -120,7 +123,7 @@ export default function App() {
     }
     const [items, layout, dock, collections, shortcuts, sequences, relationships, snapshots] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null), profile ? api.layout(profile.id, "dock") : Promise.resolve(null), profile ? api.smartCollections(profile.id) : Promise.resolve([]), profile ? api.dynamicShortcuts(profile.id) : Promise.resolve([]), profile ? api.workspaceSequences(profile.id) : Promise.resolve([]), profile ? api.resourceRelationships(profile.id) : Promise.resolve([]), profile ? api.workspaceSnapshots(profile.id) : Promise.resolve([])]);
     const restored = restoreLayout(items, layout);
-    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setCardHeights(restored.heights); setDockLayout(dock); setSmartCollections(collections); setDynamicShortcuts(shortcuts); setWorkspaceSequences(sequences); setResourceRelationships(relationships); setWorkspaceSnapshots(snapshots);
+    setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setCardHeights(restored.heights); setDockLayout(dock); setSmartCollections(collections); setDynamicShortcuts(shortcuts); setWorkspaceSequences(sequences); setResourceRelationships(relationships); setWorkspaceSnapshots(snapshots); setWidgetTemplates(layout?.widgetTemplates || []); setDashboardWidgets(layout?.widgets || []);
     if (profile && selectedSmartCollections[profile.id] && !collections.some((item) => item.id === selectedSmartCollections[profile.id])) setSelectedSmartCollections((current) => ({ ...current, [profile.id]: null }));
     if (profile) localStorage.setItem("swl-active-profile", profile.id);
     setSelectedId((old) => old && items.some((r) => r.id === old) ? old : restored.resources[0]?.id ?? null);
@@ -299,7 +302,17 @@ export default function App() {
     if (!window.confirm(`Remove “${resource.displayName}” from this workspace?`)) return;
     try {
       await api.remove(resource.id, activeProfileId);
-      const next = resources.filter((r) => r.id !== resource.id); setResources(next); setSelectedId(null); await persistLayout(next, cardWidths);
+      const next = resources.filter((r) => r.id !== resource.id); setResources(next); setSelectedId(null);
+      const nextTemplates = widgetTemplates.flatMap((template) => {
+        if (template.kind === "related_resources" && template.config.resourceId === resource.id) return [];
+        if (template.kind !== "resource_shortcuts" || !template.config.resourceIds.includes(resource.id)) return [template];
+        const resourceIds = template.config.resourceIds.filter((id) => id !== resource.id);
+        return resourceIds.length ? [{ ...template, config: { resourceIds } }] : [];
+      });
+      const retainedTemplateIds = new Set(nextTemplates.map((template) => template.id));
+      const nextWidgets = dashboardWidgets.filter((widget) => retainedTemplateIds.has(widget.templateId));
+      setWidgetTemplates(nextTemplates); setDashboardWidgets(nextWidgets);
+      await persistLayout(next, cardWidths, cardHeights, nextTemplates, nextWidgets);
       setResourceRelationships((current) => current.filter((edge) => edge.sourceResourceId !== resource.id && edge.targetResourceId !== resource.id));
       if (dockLayout?.profileId === activeProfileId && dockLayout.cards.some((card) => card.resourceId === resource.id)) {
         const nextDock: DashboardLayout = { ...dockLayout, cards: dockLayout.cards.filter((card) => card.resourceId !== resource.id) };
@@ -364,10 +377,17 @@ export default function App() {
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not switch profile."); }
     finally { setLoading(false); }
   };
-  const persistLayout = async (items: Resource[], widths: Record<string, number>, heights: Record<string, number> = cardHeights) => {
+  const persistLayout = async (items: Resource[], widths: Record<string, number>, heights: Record<string, number> = cardHeights, templates: WidgetTemplate[] = widgetTemplates, widgets: DashboardWidget[] = dashboardWidgets) => {
     if (!activeProfileId) return;
-    try { await api.saveLayout(makeLayout(activeProfileId, items, widths, heights)); }
+    try { await api.saveLayout(makeLayout(activeProfileId, items, widths, heights, templates, widgets)); }
     catch (e) { setNotice(e instanceof Error ? e.message : "Could not save dashboard layout."); }
+  };
+  const saveDashboardWidgets = async (templates: WidgetTemplate[], widgets: DashboardWidget[]) => {
+    if (!activeProfileId) return;
+    try {
+      const saved = await api.saveLayout(makeLayout(activeProfileId, resources, cardWidths, cardHeights, templates, widgets));
+      setWidgetTemplates(saved.widgetTemplates || templates); setDashboardWidgets(saved.widgets || widgets);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Could not save dashboard widgets."); }
   };
 
   const closeQuickLaunch = () => {
@@ -402,6 +422,7 @@ export default function App() {
           <div className={`search-box ${section === "Quick Launch" ? "command-search" : ""}`}><Icon name="search" size={19} /><input id="global-search" placeholder={section === "Quick Launch" ? "Search resources, aliases, tags…" : "Search your workspace"} value={query} onChange={(e) => setQuery(e.target.value)} /><span className="search-shortcut">{section === "Quick Launch" ? "ESC to close" : "⌘ K"}</span></div>
           <div className="section-heading"><div><h2>{query ? "Search results" : activeSmartCollection?.name || (category === "Favorites" ? "Favorites" : "Pinned resources")}</h2><span>{filtered.length} {filtered.length === 1 ? "resource" : "resources"}{activeSmartCollection ? " · live saved query" : ""}</span></div><button className="text-button" onClick={() => { setSection("Explorer"); setCategory("All resources"); setSelectedSmartCollections((current) => ({ ...current, [activeProfileId]: null })); }}>View all <Icon name="arrow" size={15} /></button></div>
           {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" onClick={() => setNotice("")} aria-label="Dismiss"><Icon name="close" size={15} /></button></div>}
+          {section === "Dashboard" && <DashboardWidgets profileId={activeProfileId} resources={resources} relationships={resourceRelationships} templates={widgetTemplates} widgets={dashboardWidgets} onChange={(templates, widgets) => void saveDashboardWidgets(templates, widgets)} onLaunch={(resource) => { void launch(resource); }} onInspect={(id) => setSelectedId(id)} onNotice={setNotice} />}
           {loading ? <div className="loading-state">Loading your workspace…</div> : filtered.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="folder" size={24} /></span><h3>{query ? "No matching resources" : "Your workspace is ready"}</h3><p>{query ? "Try another name, type, tag or location." : "Add a file, folder, app or secure web link to get started."}</p>{!query && <button className="button primary" onClick={() => setShowAdd(true)}><Icon name="plus" size={16} /> Add your first resource</button>}</div> : <div className="resource-grid" aria-label="Resources">
             {filtered.map((resource) => <article key={resource.id} style={{ gridColumn: `span ${Math.min(cardWidths[resource.id] || 4, gridColumns)}`, gridRow: `span ${Math.max(1, Math.min(3, cardHeights[resource.id] || 1))}` }} className={`resource-card ${selectedId === resource.id ? "selected" : ""}`} draggable onDragStart={() => setDragId(resource.id)} onDragOver={(e) => e.preventDefault()} onDrop={() => reorder(resource.id)} onClick={() => setSelectedId(resource.id)} onDoubleClick={() => void launch(resource)}>
               <div className="card-top"><ResourceMark resource={resource} /><div className="card-controls"><button className="move-card" aria-label={`Move ${resource.displayName} earlier`} title="Move earlier" disabled={resources[0]?.id === resource.id} onClick={(e) => { e.stopPropagation(); moveCard(resource.id, -1); }}>↑</button><button className="move-card" aria-label={`Move ${resource.displayName} later`} title="Move later" disabled={resources[resources.length - 1]?.id === resource.id} onClick={(e) => { e.stopPropagation(); moveCard(resource.id, 1); }}>↓</button><button className={`favorite-button ${resource.favorite ? "is-favorite" : ""}`} title={resource.favorite ? "Remove from favorites" : "Add to favorites"} aria-label={resource.favorite ? `Remove ${resource.displayName} from favorites` : `Add ${resource.displayName} to favorites`} onClick={(e) => { e.stopPropagation(); void update(resource.id, { favorite: !resource.favorite }); }}><Icon name="star" size={16} /></button></div></div>
@@ -432,9 +453,9 @@ function restoreLayout(resources: Resource[], layout: DashboardLayout | null) {
   const ordered = [...resources].sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
   const widths = Object.fromEntries(cards.map((card) => [card.resourceId, Math.max(3, Math.min(8, card.w))]));
   const heights = Object.fromEntries(cards.map((card) => [card.resourceId, Math.max(1, Math.min(3, card.h))]));
-  return { resources: ordered, widths, heights };
+  return { resources: ordered, widths, heights, widgetTemplates: layout.widgetTemplates || [], widgets: layout.widgets || [] };
 }
-function makeLayout(profileId: string, resources: Resource[], widths: Record<string, number>, heights: Record<string, number> = {}): DashboardLayout {
+function makeLayout(profileId: string, resources: Resource[], widths: Record<string, number>, heights: Record<string, number> = {}, widgetTemplates: WidgetTemplate[] = [], widgets: DashboardWidget[] = []): DashboardLayout {
   let x = 0; let y = 0;
   const cards = resources.map((resource) => {
     const w = Math.max(3, Math.min(8, widths[resource.id] || 4));
@@ -445,7 +466,7 @@ function makeLayout(profileId: string, resources: Resource[], widths: Record<str
     if (x >= 12) { x = 0; y += 1; }
     return card;
   });
-  return { profileId, surface: "dashboard", version: 1, cards };
+  return { profileId, surface: "dashboard", version: 1, cards, widgetTemplates, widgets };
 }
 function InfoRow({ label, value }: { label: string; value: string }) { return <div className="info-row"><span>{label}</span><b>{value}</b></div>; }
 export function columnsForViewport(width: number) { return width <= 760 ? 4 : width <= 1180 ? 6 : 12; }

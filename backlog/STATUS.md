@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 01:59 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:02 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -8,11 +8,12 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`; review and inline-thread APIs returned no submissions on 2026-10-22 01:58 UTC.
-- PR #41 (SW-015) OPEN, stacked on #38; review and inline-thread APIs returned no submissions at the same check.
+- PR #38 (SW-014) OPEN against `main`; review and inline-thread APIs returned no submissions on 2026-10-22 02:01 UTC. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38; review and inline-thread APIs returned no submissions at the same check. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
+- SW-019 (issue #19; issue #18 is SW-007) is in progress on `feature/sw-019-widget-templates`, stacked after SW-018. Contract was frozen in `431fa55`, archive casing corrected in `3202298`, and schema bounds/security tightened in `a20003a`. Core and UI are working in isolated branches; independent QA review confirms the schema casing and identifies runtime gates now being implemented/tested: unique IDs, template references and profile membership.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
@@ -40,7 +41,7 @@ No Shell, `.lnk`, mapped-drive, DPI/multi-monitor, portable-package or W-001..W-
 
 ## Next executable tasks
 
-1. Continue SW-019 (widget templates, issue #18) after SW-016 dependency using the frozen product/security boundaries; keep work stacked behind current review chain.
+1. Complete SW-019 (widget templates, issue #19) after the implemented SW-016 dependency using the frozen product/security boundaries; keep work stacked behind the existing review chain.
 2. Run SW-018 Rust import tests and Windows mapped-drive/shortcut checks on capable hosts; continue tracking #38/#41 external review.
 3. Continue SW-020..SW-025 in dependency order. Keep V1 blocked until real Windows 11 x64 acceptance.
 

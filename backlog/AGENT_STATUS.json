@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T01:59:00Z",
+  "updated_at_utc": "2026-10-22T02:05:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-018-discovery-import"
+    "branch": "feature/sw-019-widget-templates"
   },
   "active_pull_request": {
     "number": 44,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/44",
     "state": "OPEN_DRAFT",
-    "head_sha": "1ec5a7a",
+    "head_sha": "1cae52c0d6c8a8496f5b9e198030171081724af5",
     "base": "feature/sw-017-duplicate-relocation",
-    "review_status": "Independent SW-018 QA passed with no merge blocker. Backend tests blocked before application compilation by missing GLib; Windows x64 checks unavailable. Medium same-user root/.lnk path race documented."
+    "review_status": "Independent SW-018 QA passed. PR body/tests limitations include GLib build blocker, unavailable Windows host and documented medium root/.lnk path race."
   },
   "subagent_limit": 3,
   "agents": [
@@ -234,6 +234,39 @@
       "commit": null,
       "pr": null,
       "task": "Independent QA passed with no merge blocker; reviewed caps, URL schemes, symlinks/out-of-root, duplicate/profile token, transaction rollback, UI, and documented residual root/.lnk race."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "PR #38 SW-014 / PR #41 SW-015 independent read-only review tracking",
+      "branch": null,
+      "commit": null,
+      "pr": "38,41",
+      "task": "Live GitHub review and inline-thread APIs were empty at 2026-10-22 02:01 UTC. Independent static review found no actionable correctness/security blocker. Non-blocking scale concern: SW-015 CSV export holds shared DB lock for full output."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-019 backend: typed validation, snapshots, profile archive round-trip",
+      "branch": "feature/sw-019-core",
+      "commit": null,
+      "pr": null,
+      "task": "Implement strict Rust widget DTO/layout validation, snapshot restore compatibility and profile archive round-trip/import membership remapping. Cherry-picked shared schema correction commits 3202298 and a20003a (local hashes differ)."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-019 reusable widget editor and dashboard rendering",
+      "branch": "feature/sw-019-ui",
+      "commit": null,
+      "pr": null,
+      "task": "Implement real typed-IPC SW-019 widgets from frozen contract 431fa55 in isolated /workspace/sw019-ui; focused accessible UI tests."
     }
   ],
   "milestones": {
@@ -245,7 +278,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T01:59:00Z",
+    "at_utc": "2026-10-22T02:05:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64; MinGW absent; GLib >=2.70 development files absent.",
     "results": [
       {
@@ -287,11 +320,19 @@
       {
         "command": "python scripts/check_release_gate.py",
         "result": "BLOCKED as expected: NOT READY: BLOCKED (exit 2). No real Windows 11 x64 host."
+      },
+      {
+        "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
+        "result": "PASS on SW-019 contract commit 431fa55: schema is valid JSON and handoff catalog/schema/fixture checks pass. This does not compile or execute app runtime."
+      },
+      {
+        "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
+        "result": "PASS on SW-019 contract head a20003a: JSON syntax and repository handoff/schema/fixture checks pass. QA schema review completed; runtime uniqueness, reference, membership, and compatibility assertions remain assigned to Core/QA."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Continue SW-019 (#18 widget templates) after SW-016, stacked behind SW-018 PR #44. SW-018 (#17) implementation is complete on feature/sw-018-discovery-import; PR #44 is open draft, independent QA passed. Continue tracking open PR #38/#41 reviews (both had no reviews/threads at 2026-10-22 01:58 UTC), then SW-020..SW-025 in dependency order. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Finish SW-019 Core/UI/archive QA changes in isolated branches from the frozen contract, integrate and run full cross-platform checks, then independent final QA. PR #38/#41 review APIs remain empty and current read-only QA found no actionable blocker. Continue SW-020..SW-025 in dependency order. Windows V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -351,7 +392,7 @@
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
       "head_sha": "fb22dff",
-      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC."
+      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
     },
     {
       "number": 39,
@@ -369,7 +410,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f47",
       "base": "feature/sw-014-action-sequences",
-      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC; stacked on #38."
+      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC; stacked on #38. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
     },
     {
       "number": 42,

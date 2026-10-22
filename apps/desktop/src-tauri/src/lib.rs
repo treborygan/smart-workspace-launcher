@@ -14617,6 +14617,8 @@ mod tests {
             package_path: path.display().to_string(),
         })
         .unwrap();
+        let changed_hash = changed_preview.package_sha256.clone();
+        let changed_token = changed_preview.preview_token.clone();
         write_extension_fixture(
             &path,
             &extension_wat(
@@ -14627,8 +14629,17 @@ mod tests {
             &conn,
             ExtensionPackageInstallRequest {
                 package_path: path.display().to_string(),
-                package_sha256: changed_preview.package_sha256,
-                preview_token: changed_preview.preview_token
+                package_sha256: changed_hash.clone(),
+                preview_token: changed_token.clone()
+            }
+        )
+        .is_err());
+        assert!(extension_package_install_on_conn(
+            &conn,
+            ExtensionPackageInstallRequest {
+                package_path: path.display().to_string(),
+                package_sha256: changed_hash,
+                preview_token: changed_token
             }
         )
         .is_err());
@@ -14903,6 +14914,29 @@ mod tests {
                 .unwrap()
                 .len()
                 < 200
+        );
+
+        let mut count_conn = database();
+        let count_pid = profile(&count_conn);
+        for index in 0..201 {
+            let resource = resource(&format!("Resource {index}"));
+            persist_resource(&mut count_conn, &resource, true, Some(&count_pid)).unwrap();
+        }
+        let count_input = extension_invocation_json(
+            &count_conn,
+            &count_pid,
+            &[ExtensionCapability::ResourceMetadataRead],
+        )
+        .unwrap();
+        let count_bytes = serde_json::to_vec(&count_input).unwrap();
+        assert!(count_bytes.len() <= EXTENSION_JSON_MAX_BYTES);
+        assert_eq!(count_input["resourceMetadata"]["truncated"], true);
+        assert_eq!(
+            count_input["resourceMetadata"]["resources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            200
         );
     }
 

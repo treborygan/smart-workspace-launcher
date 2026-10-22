@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T03:35:00Z",
+  "updated_at_utc": "2026-10-22T03:40:30Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "a882998607d79915f52890fc087112efb54099a9",
+    "head_sha": "8aa19f809e52de2feeed457cd936ff4fe99c9172",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 implementation code head d5344b4; latest pushed PR checkpoint a882998. Focused extension tests PASS 13/13; scanner tests PASS 2/2; full Rust library suite compiles but FAILS 90/25 across older fixtures and behavior tests. Independent security QA PASS on capability-relative Windows reparse/junction rejection; Windows-only junction NOT_RUN. Suite remediation active in feature/sw021-suite-fixes. SW-022 gated; V1 BLOCKED."
+    "review_status": "PR #47 code head 8aa19f8; full Rust library suite PASS 116/116 on Debian 13/sysroot; focused extension 13/13 and directory scanner 2/2; frontend typecheck, 17 files/137 tests and build PASS; independent QA passed purge/replay fix. Windows-only junction NOT_RUN; V1 BLOCKED. SW-022 contract research found missing provider/encryption/conflict/data-selection decisions; freeze contract before implementation."
   },
   "subagent_limit": 3,
   "agents": [
@@ -393,12 +393,34 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-021 integration test suite",
       "branch": "feature/sw021-suite-fixes",
-      "commit": null,
+      "commit": "d8949ee",
       "pr": 47,
-      "task": "Resolve/triage full Rust suite (90 passed/25 failed); fix valid fixtures and review sequence/relocation behavior, preserving SW-018 no-follow/reparse security."
+      "task": "Repaired Rust fixture/recovery/relocation tests while preserving no-follow/reparse protections. Commits 6768729 and d8949ee; full library suite 116/116, extension 13/13, scanner 2/2 PASS on Debian 13/sysroot; independent QA passed history-purge fix. Windows not run."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 launch-history purge replay regression",
+      "branch": "feature/sw021-suite-fixes",
+      "commit": "d8949ee",
+      "pr": 47,
+      "task": "Independent review passed: replay updates a matching pending history row only, marks the guard unknown/failed and never re-inserts purged/missing history. Test coverage gap (existing pending event update path) is modest/non-blocking; reviewer build could not run due transient disk exhaustion; coordinator reran full suite PASS 116/116."
+    },
+    {
+      "role": "research",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "state": "COMPLETE",
+      "issue": "SW-022 selective sync contract gap",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Read-only research found provider/protocol, encryption, conflicts/deletion, selected entities, compatibility and local-only data undefined. Repository mandates opt-in and prohibits live SQLite/WAL sync; contract must be frozen before implementation."
     }
   ],
   "milestones": {
@@ -410,53 +432,65 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T03:33:00Z",
-    "environment": "Debian 13 x86_64, Rust 1.99.1 stable, Tauri prerequisites from Debian trixie extracted under /tmp/swl-sysroot; PKG_CONFIG_SYSROOT_DIR and LD_LIBRARY_PATH pointed there. No Windows 11 x64 or MinGW.",
+    "at_utc": "2026-10-22T03:40:30Z",
+    "environment": "Debian 13 x86_64, Rust 1.99.1 stable. Tauri prerequisites extracted under /tmp/swl-sysroot; Cargo pkg-config/sysroot/library paths pointed there. Not Windows; no PowerShell or MinGW.",
     "results": [
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS after native test compile fixes and Windows reparse-point fix."
-      },
-      {
-        "command": "git diff --check",
-        "result": "PASS on integrated local head d5344b4."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
-        "result": "PASS, 13 passed, 0 failed. Application Rust test target compiled and executed."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib",
-        "result": "PASS, 2 passed, 0 failed on Linux. Windows junction regression is cfg(windows) and NOT_RUN."
+        "result": "PASS on integrated head 8aa19f8."
       },
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "result": "FAIL, 90 passed / 25 failed. Full target compiles. Failures include path/archive fixtures, profile imports, launch/search behavior, relocation expectation, and sequence recovery/stop behavior. Independent triage: several fixture defects and sequence/relocation behavior unresolved; do not call suite green. Full output /tmp/sw021-full-integrated.log."
+        "result": "PASS, 116 passed, 0 failed. Includes replay-after-purge no-resurrection regression."
       },
       {
-        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED: x86_64-w64-mingw32-gcc unavailable; Windows-only reparse test not compiled/run."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
+        "result": "PASS, 13 passed, 0 failed."
       },
       {
-        "command": "Independent contract/Core/UI/security review",
-        "result": "PASS for SW-021 runtime and d0f0160 reparse handling; reviewer says Windows junction test still requires real Windows execution."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib",
+        "result": "PASS, 2 passed, 0 failed on Linux. Windows cfg(windows) junction test NOT_RUN."
       },
       {
-        "command": "PR #38/#41 GitHub review and inline-thread APIs",
-        "result": "EMPTY for both at 2026-10-22 03:13 UTC; independent static QA found no actionable blocker. PR #41 CSV export shared DB-lock duration remains non-blocking."
+        "command": "npm run typecheck",
+        "result": "PASS."
+      },
+      {
+        "command": "npm test -- --run",
+        "result": "PASS, 17 files, 137 tests."
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+      },
+      {
+        "command": "git diff --check",
+        "result": "PASS."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS, handoff/schema/fixture consistency only; no compiled/runtime proof."
+        "result": "PASS handoff/catalog/schema/fixture consistency only; no runtime or Windows proof."
+      },
+      {
+        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
+        "result": "BLOCKED because x86_64-w64-mingw32-gcc is unavailable; Windows-specific test not compiled."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED / NOT READY (exit 2). V1 remains blocked."
+        "result": "BLOCKED / NOT READY (exit 2), expected without Windows release evidence."
+      },
+      {
+        "command": "GitHub review and inline-thread APIs for PR #38/#41",
+        "result": "EMPTY at 2026-10-22 03:39 UTC; both PRs remain open/mergeable. Independent QA found no blocker; PR #41 CSV DB-lock concern remains non-blocking."
+      },
+      {
+        "command": "Independent QA of d8949ee1fc9d87e5ef2608d4d38bf8f74f44be93",
+        "result": "PASS, code review found purge behavior and anti-replay guard correct. Reviewer focused test attempt could not run due no space; coordinator full suite passed 116/116."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Resolve/accurately classify 25 full Rust suite failures. Focused SW-021 and scanner tests pass. Core suite remediation active in isolated worktree feature/sw021-suite-fixes based on code head d5344b4; preserve no-follow/reparse checks. Independently review and integrate fixes, rerun all Rust tests; keep SW-022 gated until behavior checks are acceptable. PR #38/#41 review/thread APIs refreshed 2026-10-22 03:35 UTC returned empty. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "SW-021 cross-platform test gate passed and code head 8aa19f8 is pushed to PR #47; full Rust library suite 116/116, focused extension 13/13, scanner 2/2, frontend typecheck/137 tests/build PASS. PR #38/#41 review/thread APIs refreshed 2026-10-22 03:39 UTC returned empty; both remain open/mergeable and PR #41 has a non-blocking CSV mutex concern. SW-022 issue lacks provider/protocol, encryption, conflict/deletion, data-selection and local-only data rules; freeze a security-reviewed contract before implementation. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -553,7 +587,7 @@
       "state": "OPEN",
       "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
       "base": "main",
-      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty; independent static QA found no actionable blocker."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:39 UTC: both empty; PR open/mergeable. Independent static QA found no actionable blocker."
     },
     {
       "number": 41,
@@ -562,7 +596,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
       "base": "feature/sw-014-action-sequences",
-      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:39 UTC: both empty; PR open/mergeable. Independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during very large CSV export."
     },
     {
       "number": 45,
@@ -587,9 +621,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "a882998607d79915f52890fc087112efb54099a9",
+      "head_sha": "8aa19f809e52de2feeed457cd936ff4fe99c9172",
       "base": "feature/sw-020-device-paths",
-      "note": "Open draft at current checkpoint a882998 (SW-021 code head d5344b4), stacked on SW-020/PR #46. Focused Rust tests PASS 13/13; scanner PASS 2/2; full Rust library suite compiles but FAILS 90/25. Security QA PASS for Windows reparse fix; Windows junction NOT_RUN. Full suite remediation active; SW-022 gated; V1 BLOCKED."
+      "note": "Open draft at code head 8aa19f8, stacked on SW-020/PR #46. Rust full suite PASS 116/116; extension 13/13; scanner 2/2 Linux; frontend typecheck, 137 tests, build, formatting, diff/handoff PASS. Independent QA passed purge/replay fix; Windows junction NOT_RUN. SW-022 contract incomplete; V1 BLOCKED."
     }
   ],
   "contract_commits": [

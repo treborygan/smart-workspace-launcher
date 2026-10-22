@@ -9683,6 +9683,9 @@ where
         if existing.6 == "requested" {
             conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown' WHERE request_id=?1", [&request.request_id])?;
             conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
+            let event = usage_event_from_guard(conn, &request.request_id)?;
+            record_guard_event(conn, request, &event)?;
+            return Ok(event);
         }
         return usage_event_from_guard(conn, &request.request_id);
     }
@@ -10913,7 +10916,9 @@ mod tests {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
-            payload.push(state as u8);
+            // A small alphabet keeps the fixture under the compressed archive
+            // ceiling while still exceeding the per-member expanded limit.
+            payload.push((state as u8) & 0x0f);
         }
         payload.extend(std::iter::repeat_n(0u8, 1025));
         entries.push(("oversized.bin", payload));
@@ -11000,7 +11005,13 @@ mod tests {
                     targets: vec![ProfilePackageTarget {
                         id: target_id,
                         kind: kind.into(),
-                        value: "calc.exe".into(),
+                        value: match kind {
+                            "url" => "https://example.com/calculator".into(),
+                            "app" => r"C:\Windows\System32\calc.exe".into(),
+                            "file" => r"C:\Users\Test\Documents\calculator.xlsx".into(),
+                            "folder" => r"C:\Users\Test\Documents".into(),
+                            other => panic!("unsupported package fixture type {other}"),
+                        },
                         priority: 0,
                         device_label: None,
                         argv: vec![],
@@ -12389,8 +12400,10 @@ mod tests {
         let mut conn = database();
         let profile_id = profile(&conn);
         let first = resource("First");
-        let second = resource("Failure");
-        let third = resource("Never opened");
+        let mut second = resource("Failure");
+        second.targets[0].canonical_uri = "https://failure.example".into();
+        let mut third = resource("Never opened");
+        third.targets[0].canonical_uri = "https://never-opened.example".into();
         persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
         persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
         persist_resource(&mut conn, &third, true, Some(&profile_id)).unwrap();
@@ -12866,7 +12879,7 @@ mod tests {
             (&older, "2026-10-19T00:00:00Z"),
             (&newer, "2026-10-20T00:00:00Z"),
         ] {
-            conn.execute("INSERT INTO launch_events(id,request_id,resource_id,source,launched_at_utc,status) VALUES (?1,?2,?3,'dashboard',?4,'handed_off')", params![Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),resource.id,timestamp]).unwrap();
+            conn.execute("INSERT INTO launch_events(id,request_id,resource_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,'dashboard',?5,'handed_off')", params![Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),resource.id,pid,timestamp]).unwrap();
         }
         let results = search_resources(&conn, "work", Some(&pid), false, 20).unwrap();
         assert_eq!(results[0].display_name, "Work Beta");
@@ -13017,7 +13030,13 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM launch_events", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 0);
+        let guard_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM launch_request_guard", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(guard_count, 1);
     }
 
     #[test]
@@ -13913,13 +13932,19 @@ mod tests {
     #[test]
     fn missing_target_is_recorded_as_failed_attempt() {
         let mut conn = database();
+        let profile_id = profile(&conn);
         let r = resource("No target");
-        persist_resource(&mut conn, &r, true, None).unwrap();
+        persist_resource(&mut conn, &r, true, Some(&profile_id)).unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE id=?1",
+            [&r.targets[0].id],
+        )
+        .unwrap();
         let request = LaunchRequest {
             request_id: Uuid::new_v4().to_string(),
             resource_id: r.id.clone(),
-            target_id: Some(Uuid::new_v4().to_string()),
-            profile_id: None,
+            target_id: None,
+            profile_id: Some(profile_id),
             source: "explorer".into(),
         };
         let event = launch_event_with(&mut conn, &request, |_| {
@@ -16018,7 +16043,7 @@ mod tests {
             change.resource_id == file.id && change.to_uri == "D:\\Archive\\Project\\plan.xlsx"
         }));
         assert!(preview.changes.iter().any(|change| {
-            change.resource_id == folder.id && change.to_uri == "D:\\Archive\\Project\\assets"
+            change.resource_id == folder.id && change.to_uri == "D:\\Archive\\Project\\assets\\"
         }));
         assert!(!preview.changes.iter().any(|change| {
             change.resource_id == sibling.id

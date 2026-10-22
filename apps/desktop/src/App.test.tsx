@@ -65,6 +65,14 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Inspector");
   });
 
+  it("surfaces the native operation when workspace resource loading fails", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    windowState.label = "main";
+    api.resources.mockRejectedValueOnce("workspace read denied");
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(host.textContent).toContain("Loading resources: workspace read denied");
+  });
+
   it("refreshes main resources and layouts after a workspace event from another surface", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
     windowState.label = "main";

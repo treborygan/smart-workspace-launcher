@@ -175,6 +175,49 @@ pub struct ResourceRelocationResult {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalDeviceIdentity {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicePathMapping {
+    pub id: String,
+    pub device_id: String,
+    pub source_prefix: String,
+    pub target_prefix: String,
+    pub created_utc: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicePathMappingChange {
+    pub resource_id: String,
+    pub target_id: String,
+    pub from_uri: String,
+    pub to_uri: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicePathMappingPreviewRequest {
+    pub source_prefix: String,
+    pub target_prefix: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DevicePathMappingPreview {
+    pub device_id: String,
+    pub source_prefix: String,
+    pub target_prefix: String,
+    pub preview_token: String,
+    pub changes: Vec<DevicePathMappingChange>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceImportSource {
     pub kind: String,
     pub path: String,
@@ -299,6 +342,9 @@ const MAX_WORKSPACE_SEQUENCES_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SEQUENCE_STEPS: usize = 20;
 const MAX_RELOCATION_RESOURCE_IDS: usize = 5_000;
 const MAX_RELOCATION_CHANGES: usize = 10_000;
+const MAX_DEVICE_PATH_MAPPINGS: usize = 100;
+const MAX_DEVICE_MAPPING_CHANGES: usize = 5_000;
+const MAX_DEVICE_MAPPING_SCANNED_TARGETS: usize = 50_000;
 const MAX_RESOURCE_RELATIONSHIPS_PER_PROFILE: i64 = 500;
 const MAX_WORKSPACE_SNAPSHOTS_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS: usize = 5_000;
@@ -3499,6 +3545,66 @@ pub fn open_database(path: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
+fn local_device_id_for_config_dir(config_dir: &Path) -> Result<String, AppError> {
+    std::fs::create_dir_all(config_dir).map_err(|error| {
+        AppError::Invalid(format!("cannot create local settings directory: {error}"))
+    })?;
+    let path = config_dir.join("device-id");
+    for _ in 0..3 {
+        match File::open(&path) {
+            Ok(file) => {
+                let mut contents = String::new();
+                file.take(128)
+                    .read_to_string(&mut contents)
+                    .map_err(|error| {
+                        AppError::Invalid(format!("cannot read local device identity: {error}"))
+                    })?;
+                if let Ok(id) = Uuid::parse_str(contents.trim()) {
+                    return Ok(id.to_string());
+                }
+                let quarantine = config_dir.join(format!("device-id.invalid-{}", Uuid::new_v4()));
+                std::fs::rename(&path, quarantine).map_err(|error| {
+                    AppError::Invalid(format!(
+                        "cannot rotate invalid local device identity: {error}"
+                    ))
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let id = Uuid::new_v4().to_string();
+                match OpenOptions::new().write(true).create_new(true).open(&path) {
+                    Ok(mut file) => {
+                        file.write_all(id.as_bytes()).map_err(|error| {
+                            AppError::Invalid(format!(
+                                "cannot persist local device identity: {error}"
+                            ))
+                        })?;
+                        file.sync_all().map_err(|error| {
+                            AppError::Invalid(format!(
+                                "cannot persist local device identity: {error}"
+                            ))
+                        })?;
+                        return Ok(id);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => {
+                        return Err(AppError::Invalid(format!(
+                            "cannot create local device identity: {error}"
+                        )))
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(AppError::Invalid(format!(
+                    "cannot read local device identity: {error}"
+                )))
+            }
+        }
+    }
+    Err(AppError::Invalid(
+        "could not establish a stable local device identity".into(),
+    ))
+}
+
 fn ensure_column(
     conn: &Connection,
     table: &str,
@@ -3562,6 +3668,31 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (9,'sw015-request-guard-path-free-v1',?1)",[now_utc()])?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS resource_relationships (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, source_resource_id TEXT NOT NULL, target_resource_id TEXT NOT NULL, label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 80), CHECK(source_resource_id < target_resource_id), UNIQUE(profile_id,source_resource_id,target_resource_id), FOREIGN KEY(profile_id,source_resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE, FOREIGN KEY(profile_id,target_resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_resource_relationships_profile ON resource_relationships(profile_id,source_resource_id,target_resource_id); CREATE TABLE IF NOT EXISTS workspace_snapshots (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), created_utc TEXT NOT NULL, snapshot_json TEXT NOT NULL CHECK(length(snapshot_json) <= 1048576), UNIQUE(profile_id,name COLLATE NOCASE)); CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_profile_time ON workspace_snapshots(profile_id,created_utc DESC,id); CREATE TRIGGER IF NOT EXISTS enforce_workspace_snapshot_limit BEFORE INSERT ON workspace_snapshots WHEN (SELECT COUNT(*) FROM workspace_snapshots WHERE profile_id=NEW.profile_id) >= 100 BEGIN SELECT RAISE(ABORT,'workspace snapshot limit reached'); END;")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (10,'sw016-resource-graph-workspace-snapshots-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS local_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 80)); CREATE TABLE IF NOT EXISTS active_local_device (singleton INTEGER PRIMARY KEY CHECK(singleton=1), device_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS device_path_mappings (id TEXT PRIMARY KEY, device_id TEXT NOT NULL REFERENCES local_devices(id) ON DELETE CASCADE, source_prefix TEXT NOT NULL, target_prefix TEXT NOT NULL, created_utc TEXT NOT NULL, UNIQUE(device_id,source_prefix COLLATE NOCASE)); CREATE INDEX IF NOT EXISTS idx_device_path_mappings_device ON device_path_mappings(device_id); CREATE TRIGGER IF NOT EXISTS enforce_device_path_mapping_limit BEFORE INSERT ON device_path_mappings WHEN (SELECT COUNT(*) FROM device_path_mappings WHERE device_id=NEW.device_id)>=100 BEGIN SELECT RAISE(ABORT,'device mapping limit reached'); END;")?;
+    let active_device_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM active_local_device WHERE singleton=1)",
+        [],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !active_device_exists {
+        let existing_device = conn
+            .query_row(
+                "SELECT id FROM local_devices ORDER BY id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let initial_device_id = existing_device.unwrap_or_else(|| Uuid::new_v4().to_string());
+        conn.execute(
+            "INSERT OR IGNORE INTO local_devices(id,name) VALUES (?1,'This device')",
+            [&initial_device_id],
+        )?;
+        conn.execute(
+            "INSERT INTO active_local_device(singleton,device_id) VALUES (1,?1)",
+            [&initial_device_id],
+        )?;
+    }
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (11,'sw020-device-path-mappings-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -5305,10 +5436,12 @@ fn normalize_relocation_prefix(path: &str, field: &str) -> Result<String, AppErr
 }
 
 fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    let path = path.replace('/', "\\");
+    let prefix = prefix.replace('/', "\\");
     let Some(head) = path.get(..prefix.len()) else {
         return false;
     };
-    head.eq_ignore_ascii_case(prefix)
+    head.eq_ignore_ascii_case(&prefix)
         && (path.len() == prefix.len()
             || prefix.ends_with('\\')
             || path.as_bytes().get(prefix.len()) == Some(&b'\\'))
@@ -5557,6 +5690,291 @@ fn resource_relocation_commit(
 ) -> Result<ResourceRelocationResult, AppError> {
     let mut conn = lock(&state)?;
     resource_relocation_commit_on_conn(&mut conn, &preview)
+}
+
+fn local_device_from_conn(conn: &Connection) -> Result<LocalDeviceIdentity, AppError> {
+    Ok(conn.query_row(
+        "SELECT d.id,d.name FROM local_devices d JOIN active_local_device a ON a.device_id=d.id WHERE a.singleton=1",
+        [],
+        |row| {
+            Ok(LocalDeviceIdentity {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        },
+    )?)
+}
+
+fn activate_local_device(conn: &Connection, id: &str) -> Result<(), AppError> {
+    valid_uuid(id, "local device id")?;
+    conn.execute(
+        "INSERT OR IGNORE INTO local_devices(id,name) VALUES (?1,'This device')",
+        [id],
+    )?;
+    conn.execute(
+        "INSERT INTO active_local_device(singleton,device_id) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET device_id=excluded.device_id",
+        [id],
+    )?;
+    Ok(())
+}
+
+fn device_path_mappings_from_conn(conn: &Connection) -> Result<Vec<DevicePathMapping>, AppError> {
+    let mut statement = conn.prepare(
+        "SELECT m.id,m.device_id,m.source_prefix,m.target_prefix,m.created_utc FROM device_path_mappings m JOIN active_local_device a ON a.device_id=m.device_id WHERE a.singleton=1 ORDER BY m.created_utc,m.id LIMIT 101",
+    )?;
+    let mappings = statement
+        .query_map([], |row| {
+            Ok(DevicePathMapping {
+                id: row.get(0)?,
+                device_id: row.get(1)?,
+                source_prefix: row.get(2)?,
+                target_prefix: row.get(3)?,
+                created_utc: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if mappings.len() > MAX_DEVICE_PATH_MAPPINGS {
+        return Err(AppError::Invalid(
+            "device mapping data exceeds the configured limit".into(),
+        ));
+    }
+    Ok(mappings)
+}
+
+fn canonicalize_device_mapping_request(
+    mut request: DevicePathMappingPreviewRequest,
+) -> Result<DevicePathMappingPreviewRequest, AppError> {
+    request.source_prefix = normalize_relocation_prefix(&request.source_prefix, "source prefix")?;
+    request.target_prefix = normalize_relocation_prefix(&request.target_prefix, "target prefix")?;
+    if request
+        .source_prefix
+        .eq_ignore_ascii_case(&request.target_prefix)
+    {
+        return Err(AppError::Invalid(
+            "source and destination prefixes must differ".into(),
+        ));
+    }
+    Ok(request)
+}
+
+fn device_mapping_preview_on_conn(
+    conn: &Connection,
+    request: &DevicePathMappingPreviewRequest,
+) -> Result<DevicePathMappingPreview, AppError> {
+    let request = canonicalize_device_mapping_request(request.clone())?;
+    let device = local_device_from_conn(conn)?;
+    let mappings = device_path_mappings_from_conn(conn)?;
+    if mappings.len() >= MAX_DEVICE_PATH_MAPPINGS {
+        return Err(AppError::Invalid("device mapping limit reached".into()));
+    }
+    if mappings.iter().any(|mapping| {
+        mapping
+            .source_prefix
+            .eq_ignore_ascii_case(&request.source_prefix)
+    }) {
+        return Err(AppError::Invalid(
+            "a mapping for this source prefix already exists".into(),
+        ));
+    }
+
+    let mut statement = conn.prepare(
+        "SELECT resource_id,id,kind,canonical_uri FROM resource_targets WHERE active=1 AND kind IN ('file','folder') ORDER BY resource_id,id LIMIT ?1",
+    )?;
+    let rows = statement.query_map([(MAX_DEVICE_MAPPING_SCANNED_TARGETS + 1) as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut token_hasher = Sha256::new();
+    let binding = serde_json::to_vec(&(&device.id, &request, &mappings))?;
+    token_hasher.update((binding.len() as u64).to_le_bytes());
+    token_hasher.update(binding);
+    let mut scanned_target_count = 0usize;
+    let mut changes = Vec::new();
+    for row in rows {
+        let (resource_id, target_id, kind, canonical_uri) = row?;
+        if scanned_target_count == MAX_DEVICE_MAPPING_SCANNED_TARGETS {
+            return Err(AppError::Invalid(
+                "too many file and folder targets for a bounded mapping preview".into(),
+            ));
+        }
+        scanned_target_count += 1;
+        let target_binding =
+            serde_json::to_vec(&(&resource_id, &target_id, &kind, &canonical_uri))?;
+        token_hasher.update((target_binding.len() as u64).to_le_bytes());
+        token_hasher.update(target_binding);
+        let has_more_specific_existing_mapping = mappings.iter().any(|mapping| {
+            mapping.source_prefix.len() > request.source_prefix.len()
+                && path_has_prefix(&canonical_uri, &mapping.source_prefix)
+                && path_has_prefix(&canonical_uri, &request.source_prefix)
+        });
+        if has_more_specific_existing_mapping {
+            continue;
+        }
+        if let Some(to_uri) = replace_relocation_prefix(
+            &canonical_uri,
+            &request.source_prefix,
+            &request.target_prefix,
+        ) {
+            if changes.len() == MAX_DEVICE_MAPPING_CHANGES {
+                return Err(AppError::Invalid(
+                    "mapping preview affects too many targets".into(),
+                ));
+            }
+            if to_uri.chars().count() > 4096 || !valid_windows_absolute_path(&to_uri) {
+                return Err(AppError::Invalid(
+                    "mapping would produce an invalid Windows path".into(),
+                ));
+            }
+            changes.push(DevicePathMappingChange {
+                resource_id,
+                target_id,
+                from_uri: canonical_uri,
+                to_uri,
+            });
+        }
+    }
+    let preview_token = format!("{:x}", token_hasher.finalize());
+    Ok(DevicePathMappingPreview {
+        device_id: device.id,
+        source_prefix: request.source_prefix,
+        target_prefix: request.target_prefix,
+        preview_token,
+        changes,
+    })
+}
+
+fn device_path_mapping_commit_on_conn(
+    conn: &mut Connection,
+    preview: &DevicePathMappingPreview,
+) -> Result<DevicePathMapping, AppError> {
+    let request = DevicePathMappingPreviewRequest {
+        source_prefix: preview.source_prefix.clone(),
+        target_prefix: preview.target_prefix.clone(),
+    };
+    let tx = conn.transaction()?;
+    let current = device_mapping_preview_on_conn(&tx, &request)?;
+    if preview.device_id != current.device_id
+        || preview.preview_token != current.preview_token
+        || preview.changes != current.changes
+    {
+        return Err(AppError::Invalid(
+            "device mapping preview is stale; create a new preview".into(),
+        ));
+    }
+    let mapping = DevicePathMapping {
+        id: Uuid::new_v4().to_string(),
+        device_id: current.device_id,
+        source_prefix: current.source_prefix,
+        target_prefix: current.target_prefix,
+        created_utc: now_utc(),
+    };
+    tx.execute(
+        "INSERT INTO device_path_mappings(id,device_id,source_prefix,target_prefix,created_utc) VALUES (?1,?2,?3,?4,?5)",
+        params![mapping.id, mapping.device_id, mapping.source_prefix, mapping.target_prefix, mapping.created_utc],
+    )?;
+    tx.commit()?;
+    Ok(mapping)
+}
+
+fn resolve_device_target(
+    conn: &Connection,
+    target: &ResourceTarget,
+) -> Result<ResourceTarget, AppError> {
+    if !matches!(target.kind.as_str(), "file" | "folder") {
+        return Ok(target.clone());
+    }
+    let mappings = device_path_mappings_from_conn(conn)?;
+    let Some(mapping) = mappings
+        .iter()
+        .filter(|mapping| path_has_prefix(&target.canonical_uri, &mapping.source_prefix))
+        .max_by(|left, right| {
+            left.source_prefix
+                .len()
+                .cmp(&right.source_prefix.len())
+                .then_with(|| left.id.cmp(&right.id).reverse())
+        })
+    else {
+        return Ok(target.clone());
+    };
+    let mut resolved = target.clone();
+    resolved.canonical_uri = replace_relocation_prefix(
+        &target.canonical_uri,
+        &mapping.source_prefix,
+        &mapping.target_prefix,
+    )
+    .ok_or_else(|| AppError::Invalid("device path mapping no longer matches target".into()))?;
+    validate_target(&resolved)?;
+    Ok(resolved)
+}
+
+#[tauri::command]
+fn local_device_get(state: State<'_, AppState>) -> Result<LocalDeviceIdentity, AppError> {
+    let conn = lock(&state)?;
+    local_device_from_conn(&conn)
+}
+
+#[tauri::command]
+fn local_device_rename(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<LocalDeviceIdentity, AppError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+        return Err(AppError::Invalid(
+            "device name must contain 1 to 80 printable characters".into(),
+        ));
+    }
+    let conn = lock(&state)?;
+    let changed = conn.execute(
+        "UPDATE local_devices SET name=?1 WHERE id=(SELECT device_id FROM active_local_device WHERE singleton=1)",
+        [name],
+    )?;
+    if changed != 1 {
+        return Err(AppError::NotFound);
+    }
+    local_device_from_conn(&conn)
+}
+
+#[tauri::command]
+fn device_path_mapping_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<DevicePathMapping>, AppError> {
+    let conn = lock(&state)?;
+    device_path_mappings_from_conn(&conn)
+}
+
+#[tauri::command]
+fn device_path_mapping_preview(
+    state: State<'_, AppState>,
+    request: DevicePathMappingPreviewRequest,
+) -> Result<DevicePathMappingPreview, AppError> {
+    let conn = lock(&state)?;
+    device_mapping_preview_on_conn(&conn, &request)
+}
+
+#[tauri::command]
+fn device_path_mapping_commit(
+    state: State<'_, AppState>,
+    preview: DevicePathMappingPreview,
+) -> Result<DevicePathMapping, AppError> {
+    let mut conn = lock(&state)?;
+    device_path_mapping_commit_on_conn(&mut conn, &preview)
+}
+
+#[tauri::command]
+fn device_path_mapping_delete(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
+    valid_uuid(&id, "device mapping id")?;
+    let conn = lock(&state)?;
+    let deleted = conn.execute("DELETE FROM device_path_mappings WHERE id=?1 AND device_id=(SELECT device_id FROM active_local_device WHERE singleton=1)", [id])?;
+    if deleted == 1 {
+        Ok(())
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 #[tauri::command]
@@ -7887,9 +8305,12 @@ where
     conn.execute("INSERT INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc) VALUES (?1,?2,?3,?4,?5,?6,'requested',?7)",params![request.request_id,intent_hash,request.resource_id,target_id,request.profile_id,request.source,launched_at_utc])?;
     let started = std::time::Instant::now();
     let outcome = match target.as_ref() {
-        Some(t) => validate_target(t)
-            .map_err(|e| e.to_string())
-            .and_then(|_| launch(t)),
+        Some(t) => resolve_device_target(conn, t)
+            .and_then(|resolved| {
+                validate_target(&resolved)?;
+                launch(&resolved).map_err(AppError::Launch)
+            })
+            .map_err(|error| error.to_string()),
         None => Err("target_not_found".into()),
     };
     let duration_ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
@@ -8770,6 +9191,11 @@ pub fn run() {
         .setup(|app| {
             let path = app.path().app_local_data_dir()?.join("launcher.sqlite3");
             let conn = open_database(&path).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let device_config_dir = app.path().app_local_data_dir()?;
+            let device_id = local_device_id_for_config_dir(&device_config_dir)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            activate_local_device(&conn, &device_id)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             let default_id =
                 default_profile_id(&conn).map_err(|e| std::io::Error::other(e.to_string()))?;
             let desired = profile_shortcut(&conn, &default_id).unwrap_or_else(|error| {
@@ -8814,6 +9240,12 @@ pub fn run() {
             resource_duplicate,
             resource_relocation_preview,
             resource_relocation_commit,
+            local_device_get,
+            local_device_rename,
+            device_path_mapping_list,
+            device_path_mapping_preview,
+            device_path_mapping_commit,
+            device_path_mapping_delete,
             resource_import_scan,
             resource_import_commit,
             resource_delete,
@@ -12879,7 +13311,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -12927,6 +13359,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(metadata_table, 1);
+        let device_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('local_devices','active_local_device','device_path_mappings')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(device_tables, 3);
+        assert!(Uuid::parse_str(&local_device_from_conn(&conn).unwrap().id).is_ok());
     }
 
     #[test]
@@ -12967,6 +13408,266 @@ mod tests {
         value.targets[0].kind = kind.into();
         value.targets[0].canonical_uri = path.into();
         value
+    }
+
+    fn device_mapping_request(source: &str, target: &str) -> DevicePathMappingPreviewRequest {
+        DevicePathMappingPreviewRequest {
+            source_prefix: source.into(),
+            target_prefix: target.into(),
+        }
+    }
+
+    #[test]
+    fn device_identity_is_stable_in_user_config_and_copied_database_rules_are_inert() {
+        let directory = std::env::temp_dir().join(format!("sw020-config-{}", Uuid::new_v4()));
+        let first_id = local_device_id_for_config_dir(&directory).unwrap();
+        assert_eq!(
+            first_id,
+            local_device_id_for_config_dir(&directory).unwrap()
+        );
+
+        let mut conn = database();
+        activate_local_device(&conn, &first_id).unwrap();
+        let target = local_path_resource("Mapped", "file", "C:\\Source\\one.txt");
+        persist_resource(&mut conn, &target, true, None).unwrap();
+        let preview = device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\Source", "D:\\Local"),
+        )
+        .unwrap();
+        device_path_mapping_commit_on_conn(&mut conn, &preview).unwrap();
+        assert_eq!(device_path_mappings_from_conn(&conn).unwrap().len(), 1);
+
+        let copied_installation_id = Uuid::new_v4().to_string();
+        activate_local_device(&conn, &copied_installation_id).unwrap();
+        assert_ne!(local_device_from_conn(&conn).unwrap().id, first_id);
+        assert!(device_path_mappings_from_conn(&conn).unwrap().is_empty());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM device_path_mappings WHERE device_id=?1",
+                [&first_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1,
+            "copied database retains old rules, but the new local identity cannot apply them"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn device_path_mapping_preview_is_boundary_limited_and_never_rewrites_canonical_targets() {
+        let mut conn = database();
+        let inside = local_path_resource("Inside", "file", "C:\\Work\\inside.txt");
+        let case_variant = local_path_resource("Case variant", "file", "c:/work/variant.txt");
+        let boundary = local_path_resource("Boundary", "folder", "C:\\Workspace\\outside");
+        let app = local_path_resource("App", "app", "C:\\Work\\tool.exe");
+        let shortcut = local_path_resource("Shortcut", "shortcut", "C:\\Work\\tool.lnk");
+        for value in [&inside, &case_variant, &boundary, &app, &shortcut] {
+            persist_resource(&mut conn, value, true, None).unwrap();
+        }
+
+        let preview = device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\Work", "D:\\Portable"),
+        )
+        .unwrap();
+        assert_eq!(preview.changes.len(), 2);
+        assert!(preview.changes.iter().any(|change| {
+            change.resource_id == inside.id && change.to_uri == "D:\\Portable\\inside.txt"
+        }));
+        assert!(preview.changes.iter().any(|change| {
+            change.resource_id == case_variant.id && change.to_uri == "D:\\Portable\\variant.txt"
+        }));
+        let saved = device_path_mapping_commit_on_conn(&mut conn, &preview).unwrap();
+        let canonical: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                [&inside.targets[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(canonical, "C:\\Work\\inside.txt");
+
+        let resolved = resolve_device_target(&conn, &inside.targets[0]).unwrap();
+        assert_eq!(resolved.canonical_uri, "D:\\Portable\\inside.txt");
+        assert_eq!(resolved.id, inside.targets[0].id);
+        assert_eq!(resolved.arguments, inside.targets[0].arguments);
+        assert_eq!(
+            resolved.working_directory,
+            inside.targets[0].working_directory
+        );
+        assert!(device_path_mapping_list_for_id(&conn, &saved.id));
+        assert!(!path_has_prefix("C:\\Workspace\\outside", "C:\\Work"));
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: inside.id.clone(),
+            target_id: Some(inside.targets[0].id.clone()),
+            profile_id: None,
+            source: "other".into(),
+        };
+        launch_event_with(&mut conn, &request, |launched| {
+            assert_eq!(launched.canonical_uri, "D:\\Portable\\inside.txt");
+            Ok(())
+        })
+        .unwrap();
+        let canonical_after_handoff: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                [&inside.targets[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(canonical_after_handoff, "C:\\Work\\inside.txt");
+    }
+
+    fn device_path_mapping_list_for_id(conn: &Connection, id: &str) -> bool {
+        device_path_mappings_from_conn(conn)
+            .unwrap()
+            .iter()
+            .any(|mapping| mapping.id == id)
+    }
+
+    #[test]
+    fn device_mapping_rejects_bad_path_forms_and_stale_preview_without_partial_insert() {
+        for (source, target) in [
+            ("relative\\source", "D:\\target"),
+            ("file:///C:/source", "D:\\target"),
+            ("\\\\?\\C:\\source", "D:\\target"),
+            ("C:\\source", "\\\\.\\device"),
+        ] {
+            assert!(
+                canonicalize_device_mapping_request(device_mapping_request(source, target))
+                    .is_err()
+            );
+        }
+        assert!(canonicalize_device_mapping_request(device_mapping_request(
+            "\\\\server\\share\\root",
+            "D:/Portable/root"
+        ))
+        .is_ok());
+
+        let mut conn = database();
+        let resource = local_path_resource("Stale", "file", "C:\\Source\\before.txt");
+        persist_resource(&mut conn, &resource, true, None).unwrap();
+        let request = device_mapping_request("C:\\Source", "D:\\Target");
+        let preview = device_mapping_preview_on_conn(&conn, &request).unwrap();
+        conn.execute(
+            "UPDATE resource_targets SET canonical_uri='C:\\Source\\after.txt' WHERE id=?1",
+            [&resource.targets[0].id],
+        )
+        .unwrap();
+        assert!(device_path_mapping_commit_on_conn(&mut conn, &preview).is_err());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM device_path_mappings", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn device_mapping_commit_rolls_back_and_longest_prefix_wins_at_launch() {
+        let mut conn = database();
+        let resource = local_path_resource("Nested", "file", "C:\\Work\\Project\\one.txt");
+        persist_resource(&mut conn, &resource, true, None).unwrap();
+        let device = local_device_from_conn(&conn).unwrap();
+        let older = DevicePathMapping {
+            id: "10000000-0000-4000-8000-000000000001".into(),
+            device_id: device.id.clone(),
+            source_prefix: "C:\\Work\\Project".into(),
+            target_prefix: "E:\\Project".into(),
+            created_utc: now_utc(),
+        };
+        conn.execute("INSERT INTO device_path_mappings(id,device_id,source_prefix,target_prefix,created_utc) VALUES (?1,?2,?3,?4,?5)", params![older.id, older.device_id, older.source_prefix, older.target_prefix, older.created_utc]).unwrap();
+        let broad_preview =
+            device_mapping_preview_on_conn(&conn, &device_mapping_request("C:\\Work", "F:\\Broad"))
+                .unwrap();
+        assert!(broad_preview.changes.is_empty());
+        device_path_mapping_commit_on_conn(&mut conn, &broad_preview).unwrap();
+        let resolved = resolve_device_target(&conn, &resource.targets[0]).unwrap();
+        assert_eq!(resolved.canonical_uri, "E:\\Project\\one.txt");
+        let fallback = local_path_resource("Fallback", "folder", "C:\\Work\\Other");
+        let fallback_resolved = resolve_device_target(&conn, &fallback.targets[0]).unwrap();
+        assert_eq!(fallback_resolved.canonical_uri, "F:\\Broad\\Other");
+
+        let fresh_preview = device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\Other", "F:\\Other"),
+        )
+        .unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_device_mapping BEFORE INSERT ON device_path_mappings BEGIN SELECT RAISE(ABORT,'injected mapping failure'); END;").unwrap();
+        assert!(device_path_mapping_commit_on_conn(&mut conn, &fresh_preview).is_err());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM device_path_mappings", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 2,
+            "failed insert must leave all prior mappings intact"
+        );
+    }
+
+    #[test]
+    fn device_mapping_preview_enforces_mapping_count_limit() {
+        let conn = database();
+        let device = local_device_from_conn(&conn).unwrap();
+        for index in 0..MAX_DEVICE_PATH_MAPPINGS {
+            let mapping = DevicePathMapping {
+                id: Uuid::new_v4().to_string(),
+                device_id: device.id.clone(),
+                source_prefix: format!("C:\\Source{index}"),
+                target_prefix: format!("D:\\Target{index}"),
+                created_utc: now_utc(),
+            };
+            conn.execute(
+                "INSERT INTO device_path_mappings(id,device_id,source_prefix,target_prefix,created_utc) VALUES (?1,?2,?3,?4,?5)",
+                params![mapping.id, mapping.device_id, mapping.source_prefix, mapping.target_prefix, mapping.created_utc],
+            )
+            .unwrap();
+        }
+        let overflow = DevicePathMapping {
+            id: Uuid::new_v4().to_string(),
+            device_id: device.id,
+            source_prefix: "C:\\Overflow".into(),
+            target_prefix: "D:\\Overflow".into(),
+            created_utc: now_utc(),
+        };
+        assert!(conn.execute(
+            "INSERT INTO device_path_mappings(id,device_id,source_prefix,target_prefix,created_utc) VALUES (?1,?2,?3,?4,?5)",
+            params![overflow.id, overflow.device_id, overflow.source_prefix, overflow.target_prefix, overflow.created_utc],
+        ).is_err());
+        assert!(device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\NewSource", "D:\\NewTarget")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn device_mapping_preview_caps_the_number_of_changed_targets() {
+        let conn = database();
+        let now = now_utc();
+        for _ in 0..=MAX_DEVICE_MAPPING_CHANGES {
+            let resource_id = Uuid::new_v4().to_string();
+            let target_id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO resources(id,resource_type,display_name,default_action,created_utc,updated_utc) VALUES (?1,'file','Generated','open',?2,?2)",
+                params![resource_id, now],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO resource_targets(id,resource_id,kind,canonical_uri,priority,active) VALUES (?1,?2,'file',?3,0,1)",
+                params![target_id, resource_id, format!("C:\\Source\\{target_id}.txt")],
+            )
+            .unwrap();
+        }
+        assert!(device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\Source", "D:\\Portable")
+        )
+        .is_err());
     }
 
     #[test]

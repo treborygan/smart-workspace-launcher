@@ -11,3 +11,7 @@ V1 READY is a distinct milestone, not the end of the full program. Do not issue 
 When verified, notify once: **Smart Workspace Launcher V1 ready — Windows tested**. Include release URL, direct asset URL, SHA256, evidence for Windows acceptance tests, installation instructions, code-signing disclosure and known limitations. Update release-tracking issue and status. Do not label source-only ZIP, speculative build or Linux-only tests ready.
 
 Proceed immediately through SW-013..SW-025 (V1.1, V1.2, V2.0) after V1 notification. Each later release repeats Windows packaging, QA and publication gates. If Windows testing is not available, label release BLOCKED, request required environment, and continue feasible cross-platform tasks.
+
+## Hosted preview is not the release event (2026-10-22)
+
+[Windows CI](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925) and [preview packaging](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976) passed for main commit `98b1432`. The preview contains unsigned artifacts with a 14-day retention period, **not** a tagged V1 GitHub Release. No standard-user Windows 11 W-001–W-014 evidence has yet been verified; `releases/v1/readiness.json` remains `BLOCKED`. Do **not** trigger the V1 READY notification or update release gate to PASS based on the hosted build alone.

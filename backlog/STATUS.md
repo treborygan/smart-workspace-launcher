@@ -1,43 +1,50 @@
 # Current implementation status
 
-Updated 2026-10-21 21:51 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`. SW-013 implementation is integrated on `feature/sw-013-dynamic-collections`; final independent QA passed with no blocker; Replace/remap and injected rollback regression coverage is present. PR creation is next.
+**Verified 2026-10-22 against GitHub `main`:** `98b1432a6596152e1e6885e9ab569266994f1cd6`. This is a **repository snapshot**, not a claim that any Codex agent is currently running.
 
-## Environment and release status
+## Release status
 
-Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a real Windows 11 x64 host are unavailable. Linux Rust tests stop before project compilation because GLib >=2.70 development files are missing; Windows GNU checks cannot run without MinGW. No Windows binary, portable package, installer, GitHub Release upload, or V1 READY notice exists. `releases/v1/readiness.json` remains BLOCKED. `.github/workflows/` remains absent.
+| Gate | Result | Evidence |
+|---|---|---|
+| V1 application implementation | Integrated in `main`; native behavior still awaiting interactive validation | [SW-001–SW-011](../docs/TRACEABILITY.md) |
+| Windows-hosted CI | **PASS** — Windows Server 2025 x64, 73 frontend tests (11 files), 63 Rust tests, Python/contract checks, frontend production build | [CI run 39723525925](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925) |
+| Windows x64 preview packaging | **PASS** — Tauri EXE, NSIS installer, portable ZIP, package structure and SHA256 | [Build run 39723525976](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976) |
+| Preview artifacts | **AVAILABLE TEMPORARILY** — unsigned and unqualified | [Portable](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402740774) · [Installer](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402700842) |
+| W-001–W-014 on actual Windows 11 x64 | **NOT_RUN / BLOCKED** — no evidence of completed standard-user GUI acceptance | [Test matrix](../docs/TEST_AND_ACCEPTANCE.md) |
+| Final GitHub Release / V1 READY notice | **BLOCKED** — no certified V1 release asset | [Readiness JSON](../releases/v1/readiness.json) |
 
-## Completed implementation
+**Portable preview:** `smart-workspace-launcher-v0.1.0-preview.1-win-x64-portable.zip` inside the GitHub Actions artifact, SHA256 `c209f2c27382f1c77215b0a4344515114124258117598373da78f8d727197f4c`. Do **not** mark `readiness.json` PASS based on this build.
 
-- SW-001..004 foundation, profiles, CRUD, launch/history and layouts (#26).
-- SW-005 Quick Launch (#27).
-- SW-007 metadata and analytics backend/UI (#30/#33).
-- SW-008 safe profile archive import/export (#34).
-- SW-009 independent Dock (#29).
-- SW-010 Resource Explorer, Inspector, profile themes and responsive dashboard (#35; merged `9c8f8a7`).
-- SW-011 security hardening (#36; merged `0a212d8`): Windows path checks, HTTPS credential rejection, profile/resource launch authorization, replay intent/target validation, bounded profile names, and SQLite timeout/trusted schema settings.
+Artifacts are subject to the workflow's **14-day retention** and may require GitHub sign-in. There is no permanent V1 download under [Releases](https://github.com/treborygan/smart-workspace-launcher/releases) yet.
 
-## In progress
+## Mainline implementation
 
-- SW-013 PR #37 is open against `main` (head `f8fbb3d`); final independent QA passed. GitHub review submissions are not yet present.
-- SW-014 implementation is proceeding cross-platform on a stacked feature branch atop SW-013; SW-012 remains a Windows-only release blocker and is not claimed complete.
+- SW-001–SW-004 foundation, SQLite, resources, profiles and layouts; SW-005 keyboard launcher; SW-006 Dashboard; SW-007 metadata/analytics; SW-008 import/export; SW-009 independent Dock; SW-010 Explorer/Inspector/themes; SW-011 security/hardening.
+- **SW-013** dynamic shortcuts and smart collections: [PR #37](https://github.com/treborygan/smart-workspace-launcher/pull/37) **merged** as `77b3b1b`.
+- **Windows CI and preview packaging:** [PR #40](https://github.com/treborygan/smart-workspace-launcher/pull/40) **merged** as `98b1432`. The work fixed an absent Windows icon, native Rust compile errors, synthetic Windows test fixtures, regression assertions, and PowerShell verification argument binding.
 
-- SW-013 (issue #12) implementation and final independent QA are complete locally; PR #37 is open; independent QA passed. GitHub review is pending. It adds profile-scoped bounded AND-filter smart collections, named shortcuts to existing profile resources and optional active owned targets, Quick Launch integration, profile archive round trips, target-bound preview tokens and import collision details. Archive imports do not execute package content. No per-resource/global OS hotkeys are included; the existing global Quick Launch hotkey remains.
+## Active development proposals (not part of `main`)
 
-## Verification evidence
+The following PRs were open at the verified snapshot. An open PR does not mean a feature has passed QA or is released:
 
-- SW-013 current tree: `npm run typecheck && npm test -- --run && npm run frontend:build` — PASS (73 tests across 11 files; production build, existing non-fatal Vite dynamic-import warning). `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check` — PASS. `python tests/test_profile_archive_contract.py -q` — PASS (11 tests); `python scripts/verify_handoff.py` — PASS. `python scripts/check_release_gate.py` — BLOCKED as expected. Focused Rust tests including Replace/remap and injected transaction rollback are authored, but blocked before compilation by missing GLib/GObject >=2.70 development packages. Windows GNU checks remain blocked by missing MinGW; Windows acceptance unavailable. Final QA found no SW-013 blocker.
-- On integrated SW-011: `npm ci --cache /tmp/swl-npm-cache && npm run typecheck && npm test && npm run frontend:build && git diff --check` — PASS; 8 frontend test files/56 tests; build and diff check pass. Vite reports a non-failing ineffective dynamic import warning.
-- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
-- `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1` — PASS.
-- `python -m unittest discover -s tests -v` — PASS (11 archive QA harness tests).
-- `python scripts/verify_handoff.py` — PASS (handoff/schema/fixture checks, not runtime verification).
-- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — BLOCKED before project compile: missing GLib >=2.70 development files.
-- QA reviewed SW-011 integrated head `b7fe9b6`: no blocker. Caveat: replaying a formerly valid explicit-target request after that target is deactivated returns NotFound; it does not launch again.
-- Performance targets and 10k-resource measurements remain unverified. No Windows acceptance, packaging, DPI/native, startup, memory, or Shell behavior has been confirmed.
+| Work | PR |
+|---|---|
+| SW-014 workspace action sequences | [#38](https://github.com/treborygan/smart-workspace-launcher/pull/38) |
+| SW-015 usage dashboard, export and retention | [#41](https://github.com/treborygan/smart-workspace-launcher/pull/41) |
+| SW-016 resource relationships and snapshots | [#42](https://github.com/treborygan/smart-workspace-launcher/pull/42) |
+| SW-017 duplicate/relocation assistant | [#43](https://github.com/treborygan/smart-workspace-launcher/pull/43) |
+| SW-018 discovery importer | [#44](https://github.com/treborygan/smart-workspace-launcher/pull/44) |
+| SW-019 widgets | [#45](https://github.com/treborygan/smart-workspace-launcher/pull/45) |
+| SW-020 per-device mappings | [#46](https://github.com/treborygan/smart-workspace-launcher/pull/46) |
+| SW-021 permissioned extensions | [#47](https://github.com/treborygan/smart-workspace-launcher/pull/47) |
 
-## Next executable tasks
+## Next executable steps
 
-1. Finish SW-013 independent review and merge its feature PR, then continue SW-014..SW-025 in dependency order while performing cross-platform work available here.
-2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
+1. Execute the **actual Windows 11 x64 interactive acceptance suite W-001–W-014** using the GitHub Actions preview package on a standard-user installation. Capture reproducible, redacted evidence of Shell default handlers, global hotkeys, tray, Dock, multi-monitor/DPI, local profiles, offline use and a freshly extracted executable.
+2. If failures arise, repair them in focused GitHub PRs and rerun Windows CI/build plus affected Windows 11 tests.
+3. Only after all V1 criteria pass, publish a permanent tagged GitHub release with verified checksum, release notes and the user-facing V1 READY notice.
+4. Continue reviewing/merging advanced SW-014–SW-025 changes in dependency order; do not confuse V1 readiness with V1.1–V2 completion.
 
-Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).
+Useful references: [Windows CI and preview instructions](../docs/CI_WINDOWS.md) · [Release gate](../docs/NOTIFICATIONS_AND_RELEASE_GATES.md) · [Codex resume](../CODEX_RESUME.md) · [Roadmap](ROADMAP.md).
+
+For activity/agent session state, see [AGENT_STATUS.json](AGENT_STATUS.json), which separates historical agent task records from observed GitHub facts.

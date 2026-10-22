@@ -23,6 +23,35 @@ Both use `GITHUB_TOKEN` with only `contents: read`; no external secrets, deploym
 
 A pull request to `main` automatically triggers Windows CI. Merge only after CI output is reviewed and relevant failures fixed. The first merge to `main` also triggers the Windows preview build.
 
+## First verified preview artifacts (2026-10-22)
+
+The approved workflows are implemented on `main` from [merged PR #40](https://github.com/treborygan/smart-workspace-launcher/pull/40) at commit `98b1432a6596152e1e6885e9ab569266994f1cd6`.
+
+| Recorded result | Evidence |
+|---|---|
+| Windows CI **PASS** — 73 frontend tests / 11 files; 63 Rust tests; Python/contract checks; typecheck and production frontend build | [Run 39723525925](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925) |
+| Windows preview build **PASS** — native Tauri EXE, NSIS, ZIP, checksum, package validation | [Run 39723525976](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976) |
+| Portable Windows x64 ZIP + SHA256 | [Artifact 12402740774](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402740774) |
+| NSIS installer | [Artifact 12402700842](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402700842) |
+| Build evidence logs | [Artifact 12402561192](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402561192) |
+
+**Portable inner ZIP filename:** `smart-workspace-launcher-v0.1.0-preview.1-win-x64-portable.zip`.
+
+**Portable inner ZIP SHA256:**
+```text
+c209f2c27382f1c77215b0a4344515114124258117598373da78f8d727197f4c
+```
+
+These are **unsigned, pre-release GitHub Actions artifacts**, not permanent release downloads. Each linked artifact is downloaded as an **outer ZIP**; extract it to obtain the inner portable ZIP and `.sha256`, or the NSIS installer. Downloads may require GitHub sign-in. Artifact retention is configured to **14 days**; links will expire, after which use a fresh successful run or a properly certified GitHub Release.
+
+Check the SHA256 of the **inner portable ZIP** after extraction, for example in PowerShell:
+```powershell
+Get-FileHash -Algorithm SHA256 .\smart-workspace-launcher-v0.1.0-preview.1-win-x64-portable.zip
+```
+Compare the returned hash with the value above or the bundled `.sha256` file. A matching hash confirms file integrity, **not** successful Windows 11 runtime behavior or publisher identity.
+
+**Release status:** No W-001–W-014 Windows 11 standard-user interactive acceptance evidence has been submitted. `releases/v1/readiness.json` must remain `BLOCKED` and there must be no V1 READY announcement.
+
 ## Required evidence
 
 - Exact commit SHA and runner OS/architecture/tool versions
@@ -62,9 +91,9 @@ CI logs are useful evidence that tests **ran on GitHub-hosted Windows Server**, 
 
 ## Release progression
 
-1. Merge CI and validate successful Windows-hosted runs.
-2. Build and download preview Windows ZIP; inspect logs and checksum.
-3. Fix all blocking build/test issues using focused PRs and review.
-4. On a real approved Windows 11 x64 machine, run W-001..W-014 as a **standard user** and retain evidence.
+1. **Done (2026-10-22):** Merge CI (#40) and verify a successful hosted-Windows CI run.
+2. **Done:** Build portable preview ZIP/installer and verify ZIP format and checksum in the hosted runner. A fresh-download test on Windows 11 is still outstanding.
+3. Fix any remaining application issues uncovered by native testing using focused PRs and review.
+4. On a real approved Windows 11 x64 machine, run W-001..W-014 as a **standard user**, validate the freshly downloaded preview and retain redacted evidence.
 5. Only after full acceptance, publish `v1.0.0` with release asset, SHA256, notes and V1-ready notification.
 6. Continue V1.1, V1.2 and V2.0 using the same CI plus Windows release gates.

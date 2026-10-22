@@ -1,15 +1,31 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-21 21:51 UTC
+## Verified GitHub checkpoint — 2026-10-22
 
-Repository: `treborygan/smart-workspace-launcher`. Main includes SW-011 PR #36 merge `0a212d8541328d3b41033ba36496871c2b05d8dc`. SW-013 implementation is complete locally in `/workspace/sw011-integration`, branch `feature/sw-013-dynamic-collections`, based on latest main. Commits: `39733ca`, `62fd2ec`, `f19ce98`, `239d2d7`, `a18c6dc`. Final QA passed without blockers. PR #37 is open against `main`; independent QA passed, but GitHub review submissions are pending. SW-014 is now underway on stacked branch `feature/sw-014-action-sequences` based on this head.
+Repository: [treborygan/smart-workspace-launcher](https://github.com/treborygan/smart-workspace-launcher). Default branch `main` at `98b1432a6596152e1e6885e9ab569266994f1cd6` when checked. **Re-fetch branch, PRs, Actions and issues before continuing: this checkpoint is not live agent telemetry.**
 
-SW-011 changes include input/path validation, HTTPS credential rejection, launch profile/resource authorization, intent-bound replay validation, bounded profile names, and SQLite timeout/trusted schema settings. QA found no blocker. Residual behavior: replaying a formerly valid explicit-target request after target deactivation returns NotFound without relaunching. SW-011 checks passed for frontend typecheck, 8 test files/56 tests, production build, diff check, Rust formatting, cargo metadata, 11 Python archive harness tests, and handoff verification. Rust library tests remain blocked because GLib >=2.70 development files are missing.
+### Completed and verified
 
-Environment: Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1. No PowerShell or real Windows 11 x64 host is available. No executable/package/release/READY notice exists. V1 remains BLOCKED. **2026-10-22 update:** GitHub Actions Windows CI/preview-build exception was explicitly approved and is being added through PR #40; hosted Windows Server automated checks do not replace W-001..W-014 Windows 11 acceptance.
+- PR #37 (SW-013 dynamic shortcuts and smart collections) merged at `77b3b1b`.
+- PR #40 (approved GitHub Actions exception, Windows x64 CI/build workflow, native compiler/test fixes) merged at `98b1432`.
+- [Main Windows CI run 39723525925](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925): PASS on hosted Windows Server 2025 x64; 73 frontend tests (11 files), 63 Rust tests, Python/contract/handoff checks, typecheck and production frontend build.
+- [Main Windows preview build 39723525976](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976): PASS; produced native `.exe`, NSIS installer, SHA256-validated portable ZIP. Download links and checksum are in [docs/CI_WINDOWS.md](docs/CI_WINDOWS.md).
+- The preview `v0.1.0-preview.1` is **unsigned, unqualified**, distributed as temporary GitHub Actions artifacts.
 
-## Resume actions
+### Outstanding release blocker
 
-1. Await GitHub review and merge PR #37 after review. The PR artifact attachment tool returned connection closed twice; retry attachment.
-2. Continue SW-014..SW-025 cross-platform work in dependency order while Windows testing is unavailable. The dynamic collection scope uses bounded saved AND filters and shortcuts that target existing profile resources; no per-resource OS hotkeys are part of SW-013.
-3. Rust test compilation is currently BLOCKED by missing GLib/GObject >=2.70 dev packages; Windows GNU checks are blocked by missing MinGW. Run `docs/TEST_AND_ACCEPTANCE.md` and PowerShell packaging/verification scripts on real Windows 11 x64 before any V1 release or READY notice. V1 remains BLOCKED; no EXE, portable package, installer, Release, or READY notice exists.
+**SW-012 is not complete.** W-001–W-014 still lack real standard-user Windows 11 x64 desktop execution evidence. A Windows Server hosted runner with successful Rust/React tests and an EXE is not sufficient. [V1 readiness](releases/v1/readiness.json) stays `BLOCKED`, no final `v1.0.0` GitHub Release or V1 READY notification.
+
+### Advanced development awaiting review
+
+At the checkpoint, PRs [#38](https://github.com/treborygan/smart-workspace-launcher/pull/38) and [#41–#47](https://github.com/treborygan/smart-workspace-launcher/pulls) are **open**, spanning SW-014 through SW-021. Treat open branches as unmerged changes. Review their actual bases, test evidence, and potential overlaps before integration. V1.1, V1.2 and V2 remain goals, not certified releases.
+
+## Execute next
+
+1. Verify latest main branch, open PR list, current workflow runs, issue statuses and dependencies; do not follow the former 2026-10-21 checkpoint describing absent Actions/EXE or open PR #37.
+2. Obtain a real Windows 11 x64 standard-user interactive environment when available; download/checksum the preview and execute W-001–W-014, retaining sanitized evidence. Hosted Actions CI remains the repeatable source-test/build stage.
+3. Continue advanced PR reviews/fixes independently where safe. Agents must explicitly spawn in the actual Codex runtime; role files are configuration, not proof of running agents.
+4. Maintain `backlog/STATUS.md`, `backlog/AGENT_STATUS.json`, issues and PRs; log completed tests, commits and blockers with exact evidence, never inferred success.
+5. When all release gates pass, publish signed or correctly disclosed unsigned production assets, verified SHA256, release notes and the distinct V1 READY notice; continue SW-013–SW-025.
+
+See [docs/CI_WINDOWS.md](docs/CI_WINDOWS.md), [docs/TEST_AND_ACCEPTANCE.md](docs/TEST_AND_ACCEPTANCE.md), [docs/NOTIFICATIONS_AND_RELEASE_GATES.md](docs/NOTIFICATIONS_AND_RELEASE_GATES.md), and [docs/MULTI_AGENT_WORKFLOW.md](docs/MULTI_AGENT_WORKFLOW.md).

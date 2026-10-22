@@ -2,7 +2,7 @@
 
 ## Checkpoint — 2026-10-22 02:48 UTC
 
-Repository `treborygan/smart-workspace-launcher`, coordinator `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, current commit `2ca5ea46b4f7d96385a67b5c67281597aaac33d2`. Canonical live progress is in `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. Host is Debian 13 x86_64; no real Windows 11 x64 or PowerShell verification is available. V1/SW-012 remains BLOCKED.
+Repository `treborygan/smart-workspace-launcher`, coordinator `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, current commit `e186f3c`. Canonical live progress is in `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. Host is Debian 13 x86_64; no real Windows 11 x64 or PowerShell verification is available. V1/SW-012 remains BLOCKED.
 
 ## Active SW-021 work
 

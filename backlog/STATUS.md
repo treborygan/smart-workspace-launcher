@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:40 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:48 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -8,15 +8,15 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs returned no submissions at 2026-10-22 02:33 UTC. Independent QA read-only review found no actionable blocker.
-- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs returned no submissions at 2026-10-22 02:33 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
+- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs returned no submissions at 2026-10-22 02:47 UTC. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs returned no submissions at 2026-10-22 02:47 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44, head `9a984e5`; implementation and independent QA are complete. Rust test compilation remains blocked by missing GLib/GObject; no Windows acceptance.
 - PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `3a12ab7`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
-- PR #47 (SW-021) OPEN_DRAFT at `7614a31`, base `feature/sw-020-device-paths` / PR #46. It contains manifest validation, local registry, stored grant policy and UI; it does **not** execute extension code, so SW-021 remains in progress pending a sandbox runtime and effective permission-enforced host APIs. GitHub reports the stacked PR as not currently mergeable pending its base chain; do not merge out of dependency order.
+- PR #47 (SW-021) OPEN_DRAFT at `e186f3c`, base `feature/sw-020-device-paths` / PR #46. It contains the registry/policy foundation plus a frozen, independently reviewed sandbox runtime contract (`2ca5ea4`). Core package/runtime and corresponding UI implementation are active in isolated worktrees; it does **not** yet execute extension code. Issue #21 remains in progress. GitHub previously reported the stacked PR as not mergeable pending its base chain; do not merge out of dependency order.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## SW-020 implementation — issue #20
@@ -25,7 +25,7 @@ SW-020 adds random per-user local device identity, device labels, approved-by-co
 
 ## SW-021 contract and implementation — issue #21
 
-SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33cf`. Core migration v12 and the accessible registry UI are implemented on the draft branch. The registry stores validated manifests and explicit grants only; it does not execute extension code or provide filesystem/process/network/shell capabilities. Extensions default disabled; grants are a subset of unique requested capabilities. The typed API supports manifest list/register, grant updates, explicit enablement and removal. Manifest fields are bounded, unknown fields rejected and serialized input capped at 4 KiB. Independent QA passed the contract, Core (after fixing the test ID), and UI. This is the registry/policy foundation only; SW-021 remains in progress until a separately reviewed sandbox runtime and permission-enforced host API exist. Windows V1 remains blocked.
+The integrated SW-021 foundation adds schema v12, validated extension manifests, explicit grants, enablement and confirmed removal, with independent QA. It is registry/policy only; it does not run package code. The sandbox runtime contract was then frozen and independently QA-approved in commit `2ca5ea4`: exact `.swext` entries/size bounds; preview-bound package hashes; no Wasm imports or start sections; strict ABI and resource bounds; explicit user-only execution; capability-to-input-field schema pairing; UUID-ordered metadata within a 64 KiB serialized budget; and bounded text-only suggestions. See `docs/EXTENSION_SDK.md` and the extension schemas. Core works in `/workspace/sw021-runtime-core`; UI works in `/workspace/sw021-runtime-ui`. Their implementation is not yet integrated or verified. SW-021 remains in progress. V1 remains BLOCKED.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
 
@@ -50,6 +50,8 @@ SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33c
 - Independent QA re-reviewed UI and Core fixes and found no remaining blocker. No Windows acceptance.
 
 ## Verification and release status
+
+At 2026-10-22 02:47 UTC, PR #38 and #41 review and inline-thread APIs returned empty. Independent read-only QA found no actionable blocker; #41 has a non-blocking DB-lock duration concern during large CSV export.
 
 - `npm ci --cache /tmp/swl-npm-cache` — PASS.
 - `npm run typecheck` — PASS.

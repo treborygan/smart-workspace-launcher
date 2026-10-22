@@ -148,6 +148,39 @@ export interface WorkspaceSnapshotRestoreResult {
   missingResourceIds: string[];
 }
 
+/** Duplicate a resource already assigned to this profile, regenerating all IDs. */
+export interface ResourceDuplicateRequest {
+  profileId: string;
+  resourceId: string;
+  displayName?: string;
+}
+
+export interface ResourceRelocationPreviewRequest {
+  profileId: string;
+  sourcePrefix: string;
+  destinationPrefix: string;
+  /** Omitted means all matching file/folder targets in this profile. */
+  resourceIds?: string[];
+}
+
+export interface ResourceRelocationChange {
+  resourceId: string;
+  targetId: string;
+  fromUri: string;
+  toUri: string;
+}
+
+/** Preview-bound; commit must recompute and match this exact token and change set. */
+export interface ResourceRelocationPreview extends ResourceRelocationPreviewRequest {
+  previewToken: string;
+  changes: ResourceRelocationChange[];
+}
+
+export interface ResourceRelocationResult {
+  updatedTargetCount: number;
+  updatedResourceIds: string[];
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -352,6 +385,9 @@ export interface CommandMap {
   resource_relationship_list: { args: { profileId: string }; result: ResourceRelationship[] };
   resource_relationship_save: { args: { relationship: ResourceRelationship }; result: ResourceRelationship };
   resource_relationship_delete: { args: { profileId: string; id: string }; result: void };
+  resource_duplicate: { args: { request: ResourceDuplicateRequest }; result: Resource };
+  resource_relocation_preview: { args: { request: ResourceRelocationPreviewRequest }; result: ResourceRelocationPreview };
+  resource_relocation_commit: { args: { preview: ResourceRelocationPreview }; result: ResourceRelocationResult };
   workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };
   workspace_snapshot_create: { args: { profileId: string; name: string }; result: WorkspaceSnapshot };
   workspace_snapshot_delete: { args: { profileId: string; id: string }; result: void };

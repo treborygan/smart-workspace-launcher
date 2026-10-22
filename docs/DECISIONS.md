@@ -10,3 +10,7 @@
 - Default OS handlers; imported commands disabled. Windows release requires direct real standard-user testing.
 - Naming provisional: do not lock app IDs to a final brand. Working name Smart Workspace Launcher.
 - When details conflict, prioritize newer explicit user instructions and document the tradeoff.
+
+## SW-017 interpretation — duplicate and relocation assistant
+
+The roadmap says “duplicate/missing relocation” but does not define whether relocation physically moves user files. To keep the assistant local, reversible and bounded, duplication creates a new profile resource and new target UUIDs while leaving filesystem contents untouched. Relocation is an explicit preview-and-confirm mapping of stored file/folder target path prefixes; it never copies/moves/deletes files or scans directories. Commit is bound to the exact preview and revalidates source URIs/ownership transactionally. Non-file/folder targets are excluded.

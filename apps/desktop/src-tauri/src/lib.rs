@@ -9683,9 +9683,6 @@ where
         if existing.6 == "requested" {
             conn.execute("UPDATE launch_request_guard SET status='failed',error_code='launch_outcome_unknown' WHERE request_id=?1", [&request.request_id])?;
             conn.execute("UPDATE launch_events SET status='failed',error_code='launch_outcome_unknown',message='The prior launch handoff was interrupted; it was not retried to avoid opening the resource twice.' WHERE request_id=?1 AND status='requested'", [&request.request_id])?;
-            let event = usage_event_from_guard(conn, &request.request_id)?;
-            record_guard_event(conn, request, &event)?;
-            return Ok(event);
         }
         return usage_event_from_guard(conn, &request.request_id);
     }
@@ -12520,14 +12517,62 @@ mod tests {
             recovered.steps[0].result.error_code.as_deref(),
             Some("launch_outcome_unknown")
         );
-        let event_status: String = conn
+        let event_count: i64 = conn
             .query_row(
-                "SELECT status FROM launch_events WHERE request_id=?1",
+                "SELECT COUNT(*) FROM launch_events WHERE request_id=?1",
                 [&recovered.steps[0].result.request_id],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(event_status, "failed");
+        assert_eq!(event_count, 0);
+    }
+
+    #[test]
+    fn replay_after_purge_does_not_resurrect_missing_launch_history() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let item = resource("Purged interrupted launch");
+        persist_resource(&mut conn, &item, true, Some(&profile_id)).unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: item.id.clone(),
+            target_id: None,
+            profile_id: Some(profile_id.clone()),
+            source: "dashboard".into(),
+        };
+        let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = launch_event_with(&mut conn, &request, |_| {
+                panic!("simulate interruption after durable launch reservation")
+            });
+        }));
+        assert!(interrupted.is_err());
+
+        // The request guard remains for replay safety; purging removes analytics rows.
+        assert_eq!(
+            purge_usage_history_for_profile(&conn, &profile_id).unwrap(),
+            0
+        );
+        let retry = launch_event_with(&mut conn, &request, |_| {
+            panic!("an uncertain handoff must never be repeated")
+        })
+        .unwrap();
+        assert_eq!(retry.error_code.as_deref(), Some("launch_outcome_unknown"));
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE request_id=?1",
+                [&request.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 0);
+        let guard_status: String = conn
+            .query_row(
+                "SELECT status FROM launch_request_guard WHERE request_id=?1",
+                [&request.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(guard_status, "failed");
     }
 
     #[test]

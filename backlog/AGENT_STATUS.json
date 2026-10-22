@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:40:00Z",
+  "updated_at_utc": "2026-10-22T02:41:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "6073856ad3f150f61970d8f11fb1a9967ba2cf2c",
+    "head_sha": "7614a31ece437bb40c91d05a62259411ba437389",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 registry/policy foundation only; no extension code runtime/effective grants. Contract, Core and UI independent reviews pass after fixture correction. Frontend 132 tests/typecheck/build, Rust fmt, handoff and diff checks pass. Rust tests blocked before project compile by missing GLib/GObject. Issue remains in progress; Windows V1 blocked."
+    "review_status": "Registry/policy foundation only; no extension code runtime/effective grants. Contract, Core, UI independent reviews pass after fixture correction. Frontend 132 tests/typecheck/build, Rust fmt, handoff and diff checks pass. Rust tests blocked before project compile by missing GLib/GObject. Issue remains in progress. GitHub reports stacked PR not mergeable pending base chain; no merge. V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -413,7 +413,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Continue SW-021 beyond the registry foundation by implementing a separately reviewed sandbox runtime and permission-enforced host API; issue #21 is not complete while code does not execute and grants have no effect. PR #47 is a draft stacked on SW-020/#46. PR #38/#41 reviews and inline threads remain empty as of 2026-10-22 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
+  "next_action": "Continue SW-021 beyond the registry foundation by implementing a separately reviewed sandbox runtime and permission-enforced host API; issue #21 is not complete while code does not execute and grants have no effect. PR #47 is open draft stacked on SW-020/#46 and must not merge out of dependency order. PR #38/#41 reviews and inline threads remain empty as of 2026-10-22 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -544,9 +544,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "6073856ad3f150f61970d8f11fb1a9967ba2cf2c",
+      "head_sha": "7614a31ece437bb40c91d05a62259411ba437389",
       "base": "feature/sw-020-device-paths",
-      "note": "Registry/policy foundation only. No extension runtime/effective grants; issue remains in progress pending sandbox and host API. Core/UI QA passes; frontend 132 tests pass; Rust tests blocked by GLib; no Windows acceptance."
+      "note": "Draft SW-021 registry/policy foundation only. No extension runtime/effective grants; issue remains in progress pending sandbox and host API. Core/UI QA passes; frontend 132 tests pass; Rust tests blocked by GLib; no Windows acceptance. GitHub reports stacked PR not mergeable pending base chain."
     }
   ],
   "contract_commits": [

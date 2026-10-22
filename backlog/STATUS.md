@@ -16,7 +16,7 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44, head `9a984e5`; implementation and independent QA are complete. Rust test compilation remains blocked by missing GLib/GObject; no Windows acceptance.
 - PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `3a12ab7`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
-- PR #47 (SW-021) draft implementation is on `feature/sw-021-permissioned-extensions`, stacked on #46. It contains manifest validation, local registry, stored grant policy and UI; it does **not** execute extension code, so SW-021 remains in progress pending a sandbox runtime and effective permission-enforced host APIs.
+- PR #47 (SW-021) OPEN_DRAFT at `7614a31`, base `feature/sw-020-device-paths` / PR #46. It contains manifest validation, local registry, stored grant policy and UI; it does **not** execute extension code, so SW-021 remains in progress pending a sandbox runtime and effective permission-enforced host APIs. GitHub reports the stacked PR as not currently mergeable pending its base chain; do not merge out of dependency order.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## SW-020 implementation — issue #20

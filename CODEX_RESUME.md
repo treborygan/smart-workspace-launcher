@@ -29,11 +29,10 @@ No Windows 11 x64, PowerShell, MinGW, Windows Shell, packaging, or W-001..W-014 
 
 At 2026-10-22 02:33 UTC, review and inline-thread APIs were empty for PR #38 (SW-014, head `fb22dff5201418f53d0c8dfa9c1f5a463d0a365c`) and PR #41 (SW-015, head `c4c8f4726677855ed7074f95f4e0853aa3488494`). Static QA found no blocker; PR #41 has a non-blocking shared DB lock duration concern for large CSV exports. Do not merge stacked changes ahead of review/dependencies.
 
-PR #46 (SW-020) is open draft at `3a12ab7f4a2250acd38b3f9d11699eccc3681438`, based on PR #45. SW-020 implementation/QA complete; Rust tests blocked by GLib and Windows GNU check by MinGW. SW-021 is to be opened/kept as a draft stacked on `feature/sw-020-device-paths` after status checkpoint push. No PR should close issue #21 while sandbox execution is absent.
+PR #46 (SW-020) is open draft at `3a12ab7f4a2250acd38b3f9d11699eccc3681438`, based on PR #45. SW-020 implementation/QA complete; Rust tests blocked by GLib and Windows GNU check by MinGW. Draft PR #47 is open at `7614a31ece437bb40c91d05a62259411ba437389`, stacked on `feature/sw-020-device-paths` / PR #46. GitHub currently reports #47 not mergeable because its base chain is unmerged; do not merge out of dependency order. No PR should close issue #21 while sandbox execution is absent.
 
 ## Continue
 
-1. Commit/push canonical status and resume checkpoint.
-2. Create or update draft PR #47 with exact evidence and explicit runtime limitation; attach it to the Codex task if the artifact tool responds.
-3. Freeze sandbox runtime contract, then implement and test that SW-021 continuation. Keep issue open until the extension call path and permissions are real and tested.
-4. Continue SW-022..SW-025 in dependency order only after their prerequisites; keep Windows V1 gate blocked pending real acceptance.
+1. Commit/push canonical status and resume checkpoint after recording PR #47.
+2. Freeze the sandbox runtime contract, then implement and test that SW-021 continuation. Keep issue open until the extension call path and permissions are real and tested.
+3. Continue SW-022..SW-025 in dependency order only after their prerequisites; keep Windows V1 gate blocked pending real acceptance.

@@ -10243,7 +10243,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 10);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -10255,6 +10255,18 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(shortcuts_exist, 1);
+        let relationship_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='resource_relationships'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(relationship_table, 1);
+        let snapshots_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_snapshots'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(snapshots_table, 1);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",

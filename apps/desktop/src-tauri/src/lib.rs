@@ -5435,24 +5435,81 @@ fn normalize_relocation_prefix(path: &str, field: &str) -> Result<String, AppErr
     Ok(normalized)
 }
 
-fn path_has_prefix(path: &str, prefix: &str) -> bool {
+fn windows_path_component_ranges(path: &str) -> Vec<(usize, usize)> {
+    let mut components = Vec::new();
+    let mut component_start = None;
+    for (index, character) in path.char_indices() {
+        if character == '\\' {
+            if let Some(start) = component_start.take() {
+                components.push((start, index));
+            }
+        } else if component_start.is_none() {
+            component_start = Some(index);
+        }
+    }
+    if let Some(start) = component_start {
+        components.push((start, path.len()));
+    }
+    components
+}
+
+fn windows_component_eq_ignore_case(left: &str, right: &str) -> bool {
+    left.chars()
+        .flat_map(char::to_lowercase)
+        .eq(right.chars().flat_map(char::to_lowercase))
+}
+
+fn windows_path_prefix_end(path: &str, prefix: &str) -> Option<usize> {
     let path = path.replace('/', "\\");
     let prefix = prefix.replace('/', "\\");
-    let Some(head) = path.get(..prefix.len()) else {
-        return false;
-    };
-    head.eq_ignore_ascii_case(&prefix)
-        && (path.len() == prefix.len()
-            || prefix.ends_with('\\')
-            || path.as_bytes().get(prefix.len()) == Some(&b'\\'))
+    let path_ranges = windows_path_component_ranges(&path);
+    let prefix_ranges = windows_path_component_ranges(&prefix);
+    if prefix_ranges.is_empty() || prefix_ranges.len() > path_ranges.len() {
+        return None;
+    }
+    for ((prefix_start, prefix_end), (path_start, path_end)) in
+        prefix_ranges.iter().zip(path_ranges.iter())
+    {
+        if !windows_component_eq_ignore_case(
+            &prefix[*prefix_start..*prefix_end],
+            &path[*path_start..*path_end],
+        ) {
+            return None;
+        }
+    }
+    path_ranges
+        .get(prefix_ranges.len().saturating_sub(1))
+        .map(|(_, end)| *end)
+}
+
+fn windows_path_component_count(path: &str) -> usize {
+    windows_path_component_ranges(&path.replace('/', "\\")).len()
+}
+
+fn windows_paths_equal(left: &str, right: &str) -> bool {
+    let left = left.replace('/', "\\");
+    let right = right.replace('/', "\\");
+    let left_ranges = windows_path_component_ranges(&left);
+    let right_ranges = windows_path_component_ranges(&right);
+    left_ranges.len() == right_ranges.len()
+        && left_ranges.iter().zip(right_ranges.iter()).all(
+            |((left_start, left_end), (right_start, right_end))| {
+                windows_component_eq_ignore_case(
+                    &left[*left_start..*left_end],
+                    &right[*right_start..*right_end],
+                )
+            },
+        )
+}
+
+fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    windows_path_prefix_end(path, prefix).is_some()
 }
 
 fn replace_relocation_prefix(path: &str, source: &str, destination: &str) -> Option<String> {
     let path = path.replace('/', "\\");
-    if !path_has_prefix(&path, source) {
-        return None;
-    }
-    let suffix = path.get(source.len()..)?.trim_start_matches('\\');
+    let source_end = windows_path_prefix_end(&path, source)?;
+    let suffix = path.get(source_end..)?.trim_start_matches('\\');
     let replacement = if suffix.is_empty() {
         destination.to_owned()
     } else if destination.ends_with('\\') {
@@ -5470,9 +5527,7 @@ fn canonicalize_relocation_request(
     request.source_prefix = normalize_relocation_prefix(&request.source_prefix, "source prefix")?;
     request.destination_prefix =
         normalize_relocation_prefix(&request.destination_prefix, "destination prefix")?;
-    if request
-        .source_prefix
-        .eq_ignore_ascii_case(&request.destination_prefix)
+    if windows_paths_equal(&request.source_prefix, &request.destination_prefix)
         || path_has_prefix(&request.source_prefix, &request.destination_prefix)
         || path_has_prefix(&request.destination_prefix, &request.source_prefix)
     {
@@ -5746,10 +5801,7 @@ fn canonicalize_device_mapping_request(
 ) -> Result<DevicePathMappingPreviewRequest, AppError> {
     request.source_prefix = normalize_relocation_prefix(&request.source_prefix, "source prefix")?;
     request.target_prefix = normalize_relocation_prefix(&request.target_prefix, "target prefix")?;
-    if request
-        .source_prefix
-        .eq_ignore_ascii_case(&request.target_prefix)
-    {
+    if windows_paths_equal(&request.source_prefix, &request.target_prefix) {
         return Err(AppError::Invalid(
             "source and destination prefixes must differ".into(),
         ));
@@ -5767,11 +5819,10 @@ fn device_mapping_preview_on_conn(
     if mappings.len() >= MAX_DEVICE_PATH_MAPPINGS {
         return Err(AppError::Invalid("device mapping limit reached".into()));
     }
-    if mappings.iter().any(|mapping| {
-        mapping
-            .source_prefix
-            .eq_ignore_ascii_case(&request.source_prefix)
-    }) {
+    if mappings
+        .iter()
+        .any(|mapping| windows_paths_equal(&mapping.source_prefix, &request.source_prefix))
+    {
         return Err(AppError::Invalid(
             "a mapping for this source prefix already exists".into(),
         ));
@@ -5807,7 +5858,8 @@ fn device_mapping_preview_on_conn(
         token_hasher.update((target_binding.len() as u64).to_le_bytes());
         token_hasher.update(target_binding);
         let has_more_specific_existing_mapping = mappings.iter().any(|mapping| {
-            mapping.source_prefix.len() > request.source_prefix.len()
+            windows_path_component_count(&mapping.source_prefix)
+                > windows_path_component_count(&request.source_prefix)
                 && path_has_prefix(&canonical_uri, &mapping.source_prefix)
                 && path_has_prefix(&canonical_uri, &request.source_prefix)
         });
@@ -5892,9 +5944,8 @@ fn resolve_device_target(
         .iter()
         .filter(|mapping| path_has_prefix(&target.canonical_uri, &mapping.source_prefix))
         .max_by(|left, right| {
-            left.source_prefix
-                .len()
-                .cmp(&right.source_prefix.len())
+            windows_path_component_count(&left.source_prefix)
+                .cmp(&windows_path_component_count(&right.source_prefix))
                 .then_with(|| left.id.cmp(&right.id).reverse())
         })
     else {
@@ -13519,6 +13570,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(canonical_after_handoff, "C:\\Work\\inside.txt");
+    }
+
+    #[test]
+    fn device_mapping_unicode_case_variants_preserve_the_path_suffix_on_preview_and_launch() {
+        let mut conn = database();
+        let resource = local_path_resource("Unicode", "file", "C:\\Users\\İpek\\file.txt");
+        persist_resource(&mut conn, &resource, true, None).unwrap();
+        let request = device_mapping_request("C:\\Users\\i\u{307}PEK", "D:\\Portable");
+        let preview = device_mapping_preview_on_conn(&conn, &request).unwrap();
+        assert_eq!(preview.changes.len(), 1);
+        assert_eq!(preview.changes[0].to_uri, "D:\\Portable\\file.txt");
+        device_path_mapping_commit_on_conn(&mut conn, &preview).unwrap();
+
+        let resolved = resolve_device_target(&conn, &resource.targets[0]).unwrap();
+        assert_eq!(resolved.canonical_uri, "D:\\Portable\\file.txt");
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: resource.id.clone(),
+            target_id: Some(resource.targets[0].id.clone()),
+            profile_id: None,
+            source: "other".into(),
+        };
+        launch_event_with(&mut conn, &request, |launched| {
+            assert_eq!(launched.canonical_uri, "D:\\Portable\\file.txt");
+            Ok(())
+        })
+        .unwrap();
+        let canonical: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                [&resource.targets[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(canonical, "C:\\Users\\İpek\\file.txt");
+    }
+
+    #[test]
+    fn device_mapping_unicode_equivalent_duplicate_source_is_rejected_in_rust() {
+        let conn = database();
+        let device = local_device_from_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO device_path_mappings(id,device_id,source_prefix,target_prefix,created_utc) VALUES (?1,?2,?3,?4,?5)",
+            params![Uuid::new_v4().to_string(), device.id, "C:\\Users\\İpek", "D:\\Target", now_utc()],
+        )
+        .unwrap();
+        assert!(device_mapping_preview_on_conn(
+            &conn,
+            &device_mapping_request("C:\\Users\\i\u{307}PEK", "E:\\Other")
+        )
+        .is_err());
     }
 
     fn device_path_mapping_list_for_id(conn: &Connection, id: &str) -> bool {

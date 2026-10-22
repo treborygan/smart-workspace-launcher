@@ -127,6 +127,52 @@ pub struct ResourcePatch {
     pub favorite: Option<bool>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceDuplicateRequest {
+    pub profile_id: String,
+    pub resource_id: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRelocationPreviewRequest {
+    pub profile_id: String,
+    pub source_prefix: String,
+    pub destination_prefix: String,
+    #[serde(default)]
+    pub resource_ids: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRelocationChange {
+    pub resource_id: String,
+    pub target_id: String,
+    pub from_uri: String,
+    pub to_uri: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRelocationPreview {
+    pub profile_id: String,
+    pub source_prefix: String,
+    pub destination_prefix: String,
+    #[serde(default)]
+    pub resource_ids: Option<Vec<String>>,
+    pub preview_token: String,
+    pub changes: Vec<ResourceRelocationChange>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRelocationResult {
+    pub updated_target_count: usize,
+    pub updated_resource_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchRequest {
@@ -196,6 +242,8 @@ const MAX_SMART_COLLECTIONS_PER_PROFILE: i64 = 100;
 const MAX_DYNAMIC_SHORTCUTS_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SEQUENCES_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SEQUENCE_STEPS: usize = 20;
+const MAX_RELOCATION_RESOURCE_IDS: usize = 5_000;
+const MAX_RELOCATION_CHANGES: usize = 10_000;
 const MAX_RESOURCE_RELATIONSHIPS_PER_PROFILE: i64 = 500;
 const MAX_WORKSPACE_SNAPSHOTS_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS: usize = 5_000;
@@ -3744,6 +3792,350 @@ fn resource_delete(state: State<'_, AppState>, id: String) -> Result<(), AppErro
     Ok(())
 }
 
+fn resource_duplicate_on_conn(
+    conn: &mut Connection,
+    request: &ResourceDuplicateRequest,
+) -> Result<Resource, AppError> {
+    valid_uuid(&request.profile_id, "profile id")?;
+    valid_uuid(&request.resource_id, "resource id")?;
+    if let Some(name) = request.display_name.as_deref() {
+        let trimmed = name.trim();
+        if trimmed.is_empty()
+            || trimmed.chars().count() > 256
+            || trimmed.chars().any(char::is_control)
+        {
+            return Err(AppError::Invalid(
+                "duplicate display name must contain 1 to 256 printable characters".into(),
+            ));
+        }
+    }
+
+    let tx = conn.transaction()?;
+    let member: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+        params![request.profile_id, request.resource_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !member {
+        return Err(AppError::NotFound);
+    }
+    let mut source = tx
+        .query_row(
+            "SELECT id,resource_type,display_name,description,icon,default_action,created_utc,updated_utc FROM resources WHERE id=?1",
+            [&request.resource_id],
+            resource_from_row,
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    load_resource_details(&tx, &mut source, Some(&request.profile_id))?;
+
+    let now = now_utc();
+    let favorite = source.favorite;
+    let mut duplicate = source;
+    duplicate.id = Uuid::new_v4().to_string();
+    duplicate.display_name = request
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            duplicate
+                .display_name
+                .chars()
+                .chain(" (copy)".chars())
+                .take(256)
+                .collect()
+        });
+    duplicate.created_utc = now.clone();
+    duplicate.updated_utc = now;
+    duplicate.launch_count = 0;
+    duplicate.last_launched_utc = None;
+    for target in &mut duplicate.targets {
+        target.id = Uuid::new_v4().to_string();
+    }
+    validate_resource(&duplicate)?;
+    persist_resource_in_transaction(&tx, &duplicate, true, Some(&request.profile_id))?;
+    tx.execute(
+        "UPDATE profile_resources SET favorite=?3 WHERE profile_id=?1 AND resource_id=?2",
+        params![
+            request.profile_id,
+            duplicate.id,
+            if favorite { 1i64 } else { 0i64 }
+        ],
+    )?;
+    tx.commit()?;
+    Ok(duplicate)
+}
+
+#[tauri::command]
+fn resource_duplicate(
+    state: State<'_, AppState>,
+    request: ResourceDuplicateRequest,
+) -> Result<Resource, AppError> {
+    let mut conn = lock(&state)?;
+    resource_duplicate_on_conn(&mut conn, &request)
+}
+
+fn normalize_relocation_prefix(path: &str, field: &str) -> Result<String, AppError> {
+    let path = path.trim();
+    if path.is_empty() || path.chars().count() > 4096 || !valid_windows_absolute_path(path) {
+        return Err(AppError::Invalid(format!(
+            "{field} must be an absolute Windows path"
+        )));
+    }
+    let mut normalized = path.replace('/', "\\");
+    let root_len = if normalized.as_bytes().get(1) == Some(&b':') {
+        3
+    } else {
+        2
+    };
+    while normalized.len() > root_len && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    Ok(normalized)
+}
+
+fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    let Some(head) = path.get(..prefix.len()) else {
+        return false;
+    };
+    head.eq_ignore_ascii_case(prefix)
+        && (path.len() == prefix.len()
+            || prefix.ends_with('\\')
+            || path.as_bytes().get(prefix.len()) == Some(&b'\\'))
+}
+
+fn replace_relocation_prefix(path: &str, source: &str, destination: &str) -> Option<String> {
+    let path = path.replace('/', "\\");
+    if !path_has_prefix(&path, source) {
+        return None;
+    }
+    let suffix = path.get(source.len()..)?.trim_start_matches('\\');
+    let replacement = if suffix.is_empty() {
+        destination.to_owned()
+    } else if destination.ends_with('\\') {
+        format!("{destination}{suffix}")
+    } else {
+        format!("{destination}\\{suffix}")
+    };
+    Some(replacement)
+}
+
+fn canonicalize_relocation_request(
+    mut request: ResourceRelocationPreviewRequest,
+) -> Result<ResourceRelocationPreviewRequest, AppError> {
+    valid_uuid(&request.profile_id, "profile id")?;
+    request.source_prefix = normalize_relocation_prefix(&request.source_prefix, "source prefix")?;
+    request.destination_prefix =
+        normalize_relocation_prefix(&request.destination_prefix, "destination prefix")?;
+    if request
+        .source_prefix
+        .eq_ignore_ascii_case(&request.destination_prefix)
+        || path_has_prefix(&request.source_prefix, &request.destination_prefix)
+        || path_has_prefix(&request.destination_prefix, &request.source_prefix)
+    {
+        return Err(AppError::Invalid(
+            "source and destination prefixes must be separate paths".into(),
+        ));
+    }
+    if let Some(ids) = request.resource_ids.as_mut() {
+        if ids.is_empty() || ids.len() > MAX_RELOCATION_RESOURCE_IDS {
+            return Err(AppError::Invalid(
+                "relocation resource selection is empty or exceeds its limit".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(ids.len());
+        for id in ids.iter() {
+            valid_uuid(id, "relocation resource id")?;
+            if !seen.insert(id.clone()) {
+                return Err(AppError::Invalid(
+                    "relocation resource selection contains duplicates".into(),
+                ));
+            }
+        }
+        ids.sort();
+    }
+    Ok(request)
+}
+
+fn relocation_preview_token(
+    request: &ResourceRelocationPreviewRequest,
+    changes: &[ResourceRelocationChange],
+) -> Result<String, AppError> {
+    let bytes = serde_json::to_vec(&(request, changes))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn append_relocation_matches(
+    changes: &mut Vec<ResourceRelocationChange>,
+    resource_id: String,
+    target_id: String,
+    from_uri: String,
+    source_prefix: &str,
+    destination_prefix: &str,
+) -> Result<(), AppError> {
+    if let Some(to_uri) = replace_relocation_prefix(&from_uri, source_prefix, destination_prefix) {
+        if to_uri.chars().count() > 4096 || !valid_windows_absolute_path(&to_uri) {
+            return Err(AppError::Invalid(
+                "relocation would create an invalid target path".into(),
+            ));
+        }
+        changes.push(ResourceRelocationChange {
+            resource_id,
+            target_id,
+            from_uri,
+            to_uri,
+        });
+        if changes.len() > MAX_RELOCATION_CHANGES {
+            return Err(AppError::Invalid(
+                "relocation matches too many targets".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resource_relocation_preview_on_conn(
+    conn: &Connection,
+    request: &ResourceRelocationPreviewRequest,
+) -> Result<ResourceRelocationPreview, AppError> {
+    let request = canonicalize_relocation_request(request.clone())?;
+    let profile_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&request.profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let mut changes = Vec::new();
+    if let Some(resource_ids) = request.resource_ids.as_ref() {
+        for resource_id in resource_ids {
+            let member: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+                params![request.profile_id, resource_id],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )?;
+            if !member {
+                return Err(AppError::NotFound);
+            }
+            let mut stmt = conn.prepare(
+                "SELECT id,canonical_uri FROM resource_targets WHERE resource_id=?1 AND kind IN ('file','folder') ORDER BY id",
+            )?;
+            for row in stmt.query_map([resource_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })? {
+                let (target_id, uri) = row?;
+                append_relocation_matches(
+                    &mut changes,
+                    resource_id.clone(),
+                    target_id,
+                    uri,
+                    &request.source_prefix,
+                    &request.destination_prefix,
+                )?;
+            }
+        }
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT pr.resource_id,rt.id,rt.canonical_uri FROM profile_resources pr JOIN resource_targets rt ON rt.resource_id=pr.resource_id WHERE pr.profile_id=?1 AND rt.kind IN ('file','folder') ORDER BY pr.resource_id,rt.id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(
+            params![request.profile_id, (MAX_RELOCATION_CHANGES + 1) as i64],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        let mut scanned_targets = 0usize;
+        for row in rows {
+            scanned_targets += 1;
+            if scanned_targets > MAX_RELOCATION_CHANGES {
+                return Err(AppError::Invalid(
+                    "profile has too many file targets for bounded relocation".into(),
+                ));
+            }
+            let (resource_id, target_id, uri) = row?;
+            append_relocation_matches(
+                &mut changes,
+                resource_id,
+                target_id,
+                uri,
+                &request.source_prefix,
+                &request.destination_prefix,
+            )?;
+        }
+    }
+    changes.sort_by(|a, b| (&a.resource_id, &a.target_id).cmp(&(&b.resource_id, &b.target_id)));
+    let preview_token = relocation_preview_token(&request, &changes)?;
+    Ok(ResourceRelocationPreview {
+        profile_id: request.profile_id,
+        source_prefix: request.source_prefix,
+        destination_prefix: request.destination_prefix,
+        resource_ids: request.resource_ids,
+        preview_token,
+        changes,
+    })
+}
+
+fn resource_relocation_commit_on_conn(
+    conn: &mut Connection,
+    preview: &ResourceRelocationPreview,
+) -> Result<ResourceRelocationResult, AppError> {
+    let request = ResourceRelocationPreviewRequest {
+        profile_id: preview.profile_id.clone(),
+        source_prefix: preview.source_prefix.clone(),
+        destination_prefix: preview.destination_prefix.clone(),
+        resource_ids: preview.resource_ids.clone(),
+    };
+    let tx = conn.transaction()?;
+    let current = resource_relocation_preview_on_conn(&tx, &request)?;
+    if preview.preview_token != current.preview_token || preview.changes != current.changes {
+        return Err(AppError::Invalid(
+            "relocation preview is stale; create a new preview".into(),
+        ));
+    }
+    let mut resource_ids = std::collections::BTreeSet::new();
+    for change in &current.changes {
+        let changed = tx.execute(
+            "UPDATE resource_targets SET canonical_uri=?4 WHERE id=?1 AND resource_id=?2 AND canonical_uri=?3 AND kind IN ('file','folder') AND EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?5 AND resource_id=?2)",
+            params![change.target_id, change.resource_id, change.from_uri, change.to_uri, current.profile_id],
+        )?;
+        if changed != 1 {
+            return Err(AppError::Invalid(
+                "relocation target changed while applying the preview".into(),
+            ));
+        }
+        resource_ids.insert(change.resource_id.clone());
+    }
+    tx.commit()?;
+    Ok(ResourceRelocationResult {
+        updated_target_count: current.changes.len(),
+        updated_resource_ids: resource_ids.into_iter().collect(),
+    })
+}
+
+#[tauri::command]
+fn resource_relocation_preview(
+    state: State<'_, AppState>,
+    request: ResourceRelocationPreviewRequest,
+) -> Result<ResourceRelocationPreview, AppError> {
+    let conn = lock(&state)?;
+    resource_relocation_preview_on_conn(&conn, &request)
+}
+
+#[tauri::command]
+fn resource_relocation_commit(
+    state: State<'_, AppState>,
+    preview: ResourceRelocationPreview,
+) -> Result<ResourceRelocationResult, AppError> {
+    let mut conn = lock(&state)?;
+    resource_relocation_commit_on_conn(&mut conn, &preview)
+}
+
 #[tauri::command]
 fn resource_search(
     state: State<'_, AppState>,
@@ -6814,6 +7206,9 @@ pub fn run() {
             resource_list,
             resource_create,
             resource_update,
+            resource_duplicate,
+            resource_relocation_preview,
+            resource_relocation_commit,
             resource_delete,
             resource_search,
             resource_launch,
@@ -10311,6 +10706,230 @@ mod tests {
             )
             .unwrap();
         assert_eq!(message_column, 1);
+    }
+
+    fn local_path_resource(name: &str, kind: &str, path: &str) -> Resource {
+        let mut value = resource(name);
+        value.resource_type = kind.into();
+        value.targets[0].kind = kind.into();
+        value.targets[0].canonical_uri = path.into();
+        value
+    }
+
+    #[test]
+    fn resource_duplicate_is_profile_scoped_and_regenerates_ids_without_history() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let other_profile_id = profile(&conn);
+        let source = resource("Source");
+        persist_resource(&mut conn, &source, true, Some(&profile_id)).unwrap();
+        conn.execute(
+            "UPDATE profile_resources SET favorite=1 WHERE profile_id=?1 AND resource_id=?2",
+            params![profile_id, source.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO launch_events(id,request_id,resource_id,target_id,profile_id,source,launched_at_utc,status) VALUES (?1,?2,?3,?4,?5,'dashboard',?6,'handed_off')",
+            params![Uuid::new_v4().to_string(), Uuid::new_v4().to_string(), source.id, source.targets[0].id, profile_id, now_utc()],
+        )
+        .unwrap();
+
+        let duplicate = resource_duplicate_on_conn(
+            &mut conn,
+            &ResourceDuplicateRequest {
+                profile_id: profile_id.clone(),
+                resource_id: source.id.clone(),
+                display_name: None,
+            },
+        )
+        .unwrap();
+        assert_ne!(duplicate.id, source.id);
+        assert_ne!(duplicate.targets[0].id, source.targets[0].id);
+        assert_eq!(duplicate.display_name, "Source (copy)");
+        assert_eq!(duplicate.favorite, true);
+        assert_eq!(duplicate.launch_count, 0);
+        assert_eq!(duplicate.last_launched_utc, None);
+        assert_eq!(
+            duplicate.targets[0].canonical_uri,
+            source.targets[0].canonical_uri
+        );
+        assert_eq!(duplicate.tags, source.tags);
+        assert_eq!(duplicate.aliases, source.aliases);
+        let memberships: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1 AND resource_id IN (?2,?3)",
+                params![profile_id, source.id, duplicate.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(memberships, 2);
+        assert!(resource_duplicate_on_conn(
+            &mut conn,
+            &ResourceDuplicateRequest {
+                profile_id: other_profile_id,
+                resource_id: source.id,
+                display_name: Some("A copy".into()),
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn relocation_preview_replaces_only_boundary_matched_file_and_folder_targets_in_profile() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let other_profile_id = profile(&conn);
+        let file = local_path_resource("File", "file", "C:\\Work\\Project\\plan.xlsx");
+        let folder = local_path_resource("Folder", "folder", "c:/work/project/assets/");
+        let sibling = local_path_resource("Sibling", "file", "C:\\Work\\Project-old\\plan.xlsx");
+        let app = local_path_resource("Application", "app", "C:\\Work\\Project\\tool.exe");
+        let other_profile =
+            local_path_resource("Other profile", "file", "C:\\Work\\Project\\secret.txt");
+        for item in [&file, &folder, &sibling, &app] {
+            persist_resource(&mut conn, item, true, Some(&profile_id)).unwrap();
+        }
+        persist_resource(&mut conn, &other_profile, true, Some(&other_profile_id)).unwrap();
+
+        let preview = resource_relocation_preview_on_conn(
+            &conn,
+            &ResourceRelocationPreviewRequest {
+                profile_id: profile_id.clone(),
+                source_prefix: "c:/work/project/".into(),
+                destination_prefix: "D:/Archive/Project/".into(),
+                resource_ids: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.changes.len(), 2);
+        assert!(preview.changes.iter().any(|change| {
+            change.resource_id == file.id && change.to_uri == "D:\\Archive\\Project\\plan.xlsx"
+        }));
+        assert!(preview.changes.iter().any(|change| {
+            change.resource_id == folder.id && change.to_uri == "D:\\Archive\\Project\\assets"
+        }));
+        assert!(!preview.changes.iter().any(|change| {
+            change.resource_id == sibling.id
+                || change.resource_id == app.id
+                || change.resource_id == other_profile.id
+        }));
+
+        let applied = resource_relocation_commit_on_conn(&mut conn, &preview).unwrap();
+        assert_eq!(applied.updated_target_count, 2);
+        assert_eq!(applied.updated_resource_ids.len(), 2);
+        let stored: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                [&file.targets[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "D:\\Archive\\Project\\plan.xlsx");
+        // All paths are nonexistent fixture strings: relocation only updates SQLite.
+        assert!(!std::path::Path::new("D:\\Archive\\Project\\plan.xlsx").exists());
+    }
+
+    #[test]
+    fn relocation_rejects_invalid_prefixes_scope_and_duplicate_selection() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let other_profile_id = profile(&conn);
+        let file = local_path_resource("File", "file", "C:\\Work\\Project\\plan.xlsx");
+        persist_resource(&mut conn, &file, true, Some(&profile_id)).unwrap();
+        let other = local_path_resource("Other", "file", "C:\\Work\\Project\\other.xlsx");
+        persist_resource(&mut conn, &other, true, Some(&other_profile_id)).unwrap();
+
+        let request = |source: &str, destination: &str, ids: Option<Vec<String>>| {
+            ResourceRelocationPreviewRequest {
+                profile_id: profile_id.clone(),
+                source_prefix: source.into(),
+                destination_prefix: destination.into(),
+                resource_ids: ids,
+            }
+        };
+        assert!(
+            resource_relocation_preview_on_conn(&conn, &request("relative", "D:\\New", None))
+                .is_err()
+        );
+        assert!(resource_relocation_preview_on_conn(
+            &conn,
+            &request("C:\\Work\\..\\", "D:\\New", None)
+        )
+        .is_err());
+        assert!(resource_relocation_preview_on_conn(
+            &conn,
+            &request("C:\\Work", "C:\\Work\\New", None)
+        )
+        .is_err());
+        assert!(resource_relocation_preview_on_conn(
+            &conn,
+            &request("C:\\Work", "D:\\New", Some(vec![other.id.clone()])),
+        )
+        .is_err());
+        assert!(resource_relocation_preview_on_conn(
+            &conn,
+            &request(
+                "C:\\Work",
+                "D:\\New",
+                Some(vec![file.id.clone(), file.id.clone()])
+            ),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn relocation_preview_is_bound_to_state_and_rolls_back_all_target_updates() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let first = local_path_resource("First", "file", "C:\\Work\\Project\\first.txt");
+        let second = local_path_resource("Second", "file", "C:\\Work\\Project\\second.txt");
+        persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
+        let request = ResourceRelocationPreviewRequest {
+            profile_id: profile_id.clone(),
+            source_prefix: "C:\\Work\\Project".into(),
+            destination_prefix: "D:\\Relocated".into(),
+            resource_ids: None,
+        };
+        let preview = resource_relocation_preview_on_conn(&conn, &request).unwrap();
+
+        conn.execute(
+            "UPDATE resource_targets SET canonical_uri='C:\\Elsewhere\\first.txt' WHERE id=?1",
+            [&first.targets[0].id],
+        )
+        .unwrap();
+        assert!(resource_relocation_commit_on_conn(&mut conn, &preview).is_err());
+        let unchanged: String = conn
+            .query_row(
+                "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                [&second.targets[0].id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, "C:\\Work\\Project\\second.txt");
+
+        let fresh = resource_relocation_preview_on_conn(&conn, &request).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER reject_relocation BEFORE UPDATE OF canonical_uri ON resource_targets WHEN OLD.id='{}' BEGIN SELECT RAISE(ABORT,'injected relocation failure'); END;",
+            second.targets[0].id
+        ))
+        .unwrap();
+        assert!(resource_relocation_commit_on_conn(&mut conn, &fresh).is_err());
+        for (target_id, path) in [
+            (&first.targets[0].id, "C:\\Elsewhere\\first.txt"),
+            (&second.targets[0].id, "C:\\Work\\Project\\second.txt"),
+        ] {
+            let stored: String = conn
+                .query_row(
+                    "SELECT canonical_uri FROM resource_targets WHERE id=?1",
+                    [target_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                stored, path,
+                "failed relocation rolls back every target update"
+            );
+        }
     }
 
     fn sample_target() -> ResourceTarget {

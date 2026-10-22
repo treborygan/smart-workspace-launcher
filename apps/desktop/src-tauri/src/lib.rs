@@ -13775,7 +13775,7 @@ mod tests {
 
     fn extension_manifest_fixture() -> ExtensionManifest {
         ExtensionManifest {
-            id: "com.example.focus-summary".into(),
+            id: "com.example.focussummary".into(),
             name: "Focus summary".into(),
             version: "1.0.0".into(),
             sdk_version: EXTENSION_SDK_VERSION.into(),
@@ -13787,7 +13787,7 @@ mod tests {
     #[test]
     fn extension_manifest_validation_enforces_identifiers_fields_and_capability_bounds() {
         let valid = validate_extension_manifest(extension_manifest_fixture()).unwrap();
-        assert_eq!(valid.id, "com.example.focus-summary");
+        assert_eq!(valid.id, "com.example.focussummary");
 
         for id in [
             "Com.example.plugin",

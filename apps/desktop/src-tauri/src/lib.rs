@@ -6782,6 +6782,7 @@ fn extension_package_install_on_conn(
     install_extension_contents_on_conn(conn, contents)
 }
 
+#[tauri::command]
 fn extension_package_install(
     state: State<'_, AppState>,
     request: ExtensionPackageInstallRequest,
@@ -11572,7 +11573,10 @@ mod tests {
         tx.commit().unwrap();
         conn.execute(
             "UPDATE profiles SET settings_json=?2 WHERE id=?1",
-            params![source_profile, r#"{"apiToken":"secret","accent":"#6858CE"}"#],
+            params![
+                source_profile,
+                r##"{"apiToken":"secret","accent":"#6858CE"}"##
+            ],
         )
         .unwrap();
         let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));

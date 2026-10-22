@@ -26,7 +26,7 @@ Never allow simultaneous writers for shared files like `package.json`, `Cargo.lo
 6. V1.1 dynamic resources and workflows; V1.2 import/discovery/widgets/device mappings; V2 permissioned extensions, optional sync/remote/AI, hardening and native releases.
 
 ## GitHub rules
-No GitHub Actions; do not create `.github/workflows/` or automate changes without permission. Use GitHub issues, PR template, code review and local reproducible scripts. Protect existing work; no force pushes. Public repo: no employer files, network hostnames, real user data, tokens or sensitive logs.
+**GitHub Actions exception explicitly approved 2026-10-22:** Windows hosted CI and preview build workflows are allowed; agents must inspect actual run logs, fix failures, and never claim hosted Windows Server is a Windows 11 acceptance machine. See `docs/CI_WINDOWS.md`. Use GitHub issues, PR template, code review, and reproducible local scripts. Protect existing work; no force pushes. Public repo: no employer files, network hostnames, real user data, tokens or sensitive logs.
 
 ## Resilience
 Status and ownership in `backlog/AGENT_STATUS.json`; human readable progress in `backlog/STATUS.md`. In interrupted sessions, begin with `CODEX_RESUME.md`. Never claim background continuation after runtime shutdown. If Windows validation unavailable, finish feasible cross-platform work but mark release BLOCKED.

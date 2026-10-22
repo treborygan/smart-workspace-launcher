@@ -87,6 +87,10 @@ On Windows, project scripts are provided for local verification and packaging:
 
 **Building locally does not establish release readiness.** Default-app launching, hotkeys, tray behavior, Dock placement, display scaling, and portable execution require real Windows acceptance testing.
 
+## Automated Windows checks
+
+GitHub Actions runs [Windows CI](.github/workflows/windows-ci.yml) on pull requests and changes to `main`, plus [Windows preview builds](.github/workflows/windows-build.yml) on `main` or on request. Windows Server x64 builds and test artifacts are **not** certified Windows 11 releases. See [Windows CI and acceptance](docs/CI_WINDOWS.md) and the [Actions run history](https://github.com/treborygan/smart-workspace-launcher/actions).
+
 ## Roadmap
 
 | Milestone | Focus |
@@ -112,7 +116,7 @@ Track progress in the [project roadmap](backlog/ROADMAP.md), [implementation sta
 
 Feedback, bug reports, and feature suggestions are welcome through [GitHub Issues](https://github.com/treborygan/smart-workspace-launcher/issues). For code contributions, please open a focused pull request with test evidence and follow the [PR template](.github/pull_request_template.md).
 
-This repository uses GitHub Issues and pull requests for coordination and local verification scripts for testing. **GitHub Actions are not part of the current workflow.** Please do not submit private documents, credentials, or sensitive company data.
+This repository uses GitHub Issues and pull requests for coordination, approved GitHub Actions for Windows automated checks and preview builds, and local verification scripts. Native Windows 11 acceptance is required for release qualification. Please do not submit private documents, credentials, or sensitive company data.
 
 ---
 

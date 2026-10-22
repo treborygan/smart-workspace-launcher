@@ -383,6 +383,7 @@ struct ProfilePackageHistoryEvent {
     duration_ms: Option<i64>,
 }
 
+#[derive(Clone)]
 struct ValidatedProfilePackage {
     manifest: ProfilePackageManifest,
     profile: ProfilePackageDocument,
@@ -885,7 +886,7 @@ fn read_profile_package_with_digest(
             .by_index(index)
             .map_err(|_| package_error("invalid ZIP directory"))?;
         let name = entry.name().to_owned();
-        if !safe_archive_path(&name) || !names.insert(name) {
+        if !safe_archive_path(&name) || !names.insert(name.clone()) {
             return Err(package_error(
                 "archive contains an unsafe or duplicate member path",
             ));
@@ -1405,7 +1406,11 @@ fn export_profile_to_path(
             .map_err(|error| package_error(format!("cannot finish export archive: {error}")))?;
         file.sync_all()
             .map_err(|error| package_error(format!("cannot sync export archive: {error}")))?;
-        if file.metadata()?.len() > PROFILE_ARCHIVE_MAX_COMPRESSED {
+        let compressed_size = file
+            .metadata()
+            .map_err(|error| package_error(format!("cannot inspect export archive: {error}")))?
+            .len();
+        if compressed_size > PROFILE_ARCHIVE_MAX_COMPRESSED {
             return Err(package_error("export exceeds compressed size limit"));
         }
         finalize_export_no_clobber(&temp_path, path)?;
@@ -3491,12 +3496,12 @@ fn search_resources(
 
 const MAX_LAYOUT_BYTES: usize = 1_048_576;
 
-fn valid_uuid(value: &str) -> bool {
+fn valid_layout_uuid(value: &str) -> bool {
     Uuid::parse_str(value).is_ok()
 }
 
 fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
-    if !valid_uuid(&layout.profile_id) {
+    if !valid_layout_uuid(&layout.profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if layout.version != 1 || !matches!(layout.surface.as_str(), "dashboard" | "dock") {
@@ -3509,7 +3514,7 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
     }
     let mut ids = std::collections::HashSet::with_capacity(layout.cards.len());
     for card in &layout.cards {
-        if !valid_uuid(&card.resource_id)
+        if !valid_layout_uuid(&card.resource_id)
             || !ids.insert(&card.resource_id)
             || card.x < 0
             || card.x > 11
@@ -3538,7 +3543,7 @@ fn layout_get_from_conn(
     profile_id: &str,
     surface: &str,
 ) -> Result<DashboardLayout, AppError> {
-    if !valid_uuid(profile_id) {
+    if !valid_layout_uuid(profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if !matches!(surface, "dashboard" | "dock") {
@@ -5223,8 +5228,8 @@ mod tests {
 
     #[test]
     fn production_zip_reader_rejects_high_ratio_and_asset_checksum_mismatch() {
-        let package = package("url");
-        let mut high_ratio = serialized_documents(&package);
+        let base_package = package("url");
+        let mut high_ratio = serialized_documents(&base_package);
         high_ratio.push(("padding.bin", vec![0; 1024 * 1024]));
         let high_ratio_path =
             write_test_archive_with_compression(&high_ratio, CompressionMethod::Deflated);
@@ -5249,15 +5254,18 @@ mod tests {
     fn production_zip_reader_rejects_expanded_member_over_limit_within_archive_limit() {
         let package = package("url");
         let mut entries = serialized_documents(&package);
+        // Keep the compressed archive below the archive-wide limit while
+        // exceeding the uncompressed single-entry limit. A completely
+        // pseudorandom 32 MiB payload grows slightly under DEFLATE.
         let mut payload = Vec::with_capacity(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1);
         let mut state = 0x9e37_79b9_u32;
-        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize - 1024) {
+        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize / 2) {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
             payload.push(state as u8);
         }
-        payload.extend(std::iter::repeat_n(0u8, 1025));
+        payload.resize(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1, 0);
         entries.push(("oversized.bin", payload));
         let path = write_test_archive_with_compression(&entries, CompressionMethod::Deflated);
         assert!(std::fs::metadata(&path).unwrap().len() <= PROFILE_ARCHIVE_MAX_COMPRESSED);
@@ -5268,7 +5276,7 @@ mod tests {
     fn profile(conn: &Connection) -> String {
         let id = Uuid::new_v4().to_string();
         let ts = now_utc();
-        conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Work','system','{}',?2,?2)",params![id,ts]).unwrap();
+        conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,?2,'system','{}',?3,?3)",params![id, format!("Work-{id}"), ts]).unwrap();
         id
     }
 
@@ -5325,7 +5333,15 @@ mod tests {
                     targets: vec![ProfilePackageTarget {
                         id: target_id,
                         kind: kind.into(),
-                        value: "calc.exe".into(),
+                        value: match kind {
+                            "url" => "https://example.com/",
+                            "app" => "C:\\Windows\\System32\\calc.exe",
+                            "file" => "C:\\Example\\example.xlsx",
+                            "folder" => "C:\\Example",
+                            "shortcut" => "C:\\Example\\example.lnk",
+                            _ => "https://example.com/",
+                        }
+                        .into(),
                         priority: 0,
                         device_label: None,
                         argv: vec![],
@@ -5636,7 +5652,7 @@ mod tests {
                 .map(|(name, bytes)| (*name, bytes.clone()))
                 .collect::<Vec<_>>(),
         );
-        std::fs::copy(changed_path, &path).unwrap();
+        std::fs::copy(&changed_path, &path).unwrap();
         assert!(
             import_profile_package_from_path(
                 &mut conn,
@@ -5821,7 +5837,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(profile_name, "Work");
+        assert_eq!(profile_name, format!("Work-{target_profile}"));
         assert_eq!(
             smart_collection_list_on_conn(&conn, &target_profile).unwrap(),
             vec![original_collection]
@@ -5851,7 +5867,10 @@ mod tests {
         tx.commit().unwrap();
         conn.execute(
             "UPDATE profiles SET settings_json=?2 WHERE id=?1",
-            params![source_profile, r#"{"apiToken":"secret","accent":"#6858CE"}"#],
+            params![
+                source_profile,
+                r##"{"apiToken":"secret","accent":"#6858CE"}"##
+            ],
         )
         .unwrap();
         let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
@@ -6752,7 +6771,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(profile_name, "Work");
+        assert_eq!(profile_name, format!("Work-{target_profile}"));
         assert_eq!(
             dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap(),
             vec![old_shortcut]
@@ -6975,19 +6994,48 @@ mod tests {
     }
 
     #[test]
-    fn missing_target_is_recorded_as_failed_attempt() {
+    fn unknown_explicit_target_is_rejected_and_missing_active_target_is_recorded() {
         let mut conn = database();
         let r = resource("No target");
         persist_resource(&mut conn, &r, true, None).unwrap();
-        let request = LaunchRequest {
+        let unknown_request = LaunchRequest {
             request_id: Uuid::new_v4().to_string(),
             resource_id: r.id.clone(),
             target_id: Some(Uuid::new_v4().to_string()),
             profile_id: None,
             source: "explorer".into(),
         };
+        assert!(matches!(
+            launch_event_with(&mut conn, &unknown_request, |_| {
+                panic!("unknown explicit target must never invoke a handler")
+            }),
+            Err(AppError::NotFound)
+        ));
+        let logged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE request_id=?1",
+                [&unknown_request.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(logged, 0);
+
+        // When a registered resource has no active targets, the valid
+        // auto-resolved launch attempt is recorded as a failed event.
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE resource_id=?1",
+            [&r.id],
+        )
+        .unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: r.id.clone(),
+            target_id: None,
+            profile_id: None,
+            source: "explorer".into(),
+        };
         let event = launch_event_with(&mut conn, &request, |_| {
-            panic!("handler must not run without target")
+            panic!("inactive target must never invoke a handler")
         })
         .unwrap();
         assert_eq!(event.status, "failed");

@@ -13,7 +13,7 @@
 ## Security / data checklist
 - [ ] No secrets, private work paths or sensitive fixtures committed
 - [ ] No unrestricted commands, unsafe URL schemes or profile execution paths
-- [ ] No GitHub Actions/workflows added
+- [ ] Any changes to the approved Windows CI/preview workflows respect least privileges, untrusted PR safety and separate Windows 11 acceptance gate
 - [ ] New migrations, API types and profile schema updates covered by tests
 - [ ] Docs and `backlog/STATUS.md` updated
 - [ ] Real Windows-only tests clearly differentiated from Linux/cloud tests

@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 01:29 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
+Updated 2026-10-22 01:30 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). SW-011 PR #36 merged to `main` as `0a212d8541328d3b41033ba36496871c2b05d8dc`; SW-013 PR #37 merged to `main` as `77b3b1b95f077d53622848256a62662e9a17a54`. SW-014 implementation is on `feature/sw-014-action-sequences`, rebased atop merged main, and awaiting final independent QA.
 
 ## Environment and release status
 
@@ -37,6 +37,11 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 - SW-016 frontend checks: `npm run typecheck` PASS; `npm test -- --run` PASS (13 files/97 tests); `npm run frontend:build` PASS with existing nonfatal Vite `INEFFECTIVE_DYNAMIC_IMPORT` warning; `git diff --check` PASS. Rust format check and `python scripts/verify_handoff.py` PASS. Backend Rust tests are authored but NOT RUN: cargo stops before application compilation due missing GLib >=2.70 development files (`glib-2.0.pc`). Windows GNU target check is BLOCKED because MinGW is absent. Independent QA passed on `da34ebb` with no blocking findings.
 - PR review tracking on 2026-10-22: #38 (SW-014) and #41 (SW-015) remain OPEN with no submitted reviews or inline threads. Superseded draft PR #39 was closed; no code merged from it. Do not merge stacked work without review and dependency-order checks. V1 remains BLOCKED; no Windows package or READY notice exists.
 
+## In progress — SW-017
+
+- SW-017 (issue #16, duplicate and relocation assistant) is active on `feature/sw-017-duplicate-relocation`, based on SW-016 branch head. Frozen typed contract and decision record are commit `bff3cdd`. Duplicate creates a new resource/target identity within the selected profile without touching files. Relocation is a preview-bound, transactional path-prefix update for explicitly scoped file/folder targets; it must not move/copy/delete files or scan directories. Core, UI and independent QA are assigned disjoint paths. Contract typecheck and diff checks pass.
+- SW-016 remains in draft PR #42 against the SW-015 branch because Rust tests cannot run without GLib >=2.70 dev packages. SW-014 PR #38 and SW-015 PR #41 remain open with no reviews or inline threads at the latest check. Superseded PR #39 was closed without merging. V1 remains BLOCKED without Windows 11 x64 acceptance.
+
 ## Verification evidence
 
 - Integrated SW-015 UI: `npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check` — PASS; 12 files/88 tests. Existing nonfatal Vite dynamic import warning. `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` and `python scripts/verify_handoff.py` — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib usage` — BLOCKED before app compile because GLib >=2.70 development files / `glib-2.0.pc` are absent. Independent QA cleared UI after fixes but backend approval is held on CSV path-like display names and detailed sequence-run storage after privacy controls. `python scripts/check_release_gate.py` — BLOCKED; no Windows 11 x64 runtime.
@@ -54,7 +59,7 @@ Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable. PowerShell and a 
 
 ## Next executable tasks
 
-1. Track reviews for PR #38 and #41 and merge dependency stack only after review. Continue SW-017..SW-025 cross-platform in dependency order; SW-016 is in draft PR #42 pending a host capable of running native Rust tests or additional reviewer guidance. V1 remains BLOCKED until real Windows 11 x64 acceptance.
+1. Complete SW-017 cross-platform implementation and independent QA; open a PR atop SW-016. Continue tracking #38/#41 reviews and merge the stack only after review. Proceed through SW-018..SW-025 in dependency order. V1 remains BLOCKED until real Windows 11 x64 acceptance.
 2. Run SW-012 acceptance and portable packaging only on real Windows 11 x64. Until then V1 stays BLOCKED and no READY notice may be sent.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Resumption notes: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

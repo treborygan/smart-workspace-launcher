@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, ResourceRelationship, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -25,6 +25,60 @@ function readDemo(): Resource[] {
   catch { return demoResources; }
 }
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
+
+function normalizeRelocationPath(path: string) {
+  const value = path.trim();
+  if (!value || /^(?:[a-z][a-z\d+.-]*:\/\/)/i.test(value) || value.includes("\0")) throw new Error("Enter an absolute file-system path, not a URL.");
+  const windows = /^[a-z]:[\\/]/i.test(value) || value.startsWith("\\\\");
+  const separator = windows ? "\\" : "/";
+  const normalized = windows ? value.replaceAll("/", "\\") : value;
+  if (windows ? !(/^[a-z]:\\/i.test(normalized) || normalized.startsWith("\\\\")) : !normalized.startsWith("/")) throw new Error("Relocation paths must be absolute.");
+  if (normalized.split(/[\\/]+/).some((segment) => segment === "." || segment === "..")) throw new Error("Relocation paths cannot contain . or .. segments.");
+  const isRoot = windows ? /^[a-z]:\\$/i.test(normalized) : normalized === "/";
+  const trimmed = isRoot ? normalized : normalized.replace(/[\\/]+$/, "");
+  return { value: trimmed, separator, windows };
+}
+
+function relocationPrefixesOverlap(source: ReturnType<typeof normalizeRelocationPath>, destination: ReturnType<typeof normalizeRelocationPath>) {
+  if (source.windows !== destination.windows) return false;
+  const fold = (value: string) => source.windows ? value.toLocaleLowerCase("en-US") : value;
+  const isSameOrAncestor = (parent: string, child: string) => {
+    const normalizedParent = fold(parent);
+    const normalizedChild = fold(child);
+    return normalizedChild === normalizedParent
+      || (normalizedParent.endsWith(source.separator)
+        ? normalizedChild.startsWith(normalizedParent)
+        : normalizedChild.startsWith(`${normalizedParent}${source.separator}`));
+  };
+  return isSameOrAncestor(source.value, destination.value) || isSameOrAncestor(destination.value, source.value);
+}
+
+function replacePathPrefix(targetPath: string, sourcePrefix: string, destinationPrefix: string): string | null {
+  const source = normalizeRelocationPath(sourcePrefix);
+  const destination = normalizeRelocationPath(destinationPrefix);
+  const target = normalizeRelocationPath(targetPath);
+  if (source.windows !== destination.windows || source.windows !== target.windows) return null;
+  const fold = (value: string) => source.windows ? value.toLocaleLowerCase("en-US") : value;
+  const targetValue = fold(target.value); const sourceValue = fold(source.value);
+  let suffix: string;
+  if (targetValue === sourceValue) suffix = "";
+  else if (sourceValue.endsWith(source.separator)) {
+    if (!targetValue.startsWith(sourceValue)) return null;
+    suffix = target.value.slice(source.value.length);
+  } else {
+    const boundary = sourceValue + source.separator;
+    if (!targetValue.startsWith(boundary)) return null;
+    suffix = target.value.slice(source.value.length + 1);
+  }
+  if (!suffix) return destination.value;
+  return destination.value.endsWith(destination.separator) ? destination.value + suffix : `${destination.value}${destination.separator}${suffix}`;
+}
+
+function sameRelocationChanges(a: ResourceRelocationPreview, b: ResourceRelocationPreview) {
+  return a.profileId === b.profileId && a.sourcePrefix === b.sourcePrefix && a.destinationPrefix === b.destinationPrefix
+    && JSON.stringify(a.resourceIds ?? []) === JSON.stringify(b.resourceIds ?? [])
+    && JSON.stringify(a.changes) === JSON.stringify(b.changes);
+}
 
 export const api = {
   async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
@@ -113,6 +167,87 @@ export const api = {
       return { ...next, targets };
     });
     writeDemo(resources); return resources.find((r) => r.id === id)!;
+  },
+  async duplicateResource(request: ResourceDuplicateRequest): Promise<Resource> {
+    if (isNative()) {
+      const duplicated = await invokeTyped("resource_duplicate", { request });
+      await notifyWorkspaceChanged(request.profileId);
+      return duplicated;
+    }
+    const source = (await api.resources(request.profileId)).find((resource) => resource.id === request.resourceId);
+    if (!source) throw new Error("The resource is not assigned to this profile.");
+    const displayName = request.displayName?.trim() || `Copy of ${source.displayName}`;
+    if (!displayName || displayName.length > 120) throw new Error("The duplicate name must contain 1 to 120 characters.");
+    const timestamp = new Date().toISOString();
+    const duplicated: Resource = {
+      ...source,
+      id: crypto.randomUUID(),
+      displayName,
+      createdUtc: timestamp,
+      updatedUtc: timestamp,
+      targets: source.targets.map((target) => ({ ...target, id: crypto.randomUUID(), arguments: [...target.arguments] })),
+      tags: [...source.tags], aliases: [...source.aliases],
+      favorite: false, launchCount: 0, lastLaunchedUtc: null,
+    };
+    writeDemo([...readDemo(), duplicated]);
+    return duplicated;
+  },
+  async previewResourceRelocation(request: ResourceRelocationPreviewRequest): Promise<ResourceRelocationPreview> {
+    if (isNative()) return invokeTyped("resource_relocation_preview", { request });
+    const source = normalizeRelocationPath(request.sourcePrefix);
+    const destination = normalizeRelocationPath(request.destinationPrefix);
+    if (relocationPrefixesOverlap(source, destination)) throw new Error("Source and destination paths must be separate, non-overlapping paths.");
+    if (request.resourceIds && (request.resourceIds.length === 0 || request.resourceIds.length > 5000)) throw new Error("Select between 1 and 5,000 resources, or clear the selection to include all matches.");
+    const selectedIds = request.resourceIds ? new Set(request.resourceIds) : undefined;
+    const resources = await api.resources(request.profileId);
+    if (selectedIds && resources.filter((resource) => selectedIds.has(resource.id)).length !== selectedIds.size) throw new Error("One or more selected resources are not assigned to this profile.");
+    const changes = resources
+      .filter((resource) => !selectedIds || selectedIds.has(resource.id))
+      .flatMap((resource) => resource.targets
+        .filter((target) => target.kind === "file" || target.kind === "folder")
+        .flatMap((target) => {
+          const toUri = replacePathPrefix(target.canonicalUri, request.sourcePrefix, request.destinationPrefix);
+          return toUri && toUri !== target.canonicalUri ? [{ resourceId: resource.id, targetId: target.id, fromUri: target.canonicalUri, toUri }] : [];
+        }))
+      .sort((a, b) => a.resourceId.localeCompare(b.resourceId) || a.targetId.localeCompare(b.targetId));
+    const preview: ResourceRelocationPreview = { ...request, previewToken: crypto.randomUUID(), changes };
+    localStorage.setItem(`swl-relocation-preview-${preview.previewToken}`, JSON.stringify(preview));
+    return preview;
+  },
+  async commitResourceRelocation(preview: ResourceRelocationPreview): Promise<ResourceRelocationResult> {
+    if (isNative()) {
+      const result = await invokeTyped("resource_relocation_commit", { preview });
+      await notifyWorkspaceChanged(preview.profileId);
+      return result;
+    }
+    const previewKey = `swl-relocation-preview-${preview.previewToken}`;
+    let stored: ResourceRelocationPreview | null = null;
+    try { stored = JSON.parse(localStorage.getItem(previewKey) || "null") as ResourceRelocationPreview | null; } catch { /* expired/corrupt preview */ }
+    if (!stored || JSON.stringify(stored) !== JSON.stringify(preview)) throw new Error("This relocation preview is no longer valid. Preview the changes again.");
+    localStorage.removeItem(previewKey);
+    const current = await api.previewResourceRelocation({ profileId: preview.profileId, sourcePrefix: preview.sourcePrefix, destinationPrefix: preview.destinationPrefix, ...(preview.resourceIds ? { resourceIds: preview.resourceIds } : {}) });
+    localStorage.removeItem(`swl-relocation-preview-${current.previewToken}`);
+    if (!sameRelocationChanges(current, preview)) throw new Error("Resources changed after the preview. Review a new preview before applying relocation.");
+    if (!preview.changes.length) throw new Error("No matching file or folder targets are available to relocate.");
+    const resources = readDemo();
+    const changedResourceIds = new Set<string>();
+    const changesByTarget = new Map(preview.changes.map((change) => [`${change.resourceId}\0${change.targetId}`, change]));
+    for (const change of preview.changes) {
+      const resource = resources.find((item) => item.id === change.resourceId);
+      const target = resource?.targets.find((item) => item.id === change.targetId);
+      if (!target || target.canonicalUri !== change.fromUri || (target.kind !== "file" && target.kind !== "folder")) throw new Error("A target changed after the preview. Review a new preview before applying relocation.");
+    }
+    const next = resources.map((resource) => {
+      const targets = resource.targets.map((target) => {
+        const change = changesByTarget.get(`${resource.id}\0${target.id}`);
+        if (!change) return target;
+        changedResourceIds.add(resource.id);
+        return { ...target, canonicalUri: change.toUri };
+      });
+      return changedResourceIds.has(resource.id) ? { ...resource, targets, updatedUtc: new Date().toISOString() } : resource;
+    });
+    writeDemo(next);
+    return { updatedTargetCount: preview.changes.length, updatedResourceIds: [...changedResourceIds].sort() };
   },
   async remove(id: string, profileId?: string): Promise<void> {
     if (isNative()) { await invokeTyped("resource_delete", { id }); await notifyWorkspaceChanged(profileId); return; }

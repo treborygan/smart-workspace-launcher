@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:55 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 03:04 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -51,7 +51,7 @@ The integrated SW-021 foundation adds schema v12, validated extension manifests,
 
 ## Verification and release status
 
-At 2026-10-22 02:47 UTC, PR #38 and #41 review and inline-thread APIs returned empty. Independent read-only QA found no actionable blocker; #41 has a non-blocking DB-lock duration concern during large CSV export.
+At 2026-10-22 03:03 UTC, PR #38 and #41 review and inline-thread APIs returned empty. Independent read-only QA found no actionable blocker; #41 has a non-blocking DB-lock duration concern during large CSV export.
 
 - `npm ci --cache /tmp/swl-npm-cache` — PASS.
 - `npm run typecheck` — PASS.
@@ -79,3 +79,5 @@ Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Session continu
 SW-021 UI integration at `4041757`: `npm run typecheck` — PASS; `npm test -- --run` — PASS, 17 files / 137 tests; `npm run frontend:build` — PASS with the existing nonfatal Vite warning; `git diff --check` — PASS. Independent UI review passed. Core runtime tests have not run yet; the current host lacks GLib/GObject development files.
 
 Independent Core QA findings on `b8a48ff`: integration is held pending opaque one-time preview token enforcement, hostile ZIP/output regression coverage, and an exact final 64 KiB invocation cap when truncation is marked. Core is remediating in its isolated worktree.
+
+Integrated SW-021 Core follow-up: `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1`, `python scripts/verify_handoff.py`, `git diff --check` — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` — BLOCKED before app compilation because `glib-2.0.pc` / `gobject-2.0.pc` >=2.70 are absent and `PKG_CONFIG_PATH` is unset; tests authored but NOT_RUN. Independent contract/Core/UI QA PASS. Release gate remains BLOCKED.

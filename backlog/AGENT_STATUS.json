@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:55:00Z",
+  "updated_at_utc": "2026-10-22T03:04:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "8128e28",
+    "head_sha": "71eded85511d6995fa67056a2a5bdf565026c7d4",
     "base": "feature/sw-020-device-paths",
-    "review_status": "Frontend UI integrated and independently QA PASS; typecheck, 137 frontend tests, build and diff pass. Frozen runtime contract is in place. Core v13 runtime commit b8a48ff has formatting/metadata/isolated Wasmi harness checks, but independent Core QA identified three P2 blockers: public digest used as preview token (preview can be bypassed), missing hostile package/output boundary tests, and near-limit truncation can exceed 64 KiB after truncated=true. Core is fixing these before integration. Rust tests blocked at missing GLib/GObject; V1 blocked."
+    "review_status": "SW-021 runtime Core and UI now integrated at 71eded8. Independent contract, Core (including token/truncation/hostile ZIP/profile/output regression remediations) and UI reviews PASS. Frontend 17 files/137 tests, typecheck/build, Rust fmt, cargo metadata, handoff verify and diff checks PASS. Rust application test is BLOCKED before crate compilation by absent GLib/GObject >=2.70 pkg-config files; tests authored but NOT_RUN. Release gate BLOCKED; V1 BLOCKED. PR #47 remains draft stacked on PR #46."
   },
   "subagent_limit": 3,
   "agents": [
@@ -360,12 +360,12 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-021 sandbox package and runtime implementation",
       "branch": "feature/sw-021-runtime-core",
-      "commit": "b8a48ff",
+      "commit": "95294e4",
       "pr": 47,
-      "task": "Core implementation complete at b8a48ff but under independent QA remediation: replace derivable preview digest token with opaque one-time/path+digest-bound expiry token; add hostile ZIP/output/profile/pointer/truncation tests; fix 64KiB final truncated flag edge. Not integrated."
+      "task": "Core v13 package preview/install and no-import/no-start bounded Wasmi runtime; opaque one-time tokens; adversarial ZIP, ABI/pointer/fuel/output/profile and count/byte-truncation regressions. Independent Core QA PASS. App Cargo tests blocked before project compile by missing GLib/GObject."
     },
     {
       "role": "ui",
@@ -388,7 +388,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:55:00Z",
+    "at_utc": "2026-10-22T03:03:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -474,11 +474,51 @@
       {
         "command": "Independent SW-021 Core review on b8a48ff",
         "result": "BLOCKED pending fixes for P2: install preview token is derivable from public digest, hostile ZIP/output regression coverage is incomplete, and byte budget can be exceeded after setting truncated=true. Core is remediating; no integration yet."
+      },
+      {
+        "command": "npm run typecheck",
+        "result": "PASS on integrated SW-021 runtime branch."
+      },
+      {
+        "command": "npm test -- --run",
+        "result": "PASS, 17 files / 137 tests on integrated SW-021 runtime branch."
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+      },
+      {
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
+        "result": "PASS on integrated SW-021 runtime branch."
+      },
+      {
+        "command": "cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1",
+        "result": "PASS on integrated SW-021 runtime branch."
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS schema/fixture checks only; no compiled app/runtime proof."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
+        "result": "BLOCKED before project compilation: glib-2.0.pc and gobject-2.0.pc >=2.70 absent, PKG_CONFIG_PATH unset (exit 101); authored Rust test matrix NOT_RUN."
+      },
+      {
+        "command": "python scripts/check_release_gate.py",
+        "result": "BLOCKED: NOT READY: BLOCKED (exit 2)."
+      },
+      {
+        "command": "Independent SW-021 Core remediation review",
+        "result": "PASS after opaque five-minute one-time path/digest preview tokens, adversarial package/output/pointer/profile tests, and exact byte/count metadata truncation tests. Rust app tests remain unrun due GLib/GObject."
+      },
+      {
+        "command": "Independent SW-021 UI review",
+        "result": "PASS; preview/install token freshness, default-disabled grants, explicit run, profile-scoped inert text output, accessibility and errors reviewed."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Hold Core integration until follow-up commit fixes preview-bypass token, test coverage and truncation cap, then obtain independent QA re-review. UI is integrated/verified. PR #38/#41 review/thread APIs were empty as of 02:47 UTC. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Seek a supported Linux Rust test environment with GLib/GObject >=2.70 or run app tests on an approved native host; until then SW-021 behavior has static/isolated-harness evidence only and SW-022/SW-023/SW-024 dependent work stays gated. Latest review APIs at 2026-10-22 03:03 UTC: PR #38/#41 have no GitHub reviews or inline threads; independent QA finds no actionable blocker, PR #41 CSV lock-duration risk remains non-blocking. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -575,7 +615,7 @@
       "state": "OPEN",
       "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
       "base": "main",
-      "note": "PR metadata as last refreshed 2026-10-22 02:47 UTC; no GitHub review submissions or inline review threads; independent QA found no actionable blocker."
+      "note": "Review and inline-thread APIs last refreshed 2026-10-22 03:03 UTC: both empty; independent static QA found no actionable blocker."
     },
     {
       "number": 41,
@@ -584,7 +624,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
       "base": "feature/sw-014-action-sequences",
-      "note": "PR metadata as last refreshed 2026-10-22 02:47 UTC; no GitHub review submissions or inline review threads; independent QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+      "note": "Review and inline-thread APIs last refreshed 2026-10-22 03:03 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
     },
     {
       "number": 45,
@@ -609,9 +649,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "7614a31ece437bb40c91d05a62259411ba437389",
+      "head_sha": "71eded85511d6995fa67056a2a5bdf565026c7d4",
       "base": "feature/sw-020-device-paths",
-      "note": "Draft SW-021 registry/policy foundation only. No extension runtime/effective grants; issue remains in progress pending sandbox and host API. Core/UI QA passes; frontend 132 tests pass; Rust tests blocked by GLib; no Windows acceptance. GitHub reports stacked PR not mergeable pending base chain."
+      "note": "Draft PR updated with integrated runtime. Core/UI and contract QA pass; frontend 137 tests/typecheck/build and Rust fmt/metadata/handoff pass. App Rust tests are NOT_RUN/BLOCKED before compile by missing GLib/GObject. Base PR #46 remains in dependency chain; V1 blocked."
     }
   ],
   "contract_commits": [
@@ -629,6 +669,21 @@
       "issue": "SW-021",
       "sha": "2ca5ea46b4f7d96385a67b5c67281597aaac33d2",
       "scope": "Frozen Wasm package/runtime ABI, input/output schemas, capability-to-data validation, deterministic 64 KiB metadata bounds, no-import/no-start policy and stack/recursion/fuel/memory limits; independent contract QA PASS."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "2084637",
+      "scope": "Integrated Core v13 Wasm package preview/install/run path with imports/start/ABI/memory checks, permission-paired bounded data, runtime limits and output/profile validation."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "cd95f5d",
+      "scope": "Opaque one-time five-minute path/digest-bound preview tokens; expanded hostile package/output/pointer/profile/truncation tests; updated SDK/decision token contract."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "71eded8",
+      "scope": "Additional count-cap truncation and changed-package token replay regression tests; final independent QA PASS."
     }
   ]
 }

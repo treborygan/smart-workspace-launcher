@@ -3550,6 +3550,11 @@ fn canonical_import_source(source: &ResourceImportSource) -> Result<PathBuf, App
     if source.path.trim().is_empty() || source.path.chars().any(char::is_control) {
         return Err(AppError::Invalid("import source path is invalid".into()));
     }
+    if is_network_path(&source.path) {
+        return Err(AppError::Invalid(
+            "network import sources are not supported; choose a local folder or file".into(),
+        ));
+    }
     let path = Path::new(&source.path);
     ensure_import_source_path_is_safe(path)?;
     let metadata = std::fs::symlink_metadata(path)
@@ -9715,6 +9720,28 @@ mod tests {
         }
         assert!(collect_directory_candidates("directory", &directory).is_err());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resource_import_rejects_network_and_filesystem_root_sources() {
+        let unc = ResourceImportSource {
+            kind: "directory".into(),
+            path: r"\\server\share\Start Menu".into(),
+        };
+        assert!(is_network_path(&unc.path));
+        assert!(canonical_import_source(&unc).is_err());
+
+        #[cfg(unix)]
+        let root = PathBuf::from("/");
+        #[cfg(windows)]
+        let root = PathBuf::from(r"C:\");
+        if root.exists() {
+            let source = ResourceImportSource {
+                kind: "directory".into(),
+                path: root.to_string_lossy().into_owned(),
+            };
+            assert!(canonical_import_source(&source).is_err());
+        }
     }
 
     #[test]

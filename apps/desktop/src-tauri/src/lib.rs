@@ -46,12 +46,6 @@ impl Serialize for AppError {
     }
 }
 
-impl From<std::io::Error> for AppError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Package(error.to_string())
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTarget {
@@ -3994,6 +3988,20 @@ fn metadata_is_reparse_point(metadata: &std::fs::Metadata) -> bool {
     }
 }
 
+fn capability_metadata_is_reparse_point(metadata: &cap_std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use cap_std::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 fn ensure_import_source_path_is_safe(path: &Path) -> Result<(), AppError> {
     if !path.is_absolute()
         || path.to_string_lossy().starts_with("\\\\")
@@ -4184,7 +4192,11 @@ fn read_import_entry_bounded(
     let metadata = file
         .metadata()
         .map_err(|_| AppError::Invalid("import source could not be inspected".into()))?;
-    if !metadata.is_file() || metadata.len() > maximum as u64 {
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || capability_metadata_is_reparse_point(&metadata)
+        || metadata.len() > maximum as u64
+    {
         return Err(AppError::Invalid(
             "import source is not a regular file within its size limit".into(),
         ));
@@ -4211,7 +4223,7 @@ fn import_entry_metadata(entry: &cap_std::fs::DirEntry) -> Option<std::fs::Metad
     options.read(true).follow(FollowSymlinks::No);
     let file = entry.open_with(&options).ok()?;
     let metadata = file.into_std().metadata().ok()?;
-    metadata.is_file().then_some(metadata)
+    (metadata.is_file() && !metadata_is_reparse_point(&metadata)).then_some(metadata)
 }
 
 fn normalized_import_name(value: &str, fallback: &str) -> String {
@@ -4712,7 +4724,9 @@ fn collect_directory_candidates(
                     ignored += 1;
                     continue;
                 };
-                if metadata.file_type().is_symlink() {
+                if metadata.file_type().is_symlink()
+                    || capability_metadata_is_reparse_point(&metadata)
+                {
                     ignored += 1;
                     continue;
                 }
@@ -12096,6 +12110,46 @@ mod tests {
             };
             assert!(canonical_import_source(&source).is_err());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resource_import_directory_scan_rejects_junction_reparse_points() {
+        use std::process::Command;
+
+        let directory = temp_directory("sw-import-junction");
+        let outside = temp_directory("sw-import-junction-outside");
+        std::fs::write(outside.join("junction-secret.txt"), b"outside").unwrap();
+        let junction = directory.join("linked-directory");
+        let output = Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                junction.to_str().unwrap(),
+                outside.to_str().unwrap(),
+            ])
+            .output()
+            .expect("Windows cmd.exe is available");
+        assert!(
+            output.status.success(),
+            "could not create test junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let (candidates, ignored) = collect_directory_candidates("directory", &directory).unwrap();
+        assert!(ignored >= 1, "junction is reported as skipped");
+        assert!(
+            !candidates.iter().any(|candidate| {
+                candidate.candidate.display_name == "junction-secret.txt"
+                    || candidate.candidate.target_uri.contains("junction-secret")
+            }),
+            "scanner must not traverse a junction outside the selected folder"
+        );
+
+        std::fs::remove_dir(&junction).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]

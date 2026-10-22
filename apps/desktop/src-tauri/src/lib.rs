@@ -1491,13 +1491,16 @@ fn profile_package_from_db(
         });
     }
     let mut layouts = Vec::new();
-    let mut layout_stmt = conn
-        .prepare("SELECT surface,layout_json FROM layouts WHERE profile_id=?1 ORDER BY surface")?;
-    for row in layout_stmt.query_map([profile_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })? {
-        let (surface, json) = row?;
-        let layout: DashboardLayout = serde_json::from_str(&json)?;
+    let surfaces = {
+        let mut layout_stmt =
+            conn.prepare("SELECT surface FROM layouts WHERE profile_id=?1 ORDER BY surface")?;
+        layout_stmt
+            .query_map([profile_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for surface in surfaces {
+        // Use the same row identity, size and stale-membership validation as normal layout reads.
+        let layout = layout_get_from_conn(conn, profile_id, &surface)?;
         let cards = layout
             .cards
             .into_iter()
@@ -5831,9 +5834,14 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
             "widgets are supported only on the dashboard".into(),
         ));
     }
+    // Template and instance UUIDs share one namespace in a layout.
+    let mut widget_entity_ids = std::collections::HashSet::with_capacity(
+        layout.widget_templates.len() + layout.widgets.len(),
+    );
     let mut template_ids = std::collections::HashSet::with_capacity(layout.widget_templates.len());
     for template in &layout.widget_templates {
         if !is_valid_uuid(template.id())
+            || !widget_entity_ids.insert(template.id())
             || !template_ids.insert(template.id())
             || template.name().trim().is_empty()
             || template.name().chars().count() > 60
@@ -5880,10 +5888,9 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
             _ => {}
         }
     }
-    let mut instance_ids = std::collections::HashSet::with_capacity(layout.widgets.len());
     for widget in &layout.widgets {
         if !is_valid_uuid(&widget.id)
-            || !instance_ids.insert(widget.id.as_str())
+            || !widget_entity_ids.insert(widget.id.as_str())
             || !template_ids.contains(widget.template_id.as_str())
             || widget.x < 0
             || widget.x > 11
@@ -9587,6 +9594,57 @@ mod tests {
     }
 
     #[test]
+    fn profile_export_filters_stale_widget_references_like_layout_reads() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("Removed membership");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let template_id = Uuid::new_v4().to_string();
+        layout_save_to_conn(
+            &mut conn,
+            &DashboardLayout {
+                profile_id: profile_id.clone(),
+                surface: "dashboard".into(),
+                version: 1,
+                cards: Vec::new(),
+                widget_templates: vec![WidgetTemplate::ResourceShortcuts {
+                    id: template_id.clone(),
+                    name: "Stale shortcuts".into(),
+                    config: ResourceShortcutsConfig {
+                        resource_ids: vec![resource.id.clone()],
+                    },
+                }],
+                widgets: vec![DashboardWidget {
+                    id: Uuid::new_v4().to_string(),
+                    template_id,
+                    x: 0,
+                    y: 0,
+                    w: 4,
+                    h: 2,
+                }],
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+            params![profile_id, resource.id],
+        )
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("{}.swprofile", Uuid::new_v4()));
+        export_profile_to_path(&conn, &profile_id, &path, false).unwrap();
+        let package = read_profile_package(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        let dashboard = package
+            .layouts
+            .layouts
+            .iter()
+            .find(|layout| layout.surface.as_deref() == Some("dashboard"))
+            .unwrap();
+        assert!(dashboard.widget_templates.is_empty());
+        assert!(dashboard.widgets.is_empty());
+    }
+
+    #[test]
     fn profile_import_merge_remaps_smart_collection_id_and_name_collisions() {
         let mut conn = database();
         let mut package = package("url");
@@ -12077,6 +12135,14 @@ mod tests {
             ..good.clone()
         };
         assert!(validate_layout(&unknown_template).is_err());
+        let template_instance_id_collision = DashboardLayout {
+            widgets: vec![DashboardWidget {
+                id: template_id.clone(),
+                ..good.widgets[0].clone()
+            }],
+            ..good.clone()
+        };
+        assert!(validate_layout(&template_instance_id_collision).is_err());
         let overflow = DashboardLayout {
             widgets: vec![DashboardWidget {
                 x: 11,

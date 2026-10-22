@@ -5254,15 +5254,18 @@ mod tests {
     fn production_zip_reader_rejects_expanded_member_over_limit_within_archive_limit() {
         let package = package("url");
         let mut entries = serialized_documents(&package);
+        // Keep the compressed archive below the archive-wide limit while
+        // exceeding the uncompressed single-entry limit. A completely
+        // pseudorandom 32 MiB payload grows slightly under DEFLATE.
         let mut payload = Vec::with_capacity(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1);
         let mut state = 0x9e37_79b9_u32;
-        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize - 1024) {
+        for _ in 0..(PROFILE_ARCHIVE_MAX_ENTRY as usize / 2) {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
             payload.push(state as u8);
         }
-        payload.extend(std::iter::repeat_n(0u8, 1025));
+        payload.resize(PROFILE_ARCHIVE_MAX_ENTRY as usize + 1, 0);
         entries.push(("oversized.bin", payload));
         let path = write_test_archive_with_compression(&entries, CompressionMethod::Deflated);
         assert!(std::fs::metadata(&path).unwrap().len() <= PROFILE_ARCHIVE_MAX_COMPRESSED);
@@ -5834,7 +5837,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(profile_name, "Work");
+        assert_eq!(profile_name, format!("Work-{target_profile}"));
         assert_eq!(
             smart_collection_list_on_conn(&conn, &target_profile).unwrap(),
             vec![original_collection]
@@ -6768,7 +6771,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(profile_name, "Work");
+        assert_eq!(profile_name, format!("Work-{target_profile}"));
         assert_eq!(
             dynamic_shortcut_list_on_conn(&conn, &target_profile).unwrap(),
             vec![old_shortcut]
@@ -6991,19 +6994,48 @@ mod tests {
     }
 
     #[test]
-    fn missing_target_is_recorded_as_failed_attempt() {
+    fn unknown_explicit_target_is_rejected_and_missing_active_target_is_recorded() {
         let mut conn = database();
         let r = resource("No target");
         persist_resource(&mut conn, &r, true, None).unwrap();
-        let request = LaunchRequest {
+        let unknown_request = LaunchRequest {
             request_id: Uuid::new_v4().to_string(),
             resource_id: r.id.clone(),
             target_id: Some(Uuid::new_v4().to_string()),
             profile_id: None,
             source: "explorer".into(),
         };
+        assert!(matches!(
+            launch_event_with(&mut conn, &unknown_request, |_| {
+                panic!("unknown explicit target must never invoke a handler")
+            }),
+            Err(AppError::NotFound)
+        ));
+        let logged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM launch_events WHERE request_id=?1",
+                [&unknown_request.request_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(logged, 0);
+
+        // When a registered resource has no active targets, the valid
+        // auto-resolved launch attempt is recorded as a failed event.
+        conn.execute(
+            "UPDATE resource_targets SET active=0 WHERE resource_id=?1",
+            [&r.id],
+        )
+        .unwrap();
+        let request = LaunchRequest {
+            request_id: Uuid::new_v4().to_string(),
+            resource_id: r.id.clone(),
+            target_id: None,
+            profile_id: None,
+            source: "explorer".into(),
+        };
         let event = launch_event_with(&mut conn, &request, |_| {
-            panic!("handler must not run without target")
+            panic!("inactive target must never invoke a handler")
         })
         .unwrap();
         assert_eq!(event.status, "failed");

@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DevicePathMapping, DevicePathMappingPreview, DevicePathMappingPreviewRequest, DynamicShortcut, LaunchEvent, LaunchSource, LocalDeviceIdentity, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DevicePathMapping, DevicePathMappingPreview, DevicePathMappingPreviewRequest, DynamicShortcut, ExtensionManifest, ExtensionPermissionUpdate, LaunchEvent, LaunchSource, LocalDeviceIdentity, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, RegisteredExtension, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -104,6 +104,26 @@ export const api = {
   async deleteDevicePathMapping(id: string): Promise<void> {
     if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
     return invokeTyped("device_path_mapping_delete", { id });
+  },
+  async extensionRegistry(): Promise<RegisteredExtension[]> {
+    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
+    return invokeTyped("extension_registry_list");
+  },
+  async registerExtension(manifest: ExtensionManifest): Promise<RegisteredExtension> {
+    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
+    return invokeTyped("extension_registry_register", { manifest });
+  },
+  async setExtensionPermissions(update: ExtensionPermissionUpdate): Promise<RegisteredExtension> {
+    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
+    return invokeTyped("extension_registry_permissions_set", { update });
+  },
+  async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<RegisteredExtension> {
+    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
+    return invokeTyped("extension_registry_enabled_set", { extensionId, enabled });
+  },
+  async removeExtension(extensionId: string): Promise<void> {
+    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
+    return invokeTyped("extension_registry_remove", { extensionId });
   },
   async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
     if (isNative()) {

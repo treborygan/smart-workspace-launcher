@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DashboardLayout } from "@sw/contracts";
+import type { DashboardLayout, ResourceRelationship, WorkspaceSnapshot } from "@sw/contracts";
 
 const { emitTyped, invokeTyped, listenTyped } = vi.hoisted(() => ({ emitTyped: vi.fn(), invokeTyped: vi.fn(), listenTyped: vi.fn() }));
 vi.mock("@sw/contracts", () => ({ emitTyped, invokeTyped, listenTyped }));
@@ -215,6 +215,49 @@ describe("workspace sequence API", () => {
     expect(launch).toHaveBeenNthCalledWith(2, "r2", "sequence", "p1", undefined);
     expect(launch).toHaveBeenCalledTimes(2);
     launch.mockRestore();
+  });
+});
+
+describe("resource relationship and workspace snapshot API", () => {
+  const relationship: ResourceRelationship = { id: "edge1", profileId: "p1", sourceResourceId: "r1", targetResourceId: "r2", label: "supports" };
+  const snapshot: WorkspaceSnapshot = { id: "snap1", profileId: "p1", name: "Planning", createdUtc: "2026-01-01T00:00:00Z", resourceIds: ["r1", "r2"], dashboard: { profileId: "p1", surface: "dashboard", version: 1, cards: [] }, dock: { profileId: "p1", surface: "dock", version: 1, cards: [] } };
+
+  it("routes all relationship and snapshot operations through typed native commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const restored = { snapshotId: "snap1", restoredLayouts: 2, missingResourceIds: [] };
+    invokeTyped.mockResolvedValueOnce([relationship]).mockResolvedValueOnce(relationship).mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce([snapshot]).mockResolvedValueOnce(snapshot).mockResolvedValueOnce(undefined).mockResolvedValueOnce(restored);
+    expect(await api.resourceRelationships("p1")).toEqual([relationship]);
+    expect(await api.saveResourceRelationship(relationship)).toEqual(relationship);
+    await api.deleteResourceRelationship("p1", "edge1");
+    expect(await api.workspaceSnapshots("p1")).toEqual([snapshot]);
+    expect(await api.createWorkspaceSnapshot("p1", "Planning")).toEqual(snapshot);
+    await api.deleteWorkspaceSnapshot("p1", "snap1");
+    expect(await api.restoreWorkspaceSnapshot("p1", "snap1")).toEqual(restored);
+    expect(invokeTyped.mock.calls.map(([command]) => command)).toEqual([
+      "resource_relationship_list", "resource_relationship_save", "resource_relationship_delete",
+      "workspace_snapshot_list", "workspace_snapshot_create", "workspace_snapshot_delete", "workspace_snapshot_restore",
+    ]);
+    expect(emitTyped).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps browser-preview graph records profile-local and rejects reversed duplicate edges", async () => {
+    await api.saveResourceRelationship(relationship);
+    expect(await api.resourceRelationships("p1")).toEqual([relationship]);
+    expect(await api.resourceRelationships("p2")).toEqual([]);
+    await expect(api.saveResourceRelationship({ ...relationship, id: "edge2", sourceResourceId: "r2", targetResourceId: "r1" })).rejects.toThrow("already linked");
+    await api.deleteResourceRelationship("p1", "edge1");
+    expect(await api.resourceRelationships("p1")).toEqual([]);
+  });
+
+  it("restores only currently present resources and reports stale snapshot references", async () => {
+    const valid = { ...snapshot.dashboard.cards[0], resourceId: "a1", x: 0, y: 0, w: 4, h: 1, type: "icon" as const };
+    const stale = { ...valid, resourceId: "removed-resource", y: 1 };
+    const savedSnapshot = { ...snapshot, resourceIds: ["a1", "removed-resource"], dashboard: { ...snapshot.dashboard, cards: [valid, stale] } };
+    localStorage.setItem("swl-workspace-snapshots-p1", JSON.stringify([savedSnapshot]));
+    const result = await api.restoreWorkspaceSnapshot("p1", "snap1");
+    expect(result).toEqual({ snapshotId: "snap1", restoredLayouts: 2, missingResourceIds: ["removed-resource"] });
+    expect(await api.layout("p1")).toEqual({ ...savedSnapshot.dashboard, cards: [valid] });
   });
 });
 

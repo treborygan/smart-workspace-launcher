@@ -427,3 +427,35 @@ describe("resource discovery import API", () => {
     expect(invokeTyped).not.toHaveBeenCalled();
   });
 });
+
+describe("extension package and runtime API", () => {
+  const packageRequest = { packagePath: "C:\\Packages\\focus.swext" };
+  const packagePreview = { manifest: { id: "com.example.focus", name: "Focus", version: "1.0.0", sdkVersion: "1.0.0", description: "Example", requestedCapabilities: [] }, packageSha256: "b".repeat(64), moduleSha256: "a".repeat(64), moduleSizeBytes: 100, previewToken: "token" };
+  const installed = { ...packagePreview.manifest, grantedCapabilities: [], enabled: false, installedUtc: "now", moduleSha256: packagePreview.moduleSha256 };
+
+  it("uses the shared typed commands for preview, install, permissions, status, run and removal", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeTyped.mockResolvedValueOnce(packagePreview).mockResolvedValueOnce(installed).mockResolvedValueOnce(installed).mockResolvedValueOnce(installed).mockResolvedValueOnce({ extensionId: installed.id, suggestions: [] }).mockResolvedValueOnce(undefined);
+    expect(await api.previewExtensionPackage(packageRequest)).toEqual(packagePreview);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "extension_package_preview", { request: packageRequest });
+    const installRequest = { ...packageRequest, packageSha256: packagePreview.packageSha256, previewToken: packagePreview.previewToken };
+    expect(await api.installExtensionPackage(installRequest)).toEqual(installed);
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "extension_package_install", { request: installRequest });
+    const permissions = { extensionId: installed.id, manifestVersion: installed.version, grantedCapabilities: [] };
+    await api.setExtensionPermissions(permissions);
+    expect(invokeTyped).toHaveBeenNthCalledWith(3, "extension_registry_permissions_set", { update: permissions });
+    await api.setExtensionEnabled(installed.id, true);
+    expect(invokeTyped).toHaveBeenNthCalledWith(4, "extension_registry_enabled_set", { extensionId: installed.id, enabled: true });
+    expect(await api.runExtension(installed.id, "profile-1")).toEqual({ extensionId: installed.id, suggestions: [] });
+    expect(invokeTyped).toHaveBeenNthCalledWith(5, "extension_registry_run", { extensionId: installed.id, profileId: "profile-1" });
+    await api.removeExtension(installed.id);
+    expect(invokeTyped).toHaveBeenNthCalledWith(6, "extension_registry_remove", { extensionId: installed.id });
+  });
+
+  it("does not simulate native extension package or runtime operations in browser preview", async () => {
+    await expect(api.previewExtensionPackage(packageRequest)).rejects.toThrow("desktop app");
+    await expect(api.installExtensionPackage({ ...packageRequest, packageSha256: "b".repeat(64), previewToken: "token" })).rejects.toThrow("desktop app");
+    await expect(api.runExtension("com.example.focus", "profile-1")).rejects.toThrow("desktop app");
+    expect(invokeTyped).not.toHaveBeenCalled();
+  });
+});

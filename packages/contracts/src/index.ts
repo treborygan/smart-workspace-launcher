@@ -181,6 +181,53 @@ export interface ResourceRelocationResult {
   updatedResourceIds: string[];
 }
 
+/** Explicit source selected by the user; scanning is bounded and read-only. */
+export type ResourceImportSourceKind = "directory" | "start_menu" | "bookmarks";
+export type ResourceImportDuplicatePolicy = "skip_existing" | "create_duplicate";
+
+export interface ResourceImportSource {
+  kind: ResourceImportSourceKind;
+  path: string;
+}
+
+export interface ResourceImportScanRequest {
+  profileId: string;
+  source: ResourceImportSource;
+}
+
+export interface ResourceImportCandidate {
+  candidateId: string;
+  resourceType: ResourceType;
+  displayName: string;
+  targetUri: string;
+  sourceLabel: string;
+  provenance: string;
+  existingResourceId?: string;
+}
+
+/** Preview token binds bounded discovery results to an explicit commit. */
+export interface ResourceImportScanResult {
+  profileId: string;
+  source: ResourceImportSource;
+  scanToken: string;
+  candidates: ResourceImportCandidate[];
+  ignoredCount: number;
+}
+
+export interface ResourceImportCommitRequest {
+  profileId: string;
+  source: ResourceImportSource;
+  scanToken: string;
+  candidateIds: string[];
+  duplicatePolicy: ResourceImportDuplicatePolicy;
+}
+
+export interface ResourceImportCommitResult {
+  profileId: string;
+  importedCount: number;
+  skippedCount: number;
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -388,6 +435,8 @@ export interface CommandMap {
   resource_duplicate: { args: { request: ResourceDuplicateRequest }; result: Resource };
   resource_relocation_preview: { args: { request: ResourceRelocationPreviewRequest }; result: ResourceRelocationPreview };
   resource_relocation_commit: { args: { preview: ResourceRelocationPreview }; result: ResourceRelocationResult };
+  resource_import_scan: { args: { request: ResourceImportScanRequest }; result: ResourceImportScanResult };
+  resource_import_commit: { args: { request: ResourceImportCommitRequest }; result: ResourceImportCommitResult };
   workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };
   workspace_snapshot_create: { args: { profileId: string; name: string }; result: WorkspaceSnapshot };
   workspace_snapshot_delete: { args: { profileId: string; id: string }; result: void };

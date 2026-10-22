@@ -173,6 +173,61 @@ pub struct ResourceRelocationResult {
     pub updated_resource_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportSource {
+    pub kind: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportScanRequest {
+    pub profile_id: String,
+    pub source: ResourceImportSource,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportCandidate {
+    pub candidate_id: String,
+    pub resource_type: String,
+    pub display_name: String,
+    pub target_uri: String,
+    pub source_label: String,
+    pub provenance: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_resource_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportScanResult {
+    pub profile_id: String,
+    pub source: ResourceImportSource,
+    pub scan_token: String,
+    pub candidates: Vec<ResourceImportCandidate>,
+    pub ignored_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportCommitRequest {
+    pub profile_id: String,
+    pub source: ResourceImportSource,
+    pub scan_token: String,
+    pub candidate_ids: Vec<String>,
+    pub duplicate_policy: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceImportCommitResult {
+    pub profile_id: String,
+    pub imported_count: usize,
+    pub skipped_count: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchRequest {
@@ -3409,6 +3464,1135 @@ fn resource_list(
         result.push(resource);
     }
     Ok(result)
+}
+
+const RESOURCE_IMPORT_MAX_DEPTH: usize = 4;
+const RESOURCE_IMPORT_MAX_ENTRIES: usize = 1_000;
+const RESOURCE_IMPORT_MAX_BOOKMARK_BYTES: usize = 4 * 1024 * 1024;
+const RESOURCE_IMPORT_MAX_URL_SHORTCUT_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Debug)]
+struct ScannedImportCandidate {
+    candidate: ResourceImportCandidate,
+    fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+struct ScannedImport {
+    candidates: Vec<ScannedImportCandidate>,
+    ignored_count: usize,
+    source_digest: String,
+}
+
+fn is_resource_import_kind(kind: &str) -> bool {
+    matches!(kind, "directory" | "start_menu" | "bookmarks")
+}
+
+fn source_label_for_import(kind: &str) -> Result<(&'static str, &'static str), AppError> {
+    match kind {
+        "directory" => Ok(("Selected folder", "directory_scan")),
+        "start_menu" => Ok(("Start Menu folder", "start_menu_scan")),
+        "bookmarks" => Ok(("Browser bookmarks", "browser_bookmarks")),
+        _ => Err(AppError::Invalid("unsupported import source".into())),
+    }
+}
+
+fn metadata_is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn ensure_import_source_path_is_safe(path: &Path) -> Result<(), AppError> {
+    if !path.is_absolute()
+        || path.to_string_lossy().starts_with("\\\\")
+        || path.to_string_lossy().starts_with("//")
+    {
+        return Err(AppError::Invalid(
+            "choose an absolute local import source; network paths are not supported".into(),
+        ));
+    }
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) =>
+            {
+                return Err(AppError::Invalid(
+                    "import sources cannot contain symbolic links or reparse points".into(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::Invalid("import source does not exist".into()));
+            }
+            Err(_) => {
+                return Err(AppError::Invalid(
+                    "import source cannot be inspected".into(),
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn canonical_import_source(source: &ResourceImportSource) -> Result<PathBuf, AppError> {
+    source_label_for_import(&source.kind)?;
+    if source.path.trim().is_empty() || source.path.chars().any(char::is_control) {
+        return Err(AppError::Invalid("import source path is invalid".into()));
+    }
+    if is_network_path(&source.path) {
+        return Err(AppError::Invalid(
+            "network import sources are not supported; choose a local folder or file".into(),
+        ));
+    }
+    let path = Path::new(&source.path);
+    ensure_import_source_path_is_safe(path)?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| AppError::Invalid("import source cannot be inspected".into()))?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) {
+        return Err(AppError::Invalid(
+            "import sources cannot contain symbolic links or reparse points".into(),
+        ));
+    }
+    if source.kind == "bookmarks" {
+        if !metadata.is_file() || metadata.len() > RESOURCE_IMPORT_MAX_BOOKMARK_BYTES as u64 {
+            return Err(AppError::Invalid(
+                "bookmark source must be a regular file no larger than 4 MiB".into(),
+            ));
+        }
+        if !matches!(
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("html" | "htm")
+        ) {
+            return Err(AppError::Invalid(
+                "choose a Netscape-format HTML bookmark file".into(),
+            ));
+        }
+    } else {
+        if !metadata.is_dir() {
+            return Err(AppError::Invalid("select a local folder to scan".into()));
+        }
+        let normal_components = path
+            .components()
+            .filter(|component| matches!(component, std::path::Component::Normal(_)))
+            .count();
+        if normal_components == 0 {
+            return Err(AppError::Invalid(
+                "whole-drive and filesystem-root scans are not allowed".into(),
+            ));
+        }
+    }
+    std::fs::canonicalize(path)
+        .map_err(|_| AppError::Invalid("import source cannot be inspected".into()))
+}
+
+fn import_metadata_fingerprint(metadata: &std::fs::Metadata) -> String {
+    import_metadata_fingerprint_parts(metadata.len(), metadata.modified().ok())
+}
+
+fn import_metadata_fingerprint_parts(
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+) -> String {
+    let modified = modified
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos().to_string())
+        .unwrap_or_default();
+    format!("{length}:{modified}")
+}
+
+fn read_import_file_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, AppError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| AppError::Invalid("import source could not be read".into()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| AppError::Invalid("import source could not be inspected".into()))?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+        || metadata.len() > maximum as u64
+    {
+        return Err(AppError::Invalid(
+            "import source is not a safe regular file within its size limit".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| AppError::Invalid("import source could not be read".into()))?;
+    if bytes.len() > maximum {
+        return Err(AppError::Invalid(
+            "import source exceeds its size limit".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn candidate_id(resource_type: &str, target_uri: &str, occurrence: usize) -> String {
+    let mut digest = Sha256::new();
+    digest.update(resource_type.as_bytes());
+    digest.update([0]);
+    digest.update(normalize_import_target(target_uri).as_bytes());
+    digest.update([0]);
+    digest.update(occurrence.to_be_bytes());
+    format!("{:x}", digest.finalize())
+}
+
+fn normalize_import_target(value: &str) -> String {
+    if let Ok(parsed) = Url::parse(value) {
+        return parsed.to_string();
+    }
+    value.replace('/', "\\").to_ascii_lowercase()
+}
+
+fn safe_https_target(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 4_096 || value.chars().any(char::is_control) {
+        return None;
+    }
+    let parsed = Url::parse(value).ok()?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    Some(parsed.to_string())
+}
+
+fn read_import_entry_bounded(
+    entry: &cap_std::fs::DirEntry,
+    maximum: usize,
+) -> Result<(Vec<u8>, String), AppError> {
+    use cap_fs_ext::{FollowSymlinks, OpenOptions, OpenOptionsFollowExt};
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let mut file = entry
+        .open_with(&options)
+        .map_err(|_| AppError::Invalid("import source changed while reading".into()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| AppError::Invalid("import source could not be inspected".into()))?;
+    if !metadata.is_file() || metadata.len() > maximum as u64 {
+        return Err(AppError::Invalid(
+            "import source is not a regular file within its size limit".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| AppError::Invalid("import source could not be read".into()))?;
+    if bytes.len() > maximum {
+        return Err(AppError::Invalid(
+            "import source exceeds its size limit".into(),
+        ));
+    }
+    let fingerprint = import_metadata_fingerprint_parts(metadata.len(), metadata.modified().ok());
+    Ok((bytes, fingerprint))
+}
+
+fn import_entry_metadata(entry: &cap_std::fs::DirEntry) -> Option<std::fs::Metadata> {
+    use cap_fs_ext::{FollowSymlinks, OpenOptions, OpenOptionsFollowExt};
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = entry.open_with(&options).ok()?;
+    let metadata = file.metadata().ok()?;
+    metadata.is_file().then_some(metadata)
+}
+
+fn normalized_import_name(value: &str, fallback: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let normalized = normalized.trim();
+    let name = if normalized.is_empty() {
+        fallback
+    } else {
+        normalized
+    };
+    name.chars().take(256).collect()
+}
+
+fn source_file_candidate(
+    source_kind: &str,
+    resource_type: &str,
+    target_kind: &str,
+    target_uri: String,
+    display_name: &str,
+    fingerprint: String,
+    occurrence: usize,
+) -> ScannedImportCandidate {
+    let (source_label, provenance) = source_label_for_import(source_kind).unwrap();
+    ScannedImportCandidate {
+        candidate: ResourceImportCandidate {
+            candidate_id: candidate_id(resource_type, &target_uri, occurrence),
+            resource_type: resource_type.into(),
+            display_name: normalized_import_name(display_name, "Imported resource"),
+            target_uri,
+            source_label: source_label.into(),
+            provenance: provenance.into(),
+            existing_resource_id: None,
+        },
+        fingerprint: format!("{target_kind}:{fingerprint}"),
+    }
+}
+
+fn native_import_target(path: &Path) -> Option<String> {
+    let value = path.to_str()?;
+    if valid_windows_absolute_path(value) {
+        Some(value.to_owned())
+    } else {
+        None
+    }
+}
+
+fn parse_internet_shortcut(data: &[u8]) -> Option<(String, String)> {
+    if data.len() > RESOURCE_IMPORT_MAX_URL_SHORTCUT_BYTES {
+        return None;
+    }
+    let text = std::str::from_utf8(data).ok()?;
+    let mut in_shortcut_section = false;
+    let mut url = None;
+    let mut name = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            in_shortcut_section = line.eq_ignore_ascii_case("[InternetShortcut]");
+            continue;
+        }
+        if !in_shortcut_section {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim().eq_ignore_ascii_case("URL") {
+                url = safe_https_target(value);
+            } else if key.trim().eq_ignore_ascii_case("IconFile") {
+                // An icon path is deliberately ignored; discovery imports only the URL.
+            } else if key.trim().eq_ignore_ascii_case("IDList") {
+                // Binary shell metadata is never interpreted.
+            } else if key.trim().eq_ignore_ascii_case("name") {
+                name = Some(value.trim().to_owned());
+            }
+        }
+    }
+    Some((url?, name.unwrap_or_default()))
+}
+
+#[cfg(windows)]
+fn read_shell_link_target(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        core::{Interface, PCWSTR},
+        Win32::{
+            Foundation::RPC_E_CHANGED_MODE,
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile,
+                CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, STGM_READ,
+            },
+            UI::Shell::{IShellLinkW, ShellLink, SLGP_RAWPATH},
+        },
+    };
+
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let owns_apartment = initialized >= 0;
+        if initialized < 0 && initialized != RPC_E_CHANGED_MODE {
+            return None;
+        }
+        let result = (|| {
+            // Load reads Shell Link metadata only. It deliberately avoids Resolve,
+            // ShellExecute, and all argument handoff.
+            let link: IShellLinkW =
+                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+            let persist: IPersistFile = link.cast().ok()?;
+            let link_path = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            persist.Load(PCWSTR(link_path.as_ptr()), STGM_READ).ok()?;
+            let mut arguments = [0_u16; 2_048];
+            link.GetArguments(&mut arguments).ok()?;
+            if arguments.iter().any(|value| *value != 0) {
+                return None;
+            }
+            let mut raw_path = [0_u16; 32_768];
+            link.GetPath(&mut raw_path, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32)
+                .ok()?;
+            let length = raw_path.iter().position(|value| *value == 0)?;
+            let target = String::from_utf16(&raw_path[..length]).ok()?;
+            let extension = Path::new(&target)
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !valid_windows_absolute_path(&target)
+                || target.starts_with("\\\\")
+                || target.starts_with("//")
+                || [
+                    "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "sh",
+                    "bash", "py", "reg",
+                ]
+                .contains(&extension.as_str())
+            {
+                return None;
+            }
+            Some(target)
+        })();
+        if owns_apartment {
+            CoUninitialize();
+        }
+        result
+    }
+}
+
+#[cfg(not(windows))]
+fn read_shell_link_target(_path: &Path) -> Option<String> {
+    None
+}
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str, from: usize) -> Option<usize> {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty()
+        || from > haystack.len()
+        || needle.len() > haystack.len().saturating_sub(from)
+    {
+        return None;
+    }
+    (from..=haystack.len() - needle.len())
+        .find(|start| haystack[*start..*start + needle.len()].eq_ignore_ascii_case(needle))
+}
+
+fn html_unescape_minimal(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('&') {
+        output.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(';').filter(|end| *end <= 12) else {
+            output.push('&');
+            rest = after;
+            continue;
+        };
+        let entity = &after[..end];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" | "#39" => Some('\''),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            value if value.starts_with("#x") || value.starts_with("#X") => {
+                u32::from_str_radix(&value[2..], 16)
+                    .ok()
+                    .and_then(char::from_u32)
+            }
+            value if value.starts_with('#') => {
+                value[1..].parse::<u32>().ok().and_then(char::from_u32)
+            }
+            _ => None,
+        };
+        if let Some(decoded) = decoded {
+            output.push(decoded);
+            rest = &after[end + 1..];
+        } else {
+            output.push('&');
+            rest = after;
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+fn html_attribute(tag: &str, expected: &str) -> Option<String> {
+    let bytes = tag.as_bytes();
+    let mut index = 2;
+    while index < bytes.len() {
+        while index < bytes.len() && (bytes[index].is_ascii_whitespace() || bytes[index] == b'/') {
+            index += 1;
+        }
+        let start = index;
+        while index < bytes.len()
+            && (bytes[index].is_ascii_alphanumeric()
+                || bytes[index] == b'-'
+                || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        if start == index {
+            index += 1;
+            continue;
+        }
+        let name = &tag[start..index];
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'=' {
+            continue;
+        }
+        index += 1;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+        let value = if bytes[index] == b'\'' || bytes[index] == b'"' {
+            let quote = bytes[index];
+            index += 1;
+            let start = index;
+            while index < bytes.len() && bytes[index] != quote {
+                index += 1;
+            }
+            let value = &tag[start..index];
+            index = (index + 1).min(bytes.len());
+            value
+        } else {
+            let start = index;
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'>'
+            {
+                index += 1;
+            }
+            &tag[start..index]
+        };
+        if name.eq_ignore_ascii_case(expected) {
+            return Some(html_unescape_minimal(value));
+        }
+    }
+    None
+}
+
+fn parse_bookmark_html(data: &[u8]) -> Option<Vec<(String, String)>> {
+    if data.len() > RESOURCE_IMPORT_MAX_BOOKMARK_BYTES {
+        return None;
+    }
+    let html = std::str::from_utf8(data).ok()?;
+    if !html.get(..html.len().min(128)).is_some_and(|prefix| {
+        prefix
+            .to_ascii_lowercase()
+            .contains("netscape-bookmark-file-1")
+    }) {
+        return None;
+    }
+    let mut links = Vec::new();
+    let mut cursor = 0;
+    let mut anchors_seen = 0usize;
+    while let Some(relative) = find_ascii_case_insensitive(html, "<a", cursor) {
+        anchors_seen += 1;
+        if anchors_seen > RESOURCE_IMPORT_MAX_ENTRIES {
+            return None;
+        }
+        let start = relative;
+        let mut quote = None;
+        let mut end = None;
+        for (offset, byte) in html.as_bytes()[start..].iter().enumerate() {
+            if matches!(*byte, b'\'' | b'"') {
+                if quote == Some(*byte) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(*byte);
+                }
+            } else if *byte == b'>' && quote.is_none() {
+                end = Some(start + offset);
+                break;
+            }
+        }
+        let Some(tag_end) = end else {
+            break;
+        };
+        let tag = &html[start..=tag_end];
+        cursor = tag_end + 1;
+        if !html
+            .as_bytes()
+            .get(start + 2)
+            .is_some_and(|ch| ch.is_ascii_whitespace() || *ch == b'>')
+        {
+            continue;
+        }
+        let Some(href) = html_attribute(tag, "href").and_then(|href| safe_https_target(&href))
+        else {
+            continue;
+        };
+        let Some(relative_close) = find_ascii_case_insensitive(html, "</a", cursor) else {
+            continue;
+        };
+        let label = html[cursor..relative_close]
+            .replace('<', " ")
+            .replace('>', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let name = normalized_import_name(&html_unescape_minimal(&label), "Bookmarked website");
+        links.push((name, href));
+        cursor = find_ascii_case_insensitive(html, ">", relative_close)
+            .map(|position| position + 1)
+            .unwrap_or(relative_close + 3);
+    }
+    Some(links)
+}
+
+fn file_candidate_from_entry(
+    source_kind: &str,
+    entry: &cap_std::fs::DirEntry,
+    path: &Path,
+    occurrence: usize,
+) -> Option<ScannedImportCandidate> {
+    let file_type = entry.file_type().ok()?;
+    if file_type.is_symlink() {
+        return None;
+    }
+    let metadata = import_entry_metadata(entry)?;
+    let fingerprint = import_metadata_fingerprint_parts(metadata.len(), metadata.modified().ok());
+    let display_name = path.file_name()?.to_string_lossy().into_owned();
+    if file_type.is_dir() {
+        let target = native_import_target(path)?;
+        return Some(source_file_candidate(
+            source_kind,
+            "folder",
+            "folder",
+            target,
+            &display_name,
+            fingerprint,
+            occurrence,
+        ));
+    }
+    if !file_type.is_file() {
+        return None;
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension == "lnk" {
+        let (link_bytes, link_fingerprint) = read_import_entry_bounded(entry, 1024 * 1024).ok()?;
+        if link_bytes.is_empty() {
+            return None;
+        }
+        let target = read_shell_link_target(path)?;
+        let target_extension = Path::new(&target)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let kind = if target_extension == "exe" {
+            ("app", "app")
+        } else {
+            ("file", "file")
+        };
+        return Some(source_file_candidate(
+            source_kind,
+            kind.0,
+            kind.1,
+            target,
+            &display_name,
+            format!(
+                "{link_fingerprint}:{}",
+                Sha256::digest(&link_bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ),
+            occurrence,
+        ));
+    }
+    if [
+        "exe", "com", "scr", "msi", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf",
+        "wsh", "sh", "bash", "py", "reg",
+    ]
+    .contains(&extension.as_str())
+    {
+        return None;
+    }
+    if extension == "url" {
+        let (data, file_fingerprint) =
+            read_import_entry_bounded(entry, RESOURCE_IMPORT_MAX_URL_SHORTCUT_BYTES).ok()?;
+        let (url, shortcut_name) = parse_internet_shortcut(&data)?;
+        let label = if shortcut_name.is_empty() {
+            path.file_stem()?.to_string_lossy().into_owned()
+        } else {
+            shortcut_name
+        };
+        return Some(source_file_candidate(
+            source_kind,
+            "url",
+            "url",
+            url,
+            &label,
+            format!(
+                "{}:{}",
+                file_fingerprint,
+                Sha256::digest(&data)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ),
+            occurrence,
+        ));
+    }
+    let target = native_import_target(path)?;
+    Some(source_file_candidate(
+        source_kind,
+        "file",
+        "file",
+        target,
+        &display_name,
+        fingerprint,
+        occurrence,
+    ))
+}
+
+fn collect_directory_candidates(
+    source_kind: &str,
+    root: &Path,
+) -> Result<(Vec<ScannedImportCandidate>, usize), AppError> {
+    use cap_fs_ext::DirExt;
+
+    let mut candidates = Vec::new();
+    let mut ignored = 0usize;
+    let mut visited = 0usize;
+    let mut occurrence_by_target = std::collections::HashMap::<String, usize>::new();
+    let root_dir = cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority())
+        .map_err(|_| AppError::Invalid("selected folder could not be opened".into()))?;
+    let mut pending = vec![(root_dir, root.to_path_buf(), 0usize)];
+    while let Some((directory, absolute_directory, depth)) = pending.pop() {
+        let read_dir = directory
+            .entries()
+            .map_err(|_| AppError::Invalid("selected folder could not be read".into()))?;
+        let mut entries = Vec::new();
+        for entry in read_dir {
+            visited += 1;
+            if visited > RESOURCE_IMPORT_MAX_ENTRIES {
+                return Err(AppError::Invalid(
+                    "scan contains more than 1,000 entries; choose a smaller folder".into(),
+                ));
+            }
+            entries.push(
+                entry.map_err(|_| AppError::Invalid("selected folder could not be read".into()))?,
+            );
+        }
+        entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+        for entry in entries {
+            let name = entry.file_name();
+            let path = absolute_directory.join(&name);
+            let Ok(file_type) = entry.file_type() else {
+                ignored += 1;
+                continue;
+            };
+            if file_type.is_symlink() {
+                ignored += 1;
+                continue;
+            }
+            if file_type.is_dir() {
+                let child_dir = match directory.open_dir_nofollow(&name) {
+                    Ok(child) => child,
+                    Err(_) => {
+                        ignored += 1;
+                        continue;
+                    }
+                };
+                let Ok(metadata) = child_dir.dir_metadata() else {
+                    ignored += 1;
+                    continue;
+                };
+                if metadata_is_reparse_point(&metadata) {
+                    ignored += 1;
+                    continue;
+                }
+                let fingerprint =
+                    import_metadata_fingerprint_parts(metadata.len(), metadata.modified().ok());
+                let Some(target) = native_import_target(&path) else {
+                    ignored += 1;
+                    continue;
+                };
+                let mut candidate = source_file_candidate(
+                    source_kind,
+                    "folder",
+                    "folder",
+                    target,
+                    &name.to_string_lossy(),
+                    fingerprint,
+                    0,
+                );
+                let occurrence_key = format!(
+                    "{}:{}",
+                    candidate.candidate.resource_type,
+                    normalize_import_target(&candidate.candidate.target_uri)
+                );
+                let occurrence = occurrence_by_target.entry(occurrence_key).or_default();
+                candidate.candidate.candidate_id = candidate_id(
+                    &candidate.candidate.resource_type,
+                    &candidate.candidate.target_uri,
+                    *occurrence,
+                );
+                *occurrence += 1;
+                candidates.push(candidate);
+                if depth < RESOURCE_IMPORT_MAX_DEPTH {
+                    pending.push((child_dir, path, depth + 1));
+                }
+            } else if file_type.is_file() {
+                if let Some(mut candidate) =
+                    file_candidate_from_entry(source_kind, &entry, &path, 0)
+                {
+                    let occurrence_key = format!(
+                        "{}:{}",
+                        candidate.candidate.resource_type,
+                        normalize_import_target(&candidate.candidate.target_uri)
+                    );
+                    let occurrence = occurrence_by_target.entry(occurrence_key).or_default();
+                    candidate.candidate.candidate_id = candidate_id(
+                        &candidate.candidate.resource_type,
+                        &candidate.candidate.target_uri,
+                        *occurrence,
+                    );
+                    *occurrence += 1;
+                    candidates.push(candidate);
+                } else {
+                    ignored += 1;
+                }
+            } else {
+                ignored += 1;
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.candidate
+            .display_name
+            .to_ascii_lowercase()
+            .cmp(&right.candidate.display_name.to_ascii_lowercase())
+            .then_with(|| {
+                left.candidate
+                    .candidate_id
+                    .cmp(&right.candidate.candidate_id)
+            })
+    });
+    Ok((candidates, ignored))
+}
+
+fn scan_resource_import(source: &ResourceImportSource) -> Result<ScannedImport, AppError> {
+    let canonical = canonical_import_source(source)?;
+    let mut ignored_count = 0;
+    let mut candidates = if source.kind == "bookmarks" {
+        let data = read_import_file_bounded(&canonical, RESOURCE_IMPORT_MAX_BOOKMARK_BYTES)?;
+        let source_metadata = std::fs::symlink_metadata(&canonical)
+            .map_err(|_| AppError::Invalid("bookmark file could not be read".into()))?;
+        if source_metadata.file_type().is_symlink()
+            || metadata_is_reparse_point(&source_metadata)
+            || source_metadata.len() != data.len() as u64
+        {
+            return Err(AppError::Invalid(
+                "bookmark source changed during scanning; preview again".into(),
+            ));
+        }
+        let bookmarks = parse_bookmark_html(&data).ok_or_else(|| {
+            AppError::Invalid("bookmark file must be valid Netscape-format HTML".into())
+        })?;
+        let mut result = Vec::new();
+        for (index, (name, target)) in bookmarks.into_iter().enumerate() {
+            result.push(source_file_candidate(
+                "bookmarks",
+                "url",
+                "url",
+                target,
+                &name,
+                format!(
+                    "bookmark-file:{}",
+                    Sha256::digest(&data)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                ),
+                index,
+            ));
+        }
+        result
+    } else {
+        let (result, ignored) = collect_directory_candidates(&source.kind, &canonical)?;
+        ignored_count = ignored;
+        result
+    };
+    if candidates.len() > RESOURCE_IMPORT_MAX_ENTRIES {
+        return Err(AppError::Invalid(
+            "scan produced too many candidates".into(),
+        ));
+    }
+    // Assign deterministic IDs to repeated identical bookmark links while keeping the scan token stable.
+    let canonical_source = canonical.to_string_lossy().into_owned();
+    let digest_input = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                &candidate.candidate.candidate_id,
+                &candidate.candidate.resource_type,
+                &candidate.candidate.display_name,
+                &candidate.candidate.target_uri,
+                &candidate.fingerprint,
+            )
+        })
+        .collect::<Vec<_>>();
+    let serialized = serde_json::to_vec(&(
+        source.kind.as_str(),
+        &canonical_source,
+        ignored_count,
+        digest_input,
+    ))?;
+    let source_digest = Sha256::digest(serialized)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    candidates.shrink_to_fit();
+    Ok(ScannedImport {
+        candidates,
+        ignored_count,
+        source_digest,
+    })
+}
+
+fn resource_import_preview_token(
+    scanned: &ScannedImport,
+    profile_id: &str,
+    existing: &std::collections::HashMap<String, String>,
+) -> Result<String, AppError> {
+    let duplicate_matches = scanned
+        .candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.candidate.candidate_id.as_str(),
+                existing
+                    .get(&normalize_import_target(&candidate.candidate.target_uri))
+                    .map(String::as_str),
+            )
+        })
+        .collect::<Vec<_>>();
+    let serialized = serde_json::to_vec(&(profile_id, &scanned.source_digest, duplicate_matches))?;
+    Ok(Sha256::digest(serialized)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn existing_import_targets(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<std::collections::HashMap<String, String>, AppError> {
+    let mut stmt = conn.prepare("SELECT rt.canonical_uri,r.id FROM resource_targets rt JOIN resources r ON r.id=rt.resource_id JOIN profile_resources pr ON pr.resource_id=r.id WHERE pr.profile_id=?1 AND rt.active=1 ORDER BY r.display_name COLLATE NOCASE,r.id")?;
+    let rows = stmt.query_map([profile_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut targets = std::collections::HashMap::new();
+    for row in rows {
+        let (uri, id) = row?;
+        targets.entry(normalize_import_target(&uri)).or_insert(id);
+    }
+    Ok(targets)
+}
+
+#[tauri::command]
+fn resource_import_scan(
+    state: State<'_, AppState>,
+    request: ResourceImportScanRequest,
+) -> Result<ResourceImportScanResult, AppError> {
+    Uuid::parse_str(&request.profile_id)
+        .map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
+    let scanned = scan_resource_import(&request.source)?;
+    let conn = lock(&state)?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&request.profile_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let existing = existing_import_targets(&conn, &request.profile_id)?;
+    let scan_token = resource_import_preview_token(&scanned, &request.profile_id, &existing)?;
+    let candidates = scanned
+        .candidates
+        .into_iter()
+        .map(|mut scanned| {
+            scanned.candidate.existing_resource_id = existing
+                .get(&normalize_import_target(&scanned.candidate.target_uri))
+                .cloned();
+            scanned.candidate
+        })
+        .collect();
+    Ok(ResourceImportScanResult {
+        profile_id: request.profile_id,
+        source: request.source,
+        scan_token,
+        candidates,
+        ignored_count: scanned.ignored_count,
+    })
+}
+
+#[tauri::command]
+fn resource_import_commit(
+    state: State<'_, AppState>,
+    request: ResourceImportCommitRequest,
+) -> Result<ResourceImportCommitResult, AppError> {
+    let mut conn = lock(&state)?;
+    resource_import_commit_on_conn(&mut conn, &request)
+}
+
+fn resource_import_commit_on_conn(
+    conn: &mut Connection,
+    request: &ResourceImportCommitRequest,
+) -> Result<ResourceImportCommitResult, AppError> {
+    Uuid::parse_str(&request.profile_id)
+        .map_err(|_| AppError::Invalid("profile id must be a UUID".into()))?;
+    if request.scan_token.len() != 64
+        || !request
+            .scan_token
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || request.candidate_ids.is_empty()
+        || request.candidate_ids.len() > RESOURCE_IMPORT_MAX_ENTRIES
+        || !matches!(
+            request.duplicate_policy.as_str(),
+            "skip_existing" | "create_duplicate"
+        )
+    {
+        return Err(AppError::Invalid("invalid import commit request".into()));
+    }
+    let mut selected = std::collections::HashSet::new();
+    if request.candidate_ids.iter().any(|candidate_id| {
+        candidate_id.len() != 64
+            || !candidate_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !selected.insert(candidate_id.as_str())
+    }) {
+        return Err(AppError::Invalid(
+            "candidate selection contains invalid or duplicate IDs".into(),
+        ));
+    }
+    let tx = conn.transaction()?;
+    let profile_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&request.profile_id],
+        |row| row.get(0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    let scanned = scan_resource_import(&request.source)?;
+    let mut existing = existing_import_targets(&tx, &request.profile_id)?;
+    if resource_import_preview_token(&scanned, &request.profile_id, &existing)?
+        != request.scan_token
+    {
+        return Err(AppError::Invalid(
+            "import preview is stale; scan the source again before importing".into(),
+        ));
+    }
+    let candidates_by_id = scanned
+        .candidates
+        .into_iter()
+        .map(|candidate| {
+            (
+                candidate.candidate.candidate_id.clone(),
+                candidate.candidate,
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    if selected
+        .iter()
+        .any(|candidate_id| !candidates_by_id.contains_key(*candidate_id))
+    {
+        return Err(AppError::Invalid(
+            "selected candidate is not part of the current preview".into(),
+        ));
+    }
+    let mut imported_count = 0;
+    let mut skipped_count = 0;
+    for candidate_id in &request.candidate_ids {
+        let candidate = candidates_by_id
+            .get(candidate_id)
+            .ok_or_else(|| AppError::Invalid("selected candidate is missing".into()))?;
+        let target_kind = match candidate.resource_type.as_str() {
+            "url" => "url",
+            "file" => "file",
+            "folder" => "folder",
+            "app" => "app",
+            _ => {
+                return Err(AppError::Invalid(
+                    "unsupported imported resource type".into(),
+                ))
+            }
+        };
+        let normalized_target = normalize_import_target(&candidate.target_uri);
+        if request.duplicate_policy == "skip_existing" && existing.contains_key(&normalized_target)
+        {
+            skipped_count += 1;
+            continue;
+        }
+        let now = now_utc();
+        let resource = Resource {
+            id: Uuid::new_v4().to_string(),
+            resource_type: candidate.resource_type.clone(),
+            display_name: candidate.display_name.clone(),
+            description: None,
+            icon: None,
+            default_action: "open".into(),
+            created_utc: now.clone(),
+            updated_utc: now,
+            targets: vec![ResourceTarget {
+                id: Uuid::new_v4().to_string(),
+                kind: target_kind.into(),
+                canonical_uri: candidate.target_uri.clone(),
+                priority: 0,
+                arguments: Vec::new(),
+                working_directory: None,
+                active: true,
+            }],
+            tags: Vec::new(),
+            aliases: Vec::new(),
+            category: None,
+            favorite: false,
+            launch_count: 0,
+            last_launched_utc: None,
+        };
+        persist_resource_in_transaction(&tx, &resource, true, Some(&request.profile_id))?;
+        existing
+            .entry(normalized_target)
+            .or_insert_with(|| resource.id.clone());
+        imported_count += 1;
+    }
+    tx.commit()?;
+    Ok(ResourceImportCommitResult {
+        profile_id: request.profile_id.clone(),
+        imported_count,
+        skipped_count,
+    })
 }
 
 fn validate_resource(resource: &Resource) -> Result<(), AppError> {
@@ -7223,6 +8407,8 @@ pub fn run() {
             resource_duplicate,
             resource_relocation_preview,
             resource_relocation_commit,
+            resource_import_scan,
+            resource_import_commit,
             resource_delete,
             resource_search,
             resource_launch,
@@ -8316,6 +9502,327 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    fn temp_directory(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{prefix}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn bookmark_source(path: &Path) -> ResourceImportSource {
+        ResourceImportSource {
+            kind: "bookmarks".into(),
+            path: path.to_string_lossy().into_owned(),
+        }
+    }
+
+    fn bookmark_html(links: &[(&str, &str)]) -> String {
+        let mut html = String::from("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<DL><p>\n");
+        for (name, url) in links {
+            html.push_str(&format!("<DT><A HREF=\"{url}\">{name}</A>\n"));
+        }
+        html.push_str("</DL><p>\n");
+        html
+    }
+
+    #[test]
+    fn resource_import_parses_only_https_netscape_bookmarks_and_decodes_labels() {
+        let html = b"<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p><A HREF=\"https://example.com/a?x=1&amp;y=2\">Example &amp; tools</A><A HREF=\"javascript:alert(1)\">Script</A><A HREF=\"http://example.com\">Insecure</A></DL>";
+        let parsed = parse_bookmark_html(html).unwrap();
+        assert_eq!(
+            parsed,
+            vec![(
+                "Example & tools".into(),
+                "https://example.com/a?x=1&y=2".into()
+            )]
+        );
+        assert!(parse_bookmark_html(
+            b"<html><a href=\"https://example.com\">not Netscape</a></html>"
+        )
+        .is_none());
+        assert!(parse_bookmark_html(&vec![b'a'; RESOURCE_IMPORT_MAX_BOOKMARK_BYTES + 1]).is_none());
+    }
+
+    #[test]
+    fn resource_import_parses_only_https_internet_shortcuts_and_never_arguments() {
+        assert_eq!(
+            parse_internet_shortcut(b"[InternetShortcut]\nURL=https://example.com\n"),
+            Some(("https://example.com/".into(), String::new()))
+        );
+        assert!(parse_internet_shortcut(b"[InternetShortcut]\nURL=file:///c:/secret\n").is_none());
+        assert!(parse_internet_shortcut(b"[InternetShortcut]\nURL=http://example.com\n").is_none());
+        assert!(
+            parse_internet_shortcut(&vec![b'a'; RESOURCE_IMPORT_MAX_URL_SHORTCUT_BYTES + 1])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resource_import_bounded_reader_rejects_oversize_and_final_symlink() {
+        let directory = temp_directory("sw-import-bounded");
+        let file = directory.join("source.html");
+        std::fs::write(&file, b"12345").unwrap();
+        assert!(read_import_file_bounded(&file, 4).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let alias = directory.join("alias.html");
+            symlink(&file, &alias).unwrap();
+            assert!(read_import_file_bounded(&alias, 64).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resource_import_preview_token_rejects_bookmark_changes_and_commit_is_atomic() {
+        let mut conn = database();
+        let profile_id = default_profile_id(&conn).unwrap();
+        let directory = temp_directory("sw-import-transaction");
+        let source_path = directory.join("bookmarks.html");
+        std::fs::write(
+            &source_path,
+            bookmark_html(&[
+                ("First", "https://first.example"),
+                ("Second", "https://second.example"),
+            ]),
+        )
+        .unwrap();
+        let source = bookmark_source(&source_path);
+        let initial = scan_resource_import(&source).unwrap();
+        let existing = existing_import_targets(&conn, &profile_id).unwrap();
+        let initial_token =
+            resource_import_preview_token(&initial, &profile_id, &existing).unwrap();
+        assert_ne!(
+            initial_token,
+            resource_import_preview_token(&initial, "different-profile", &existing).unwrap(),
+            "preview tokens are scoped to the selected profile"
+        );
+        if let Some(first) = initial.candidates.first() {
+            let mut changed_matches = existing.clone();
+            changed_matches.insert(
+                normalize_import_target(&first.candidate.target_uri),
+                Uuid::new_v4().to_string(),
+            );
+            assert_ne!(
+                resource_import_preview_token(&initial, &profile_id, &existing).unwrap(),
+                resource_import_preview_token(&initial, &profile_id, &changed_matches).unwrap(),
+                "preview tokens bind duplicate labels to the existing profile resources"
+            );
+        }
+        let invalid_selection = ResourceImportCommitRequest {
+            profile_id: profile_id.clone(),
+            source: source.clone(),
+            scan_token: initial_token.clone(),
+            candidate_ids: vec!["0".repeat(64)],
+            duplicate_policy: "skip_existing".into(),
+        };
+        assert!(resource_import_commit_on_conn(&mut conn, &invalid_selection).is_err());
+        let untouched_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            untouched_count, 0,
+            "unknown candidate IDs cannot be committed"
+        );
+        let request = ResourceImportCommitRequest {
+            profile_id: profile_id.clone(),
+            source: source.clone(),
+            scan_token: initial_token,
+            candidate_ids: initial
+                .candidates
+                .iter()
+                .map(|candidate| candidate.candidate.candidate_id.clone())
+                .collect(),
+            duplicate_policy: "skip_existing".into(),
+        };
+        let committed = resource_import_commit_on_conn(&mut conn, &request).unwrap();
+        assert_eq!(committed.imported_count, 2);
+        assert_eq!(committed.skipped_count, 0);
+
+        let replay_scan = scan_resource_import(&source).unwrap();
+        let existing = existing_import_targets(&conn, &profile_id).unwrap();
+        let replay_request = ResourceImportCommitRequest {
+            profile_id: profile_id.clone(),
+            source: source.clone(),
+            scan_token: resource_import_preview_token(&replay_scan, &profile_id, &existing)
+                .unwrap(),
+            candidate_ids: replay_scan
+                .candidates
+                .iter()
+                .map(|candidate| candidate.candidate.candidate_id.clone())
+                .collect(),
+            duplicate_policy: "skip_existing".into(),
+        };
+        let replay = resource_import_commit_on_conn(&mut conn, &replay_request).unwrap();
+        assert_eq!(replay.imported_count, 0);
+        assert_eq!(replay.skipped_count, 2);
+
+        let create_duplicate = ResourceImportCommitRequest {
+            duplicate_policy: "create_duplicate".into(),
+            ..replay_request.clone()
+        };
+        let duplicated = resource_import_commit_on_conn(&mut conn, &create_duplicate).unwrap();
+        assert_eq!(duplicated.imported_count, 2);
+        assert_eq!(duplicated.skipped_count, 0);
+
+        let count_before_failure: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_sw018_import BEFORE INSERT ON resources WHEN NEW.display_name='Zulu failure' BEGIN SELECT RAISE(ABORT,'forced import failure'); END;").unwrap();
+        std::fs::write(
+            &source_path,
+            bookmark_html(&[
+                ("Alpha", "https://alpha.example"),
+                ("Zulu failure", "https://zulu.example"),
+            ]),
+        )
+        .unwrap();
+        let changed = scan_resource_import(&source).unwrap();
+        let existing = existing_import_targets(&conn, &profile_id).unwrap();
+        let rollback_request = ResourceImportCommitRequest {
+            profile_id: profile_id.clone(),
+            source: source.clone(),
+            scan_token: resource_import_preview_token(&changed, &profile_id, &existing).unwrap(),
+            candidate_ids: changed
+                .candidates
+                .iter()
+                .map(|candidate| candidate.candidate.candidate_id.clone())
+                .collect(),
+            duplicate_policy: "create_duplicate".into(),
+        };
+        assert!(resource_import_commit_on_conn(&mut conn, &rollback_request).is_err());
+        let count_after_failure: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count_before_failure, count_after_failure,
+            "one bad candidate rolls back the entire import"
+        );
+
+        std::fs::write(
+            &source_path,
+            bookmark_html(&[("Changed", "https://changed.example")]),
+        )
+        .unwrap();
+        assert!(
+            resource_import_commit_on_conn(&mut conn, &request).is_err(),
+            "stale preview must be rejected"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resource_import_directory_scan_rejects_more_than_one_thousand_entries() {
+        let directory = temp_directory("sw-import-limit");
+        for index in 0..=RESOURCE_IMPORT_MAX_ENTRIES {
+            std::fs::write(directory.join(format!("{index}.txt")), b"").unwrap();
+        }
+        assert!(collect_directory_candidates("directory", &directory).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resource_import_rejects_network_and_filesystem_root_sources() {
+        let unc = ResourceImportSource {
+            kind: "directory".into(),
+            path: r"\\server\share\Start Menu".into(),
+        };
+        assert!(is_network_path(&unc.path));
+        assert!(canonical_import_source(&unc).is_err());
+
+        #[cfg(unix)]
+        let root = PathBuf::from("/");
+        #[cfg(windows)]
+        let root = PathBuf::from(r"C:\");
+        if root.exists() {
+            let source = ResourceImportSource {
+                kind: "directory".into(),
+                path: root.to_string_lossy().into_owned(),
+            };
+            assert!(canonical_import_source(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn resource_import_directory_scan_does_not_follow_symlinks_or_exceed_depth_four() {
+        let directory = temp_directory("sw-import-depth");
+        let nested = directory.join("a").join("b").join("c").join("d").join("e");
+        std::fs::create_dir_all(&nested).unwrap();
+        let depth_four = directory
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("d")
+            .join("depth-four.txt");
+        let depth_five = nested.join("depth-five.txt");
+        std::fs::write(&depth_four, b"").unwrap();
+        std::fs::write(&depth_five, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = temp_directory("sw-import-outside");
+            std::fs::write(
+                outside.join("secret.url"),
+                b"[InternetShortcut]\nURL=https://outside.example\n",
+            )
+            .unwrap();
+            symlink(&outside, directory.join("linked")).unwrap();
+            symlink(
+                outside.join("secret.url"),
+                directory.join("linked-file.url"),
+            )
+            .unwrap();
+            let (candidates, ignored) =
+                collect_directory_candidates("directory", &directory).unwrap();
+            assert!(ignored >= 2, "symlink entries are reported as skipped");
+            assert!(
+                !candidates
+                    .iter()
+                    .any(|candidate| candidate.candidate.target_uri.contains("outside.example")),
+                "the scanner must not traverse a linked directory"
+            );
+            assert!(
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.candidate.target_uri.ends_with("depth-four.txt")),
+                "depth four is scanned"
+            );
+            assert!(
+                !candidates
+                    .iter()
+                    .any(|candidate| candidate.candidate.target_uri.ends_with("depth-five.txt")),
+                "depth five is excluded"
+            );
+            std::fs::remove_dir_all(outside).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let (candidates, _) = collect_directory_candidates("directory", &directory).unwrap();
+            assert!(candidates
+                .iter()
+                .any(|candidate| candidate.candidate.target_uri.ends_with("depth-four.txt")));
+            assert!(!candidates
+                .iter()
+                .any(|candidate| candidate.candidate.target_uri.ends_with("depth-five.txt")));
+        }
+        let root_source = ResourceImportSource {
+            kind: "directory".into(),
+            path: std::path::MAIN_SEPARATOR.to_string(),
+        };
+        assert!(
+            canonical_import_source(&root_source).is_err(),
+            "filesystem roots are never scanned"
+        );
+        #[cfg(windows)]
+        {
+            let unc_source = ResourceImportSource {
+                kind: "directory".into(),
+                path: r"\\server\share".into(),
+            };
+            assert!(canonical_import_source(&unc_source).is_err());
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # GitHub repository setup
 
 Repository: https://github.com/treborygan/smart-workspace-launcher
-Default branch: main. GitHub is the source of truth for branches, PRs, design documents and issue tracking. The supplied source handoff is planning content only, not a runnable application.
+Default branch: main. GitHub is the source of truth for branches, PRs, design documents and issue tracking. The repository contains implemented application code and passing GitHub-hosted Windows CI/preview artifacts; **V1 release certification remains BLOCKED** until a real Windows 11 x64 acceptance run passes. See `backlog/STATUS.md`.
 
 - Preserve AGENTS.md, CODEX_KICKOFF.md, CODEX_RESUME.md, .codex, .github, docs, contracts, fixtures and backlog.
 - Use feature branches and pull requests for implementation. **Approved 2026-10-22:** GitHub Actions Windows x64 workflows may run automated tests and build downloadable preview artifacts (`docs/CI_WINDOWS.md`). Real Windows 11 acceptance remains separate; no force-push to main.

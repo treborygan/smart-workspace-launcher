@@ -33,4 +33,4 @@ Once `docs/NOTIFICATIONS_AND_RELEASE_GATES.md` conditions actually pass, publish
 
 ## Commands after scaffolding
 Prefer exact version-locked package manager scripts in the created `package.json` and `Cargo.lock`. Expected commands after Codex implements them:
-`npm ci`, `npm run lint`, `npm run typecheck`, `npm run test`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `npm run tauri build` (actual names may differ; document exact commands and script equivalents). Do NOT imply these commands currently work in this planning-only repository.
+`npm ci`, `npm run lint`, `npm run typecheck`, `npm run test`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `npm run tauri build` (actual names may differ; document exact commands and script equivalents). Current GitHub Actions Windows CI verifies these project commands successfully as of main commit `98b1432` (2026-10-22); re-run on the current head and distinguish hosted-runner automated checks from actual Windows 11 GUI acceptance.

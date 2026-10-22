@@ -1,21 +1,14 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T21:54:00Z",
-  "overall_status": "IMPLEMENTATION_IN_PROGRESS",
+  "updated_at_utc": "2026-10-22T04:47:00Z",
+  "overall_status": "IMPLEMENTATION_IN_PROGRESS_WINDOWS_PREVIEW_BUILT_V1_BLOCKED",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
-    "state": "ACTIVE",
-    "branch": "feature/sw-013-dynamic-collections"
+    "state": "SESSION_NOT_VERIFIED_AT_GITHUB_DOC_SNAPSHOT"
   },
-  "active_pull_request": {
-    "number": 37,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/37",
-    "state": "OPEN",
-    "head_sha": "f8fbb3d81e6de2d26d650bfe547b8be7b2647104",
-    "review_status": "internal QA passed; GitHub review pending"
-  },
+  "active_pull_request": null,
   "subagent_limit": 3,
   "agents": [
     {
@@ -64,60 +57,55 @@
       "role": "release",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "BLOCKED_NO_WINDOWS_HOST",
+      "state": "WINDOWS_11_INTERACTIVE_ACCEPTANCE_UNVERIFIED",
       "issue": "SW-012",
       "branch": null,
       "pr": null
     }
   ],
   "milestones": {
-    "V1.0": "IN_PROGRESS",
-    "V1.1": "IN_PROGRESS",
-    "V1.2": "NOT_STARTED",
-    "V2.0": "NOT_STARTED"
+    "V1.0": "IMPLEMENTED_PREVIEW_BUILT_WINDOWS_11_ACCEPTANCE_BLOCKED",
+    "V1.1": "SW_013_MERGED_SW_014_TO_016_OPEN_PRS",
+    "V1.2": "SW_017_TO_020_OPEN_PRS",
+    "V2.0": "SW_021_OPEN_PR_FURTHER_ITEMS_PENDING"
   },
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T21:51:30Z",
-    "environment": "Debian 13 x86_64, Node 24.19.0/npm 11.9.0, Rust 1.99.1 stable; no PowerShell or Windows 11 host",
+    "at_utc": "2026-10-22T04:47:00Z",
+    "environment": "GitHub Actions windows-2025 x64 (hosted Windows Server, not Windows 11)",
+    "source_sha": "98b1432a6596152e1e6885e9ab569266994f1cd6",
+    "ci_url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925",
+    "build_url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976",
     "results": [
       {
-        "command": "npm run typecheck && npm test -- --run && npm run frontend:build",
-        "result": "PASS: typecheck; 11 frontend files/73 tests; production build. Existing non-failing Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+        "check": "frontend",
+        "result": "PASS 73 tests across 11 files"
       },
       {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check && git diff --check",
-        "result": "PASS on SW-013 head a18c6dc."
+        "check": "rust",
+        "result": "PASS 63 tests; 0 failed"
       },
       {
-        "command": "python tests/test_profile_archive_contract.py -q",
-        "result": "PASS: 11 tests."
+        "check": "python_contract",
+        "result": "PASS verification and contract/handoff checks"
       },
       {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS: catalog/schema/fixture/handoff checks; no compiled app or Windows runtime checks."
+        "check": "native_windows_build",
+        "result": "PASS Tauri EXE and NSIS installer"
       },
       {
-        "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED as expected; no real Windows 11 verification."
+        "check": "portable_zip",
+        "result": "PASS ZIP contents + SHA256 checked"
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib dynamic_shortcuts -- --nocapture",
-        "result": "BLOCKED before project compilation: GLib/GObject >=2.70 development packages are missing."
-      },
-      {
-        "command": "cargo check --target x86_64-pc-windows-gnu --tests",
-        "result": "BLOCKED: MinGW x86_64-w64-mingw32-gcc unavailable; not Windows acceptance."
-      },
-      {
-        "command": "QA final SW-013 review",
-        "result": "PASS: no blocker. Replace/remap and injected insertion-failure rollback tests are well-scoped; Rust execution remains blocked by missing GLib/GObject."
+        "check": "W-001..W-014",
+        "result": "NOT_RUN; separate Windows 11 x64 interactive acceptance required"
       }
     ]
   },
-  "windows_verification": "NOT_AVAILABLE",
-  "next_action": "SW-013 PR #37 is open; await GitHub review and merge. SW-014 cross-platform implementation is underway atop SW-013 PR head. Keep SW-012/V1 BLOCKED until real Windows 11 x64 acceptance.",
+  "windows_verification": "HOSTED_WINDOWS_SERVER_CI_BUILD_PASSED; WINDOWS_11_INTERACTIVE_NOT_RUN",
+  "next_action": "Run native Windows 11 standard-user W-001..W-014 on verified portable preview; keep V1 BLOCKED until release gate complete. Separately review open advanced PRs #38/#41-47.",
   "recent_merges": [
     {
       "number": 32,
@@ -167,11 +155,76 @@
   ],
   "open_pull_requests": [
     {
-      "number": 37,
-      "issue": "SW-013",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/37",
-      "state": "OPEN",
-      "head_sha": "f8fbb3d81e6de2d26d650bfe547b8be7b2647104"
+      "number": 38,
+      "issue": "SW-014",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 41,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 42,
+      "issue": "SW-016",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 43,
+      "issue": "SW-017",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/43",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 44,
+      "issue": "SW-018",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/44",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 45,
+      "issue": "SW-019",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/45",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 46,
+      "issue": "SW-020",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
+      "state": "OPEN_AT_SNAPSHOT"
+    },
+    {
+      "number": 47,
+      "issue": "SW-021",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
+      "state": "OPEN_AT_SNAPSHOT"
     }
-  ]
+  ],
+  "github_observed": {
+    "observed_source_sha": "98b1432a6596152e1e6885e9ab569266994f1cd6",
+    "merged_prs": [
+      {
+        "number": 37,
+        "sha": "77b3b1b95f077d53622848256a62662e9a17a54d",
+        "scope": "SW-013 dynamic shortcuts and smart collections"
+      },
+      {
+        "number": 40,
+        "sha": "98b1432a6596152e1e6885e9ab569266994f1cd6",
+        "scope": "GitHub Actions Windows CI, preview packaging and native Rust/PowerShell fixes"
+      }
+    ],
+    "preview": {
+      "version": "0.1.0-preview.1",
+      "portable_artifact_url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402740774",
+      "installer_artifact_url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402700842",
+      "portable_zip_sha256": "c209f2c27382f1c77215b0a4344515114124258117598373da78f8d727197f4c",
+      "retention_days": 14,
+      "qualification": "UNSIGNED_PREVIEW_NOT_V1_READY"
+    },
+    "note": "GitHub observations only; agent sessions and native Windows 11 test runs are not inferred."
+  }
 }

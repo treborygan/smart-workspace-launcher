@@ -15,7 +15,7 @@ A fast, customizable Windows desktop launcher that brings your everyday resource
 </div>
 
 > [!IMPORTANT]
-> **Pre-release software.** Development is underway, but there is no verified Windows V1 download yet. Native Windows acceptance tests and release packaging remain outstanding. See [current progress](backlog/STATUS.md) and [Releases](https://github.com/treborygan/smart-workspace-launcher/releases).
+> **Pre-release software.** The first Windows x64 portable preview and NSIS installer have been built successfully using GitHub Actions. These **unsigned test builds have not passed the required real Windows 11 interactive acceptance suite**, so **V1 is not yet certified or released**. See [preview downloads](#windows-preview-builds), [status](backlog/STATUS.md), and [release requirements](docs/RELEASE.md).
 
 ## Overview
 
@@ -91,6 +91,20 @@ On Windows, project scripts are provided for local verification and packaging:
 
 GitHub Actions runs [Windows CI](.github/workflows/windows-ci.yml) on pull requests and changes to `main`, plus [Windows preview builds](.github/workflows/windows-build.yml) on `main` or on request. Windows Server x64 builds and test artifacts are **not** certified Windows 11 releases. See [Windows CI and acceptance](docs/CI_WINDOWS.md) and the [Actions run history](https://github.com/treborygan/smart-workspace-launcher/actions).
 
+### Windows preview builds
+
+The first hosted Windows x64 build completed successfully for commit `98b1432` (22 October 2026):
+
+| Download | GitHub artifact |
+|---|---|
+| Portable executable ZIP + SHA256 | [Windows x64 portable preview](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402740774) |
+| NSIS installer | [Windows x64 installer preview](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976/artifacts/12402700842) |
+| Build evidence | [Windows build run](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976) |
+
+Both downloads are **GitHub Actions artifacts**, not permanent GitHub Release assets. GitHub sign-in may be needed, and artifacts expire (configured retention: **14 days**). The artifact download itself is an outer ZIP; extract it to find the portable package or installer. The portable ZIP's verified SHA256 is recorded in [Windows CI documentation](docs/CI_WINDOWS.md).
+
+**Status:** The build and automated tests passed on hosted **Windows Server 2025 x64**. A clean, standard-user **Windows 11 x64** session must still pass W-001–W-014 (including Shell handlers, hotkey/tray, Dock, multi-monitor/DPI, profile round trip, offline, and fresh-download smoke tests) before the V1 READY notice.
+
 ## Roadmap
 
 | Milestone | Focus |
@@ -100,7 +114,7 @@ GitHub Actions runs [Windows CI](.github/workflows/windows-ci.yml) on pull reque
 | **V1.2 — Greater customization** | Imports, intelligent shortcut maintenance, widgets, and device-specific paths |
 | **V2.0 — Extensible platform** | Permissioned extensions and optional synchronization, remote access, and AI-assisted organization |
 
-Track progress in the [project roadmap](backlog/ROADMAP.md), [implementation status](backlog/STATUS.md), and [GitHub Issues](https://github.com/treborygan/smart-workspace-launcher/issues).
+Track progress in the [project roadmap](backlog/ROADMAP.md), [implementation status](backlog/STATUS.md), [advanced development PRs](https://github.com/treborygan/smart-workspace-launcher/pulls), and [GitHub Issues](https://github.com/treborygan/smart-workspace-launcher/issues). V1.1–V2.0 features are under active development; an open PR is not a merged or released feature.
 
 ## Project documentation
 

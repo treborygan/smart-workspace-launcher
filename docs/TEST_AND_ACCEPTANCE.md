@@ -24,3 +24,10 @@ Approved automated test and preview-build jobs run on **GitHub-hosted Windows Se
 
 ## Gate
 No verified real Windows 11 acceptance = release BLOCKED, even if GitHub Actions pass. Include evidence paths and logs. No untested EXE labeled V1 ready. See docs/NOTIFICATIONS_AND_RELEASE_GATES.md.
+
+## Recorded hosted-Windows automated verification (2026-10-22)
+
+- On `main` SHA `98b1432`, [GitHub Actions Windows CI run 39723525925](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525925) **PASS**: 73 frontend tests in 11 files, 63 Rust tests (0 failures), Python/contract and handoff checks, TypeScript typecheck, and frontend production build.
+- [Windows preview build run 39723525976](https://github.com/treborygan/smart-workspace-launcher/actions/runs/39723525976) **PASS**: mandatory verification, native Tauri `.exe` compilation, NSIS installer build, portable ZIP creation, archive-contents check, SHA256 verification and artifact upload.
+- This is **Windows Server 2025 x64 hosted CI**, **not** a Windows 11 standard-user interactive session. There is no verified execution evidence for W-001, W-002, W-003, W-004, W-005, W-006, W-007, W-008, W-009, W-010, W-011, W-012, W-013 or W-014 on an actual Windows 11 x64 desktop. All remain **NOT_RUN / BLOCKED** for release qualification.
+- Download instructions, package hash, CI evidence links and expiry are in [CI_WINDOWS.md](CI_WINDOWS.md). **Never translate unit coverage into a GUI acceptance PASS.**

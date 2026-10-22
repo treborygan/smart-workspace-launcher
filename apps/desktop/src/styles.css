@@ -36,3 +36,4 @@ html:has(.dock-window),body:has(.dock-window){min-width:0;background:transparent
 @media(max-width:480px){.workspace-map-create-link{grid-template-columns:1fr}.workspace-map-create-link h3,.workspace-map-create-link label:last-of-type,.workspace-map-create-link .button{grid-column:1}.workspace-snapshot-create{grid-template-columns:1fr}.workspace-snapshot-create .button{justify-self:end}.workspace-graph{min-width:360px}}
 @media(prefers-reduced-motion:reduce){.workspace-graph-node circle{transition:none}}
 .workspace-map-card>header .workspace-graph-focus{display:grid;gap:4px;min-width:min(180px,48%);font-size:9px;color:var(--muted)}.workspace-graph-focus select{min-width:0;height:31px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--text);padding:0 7px;font-size:9px}.workspace-graph-limit{margin:0 0 7px;font-size:9px;color:var(--muted)}
+.workspace-graph-node .workspace-graph-mark{fill:#111827}

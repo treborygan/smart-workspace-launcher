@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 03:33 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 03:35 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -8,15 +8,15 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty. Independent QA read-only review found no actionable blocker.
-- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
+- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44, head `9a984e5`; implementation and independent QA are complete. Rust test compilation remains blocked by missing GLib/GObject; no Windows acceptance.
 - PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `3a12ab7`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
-- PR #47 (SW-021) OPEN_DRAFT at code head `d5344b4`, base `feature/sw-020-device-paths` / PR #46. Runtime and UI are integrated. Focused extension tests pass 13/13; scanner tests pass 2/2 on Linux. Full Rust library suite compiles but fails 90 passed / 25 failed; fixture and behavior triage/fixes are active. Independent security QA passed the restored Windows reparse/junction checks; Windows-only junction test remains NOT_RUN. Do not merge out of dependency order.
+- PR #47 (SW-021) OPEN_DRAFT at current checkpoint `a882998` (implementation code head `d5344b4`), base `feature/sw-020-device-paths` / PR #46. Runtime and UI are integrated. Focused extension tests pass 13/13; scanner tests pass 2/2 on Linux. Full Rust library suite compiles but fails 90 passed / 25 failed; fixture and behavior triage/fixes are active. Independent security QA passed the restored Windows reparse/junction checks; Windows-only junction test remains NOT_RUN. Do not merge out of dependency order.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## SW-020 implementation — issue #20
@@ -51,7 +51,7 @@ SW-021 integrates schema v13 package storage, validated `.swext` review/install,
 
 ## Verification and release status
 
-At 2026-10-22 03:13 UTC, GitHub review and inline-thread APIs returned empty for PR #38, #41, and #47. PR #47 was then at head `84a9b74`; code head `d5344b4` is now pushed. Independent read-only QA found no actionable blocker for PRs #38/#41; #41 has a non-blocking DB-lock duration concern during large CSV export.
+At 2026-10-22 03:35 UTC, GitHub review and inline-thread APIs returned empty for PR #38 and #41. PR #47 is open draft at `a882998`, with implementation code head `d5344b4`. Independent read-only QA found no actionable blocker for PRs #38/#41; #41 has a non-blocking DB-lock duration concern during large CSV export.
 
 - `npm ci --cache /tmp/swl-npm-cache` — PASS.
 - `npm run typecheck` — PASS.

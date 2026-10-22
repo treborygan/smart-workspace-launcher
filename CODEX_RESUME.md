@@ -2,11 +2,11 @@
 
 ## Current checkpoint — 2026-10-22 03:33 UTC
 
-Repository `treborygan/smart-workspace-launcher`; coordinator `/workspace/sw020-core`; branch `feature/sw-021-permissioned-extensions`, code head `d5344b4241a19f5d0632478ab9a9d36124f4624d` (pushed). Canonical status is `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. PR #47 is open draft, stacked on PR #46/SW-020. Host is Debian 13 x86_64; no real Windows 11 x64, PowerShell, or MinGW. V1/SW-012 is BLOCKED.
+Repository `treborygan/smart-workspace-launcher`; coordinator `/workspace/sw020-core`; branch `feature/sw-021-permissioned-extensions`, latest PR/status checkpoint `a882998607d79915f52890fc087112efb54099a9`; implementation code head `d5344b4241a19f5d0632478ab9a9d36124f4624d`. Canonical status is `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. PR #47 is open draft, stacked on PR #46/SW-020. Host is Debian 13 x86_64; no real Windows 11 x64, PowerShell, or MinGW. V1/SW-012 is BLOCKED.
 
 ## SW-014 / SW-015 review tracking
 
-Latest connected GitHub review + inline-thread API refresh for PR #38 (SW-014) and #41 (SW-015) at 2026-10-22 03:13 UTC returned no reviews or threads. Prior independent static QA found no actionable blocker. PR #41 retains a non-blocking concern that long CSV export may hold the shared database mutex. Do not merge stacked PRs ahead of dependency order.
+Latest connected GitHub review + inline-thread API refresh for PR #38 (SW-014) and #41 (SW-015) at 2026-10-22 03:35 UTC returned no reviews or threads. Prior independent static QA found no actionable blocker. PR #41 retains a non-blocking concern that long CSV export may hold the shared database mutex. Do not merge stacked PRs ahead of dependency order.
 
 ## SW-021 progress and native test setup
 
@@ -31,7 +31,7 @@ Core suite remediation is active in isolated worktree `/workspace/sw021-suite-fi
 
 ## PR #47
 
-PR body was updated after pushing d5344b4 with exact focused/full test results, remaining failures, and Windows blockers. Keep draft. Latest independent review/thread check for #47 was empty. `gh pr view`/`gh api` CLI requests return Forbidden; connected GitHub app tools work.
+PR body was updated after pushing d5344b4 with exact focused/full test results, remaining failures, and Windows blockers. Latest confirmed PR head is a882998, a docs/status checkpoint after code head d5344b4. Keep draft. The latest #38/#41 review refresh at 03:35 UTC returned empty. `gh pr view`/`gh api` CLI requests return Forbidden; connected GitHub app tools work.
 
 ## Next actions
 

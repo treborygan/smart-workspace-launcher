@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T03:33:53Z",
+  "updated_at_utc": "2026-10-22T03:35:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "d5344b4241a19f5d0632478ab9a9d36124f4624d",
+    "head_sha": "a882998607d79915f52890fc087112efb54099a9",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 runtime/UI integrated. Native Debian sysroot now permits application tests. Focused extension tests PASS 13/13; directory scanner tests PASS 2/2; formatting/diff PASS. Full Rust library suite compiles but FAILS 90 passed / 25 failed across older fixtures/semantics; independent triage found invalid Windows/archive fixtures plus unresolved sequence recovery/stop and relocation checks. Current PR code head d5344b4 has independent security QA PASS for capability-relative Windows reparse/junction rejection; Windows-only test NOT_RUN. SW-022 gated until full suite/behavior triage. V1 BLOCKED."
+    "review_status": "SW-021 implementation code head d5344b4; latest pushed PR checkpoint a882998. Focused extension tests PASS 13/13; scanner tests PASS 2/2; full Rust library suite compiles but FAILS 90/25 across older fixtures and behavior tests. Independent security QA PASS on capability-relative Windows reparse/junction rejection; Windows-only junction NOT_RUN. Suite remediation active in feature/sw021-suite-fixes. SW-022 gated; V1 BLOCKED."
   },
   "subagent_limit": 3,
   "agents": [
@@ -456,7 +456,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Fix or accurately classify full Rust suite failures (90 pass/25 fail); focused SW-021 13 tests and scanner 2 tests pass. Core is working in isolated worktree feature/sw021-suite-fixes from d5344b4. Keep SW-022 gated until full suite and sequence recovery/relocation behavior are resolved. PR #38/#41 review/thread APIs last refreshed 2026-10-22 03:13 UTC returned empty. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Resolve/accurately classify 25 full Rust suite failures. Focused SW-021 and scanner tests pass. Core suite remediation active in isolated worktree feature/sw021-suite-fixes based on code head d5344b4; preserve no-follow/reparse checks. Independently review and integrate fixes, rerun all Rust tests; keep SW-022 gated until behavior checks are acceptable. PR #38/#41 review/thread APIs refreshed 2026-10-22 03:35 UTC returned empty. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -553,7 +553,7 @@
       "state": "OPEN",
       "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
       "base": "main",
-      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty; independent static QA found no actionable blocker."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty; independent static QA found no actionable blocker."
     },
     {
       "number": 41,
@@ -562,7 +562,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
       "base": "feature/sw-014-action-sequences",
-      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:35 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
     },
     {
       "number": 45,
@@ -587,9 +587,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "d5344b4241a19f5d0632478ab9a9d36124f4624d",
+      "head_sha": "a882998607d79915f52890fc087112efb54099a9",
       "base": "feature/sw-020-device-paths",
-      "note": "Open draft stacked on SW-020/PR #46. Current code head d5344b4. SW-021 focused tests PASS 13/13; scanner PASS 2/2; full Rust library suite compiles but FAILS 90/25. Contract/Core/UI/security QA PASS including Windows reparse fix. Full suite remediation active; SW-022 gated. Windows junction test NOT_RUN; V1 BLOCKED."
+      "note": "Open draft at current checkpoint a882998 (SW-021 code head d5344b4), stacked on SW-020/PR #46. Focused Rust tests PASS 13/13; scanner PASS 2/2; full Rust library suite compiles but FAILS 90/25. Security QA PASS for Windows reparse fix; Windows junction NOT_RUN. Full suite remediation active; SW-022 gated; V1 BLOCKED."
     }
   ],
   "contract_commits": [

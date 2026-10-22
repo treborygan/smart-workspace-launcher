@@ -405,3 +405,25 @@ describe("duplicate and relocation API", () => {
     await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "https://example.com", destinationPrefix: "D:\\Archive" })).rejects.toThrow("not a URL");
   });
 });
+
+describe("resource discovery import API", () => {
+  const source = { kind: "directory" as const, path: "C:\\Work" };
+  const scan = { profileId: "p1", source, scanToken: "token", ignoredCount: 1, candidates: [] };
+
+  it("uses typed commands and notifies other windows after import", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeTyped.mockResolvedValueOnce(scan).mockResolvedValueOnce({ profileId: "p1", importedCount: 2, skippedCount: 1 });
+    expect(await api.scanResourceImport({ profileId: "p1", source })).toEqual(scan);
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "resource_import_scan", { request: { profileId: "p1", source } });
+    const request = { profileId: "p1", source, scanToken: "token", candidateIds: ["c1", "c2"], duplicatePolicy: "skip_existing" as const };
+    expect(await api.commitResourceImport(request)).toEqual({ profileId: "p1", importedCount: 2, skippedCount: 1 });
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "resource_import_commit", { request });
+    expect(emitTyped).toHaveBeenCalledWith("workspace-state-changed", { profileId: "p1" });
+  });
+
+  it("does not fake filesystem scanning in browser preview", async () => {
+    await expect(api.scanResourceImport({ profileId: "p1", source })).rejects.toThrow("Windows desktop app");
+    await expect(api.commitResourceImport({ profileId: "p1", source, scanToken: "token", candidateIds: ["c1"], duplicatePolicy: "skip_existing" })).rejects.toThrow("Windows desktop app");
+    expect(invokeTyped).not.toHaveBeenCalled();
+  });
+});

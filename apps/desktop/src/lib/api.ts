@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -191,6 +191,16 @@ export const api = {
     };
     writeDemo([...readDemo(), duplicated]);
     return duplicated;
+  },
+  async scanResourceImport(request: ResourceImportScanRequest): Promise<ResourceImportScanResult> {
+    if (!isNative()) throw new Error("Resource discovery is available in the Windows desktop app.");
+    return invokeTyped("resource_import_scan", { request });
+  },
+  async commitResourceImport(request: ResourceImportCommitRequest): Promise<ResourceImportCommitResult> {
+    if (!isNative()) throw new Error("Resource import is available in the Windows desktop app.");
+    const result = await invokeTyped("resource_import_commit", { request });
+    await notifyWorkspaceChanged(result.profileId);
+    return result;
   },
   async previewResourceRelocation(request: ResourceRelocationPreviewRequest): Promise<ResourceRelocationPreview> {
     if (isNative()) return invokeTyped("resource_relocation_preview", { request });

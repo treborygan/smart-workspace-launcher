@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api, windowState } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), workspaceSequences: vi.fn(), saveWorkspaceSequence: vi.fn(), deleteWorkspaceSequence: vi.fn(), runWorkspaceSequence: vi.fn(), resourceRelationships: vi.fn(), saveResourceRelationship: vi.fn(), deleteResourceRelationship: vi.fn(), workspaceSnapshots: vi.fn(), createWorkspaceSnapshot: vi.fn(), deleteWorkspaceSnapshot: vi.fn(), restoreWorkspaceSnapshot: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), workspaceSequences: vi.fn(), saveWorkspaceSequence: vi.fn(), deleteWorkspaceSequence: vi.fn(), runWorkspaceSequence: vi.fn(), resourceRelationships: vi.fn(), saveResourceRelationship: vi.fn(), deleteResourceRelationship: vi.fn(), workspaceSnapshots: vi.fn(), createWorkspaceSnapshot: vi.fn(), deleteWorkspaceSnapshot: vi.fn(), restoreWorkspaceSnapshot: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn(), scanResourceImport: vi.fn(), commitResourceImport: vi.fn() },
   windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
@@ -63,6 +63,15 @@ describe("workspace dashboard", () => {
     expect(host.textContent).toContain("Roadmap.xlsx");
     expect(host.textContent).toContain("Pinned resources");
     expect(host.textContent).toContain("Inspector");
+  });
+
+  it("opens the explicit resource import assistant from primary navigation", async () => {
+    windowState.label = "main";
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const importButton = [...host.querySelectorAll(".nav-item")].find((button) => button.textContent?.includes("Import resources")) as HTMLButtonElement;
+    await act(async () => { importButton.click(); });
+    expect(host.querySelector("#resource-import-title")?.textContent).toBe("Import resources");
+    expect(host.textContent).toContain("Imported items are never opened automatically");
   });
 
   it("opens the related-resource graph and wires snapshot creation", async () => {

@@ -161,20 +161,20 @@
                 { "properties": { "x": { "const": 11 }, "w": { "maximum": 1 } } }
               ]
             }
-          },
-          "allOf": [
-            {
-              "if": { "properties": { "surface": { "const": "dock" } }, "required": ["surface"] },
-              "then": {
-                "properties": {
-                  "widget_templates": { "maxItems": 0 },
-                  "widgets": { "maxItems": 0 }
-                }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "surface": { "const": "dock" } }, "required": ["surface"] },
+            "then": {
+              "properties": {
+                "widget_templates": { "maxItems": 0 },
+                "widgets": { "maxItems": 0 }
               }
             }
-          ]
+          }
+        ]
         }
       }
     }
   }
-}

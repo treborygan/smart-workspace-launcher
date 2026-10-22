@@ -58,6 +58,25 @@ describe("workspace dashboard", () => {
     expect(saved.cards.find((card: { resourceId: string }) => card.resourceId === "r2").h).toBe(2);
   });
 
+  it("creates profile-local widget templates through the persisted dashboard layout", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    windowState.label = "main";
+    api.layout.mockImplementation(async (profileId: string, surface = "dashboard") => surface === "dashboard" ? { profileId, surface, version: 1, cards: [], widgetTemplates: [], widgets: [] } : null);
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const newTemplate = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "New template")!;
+    await act(async () => newTemplate.click());
+    const name = host.querySelector<HTMLInputElement>('.widget-template-form input[placeholder="e.g. Project starters"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Starter files"); name.dispatchEvent(new Event("input", { bubbles: true })); });
+    const file = host.querySelector<HTMLInputElement>(".widget-resource-picker input")!;
+    await act(async () => file.click());
+    const create = host.querySelector<HTMLButtonElement>(".widget-template-form .button.primary")!;
+    await act(async () => { create.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    const saved = api.saveLayout.mock.calls.at(-1)?.[0];
+    expect(saved.profileId).toBe("p1");
+    expect(saved.widgetTemplates[0]).toMatchObject({ name: "Starter files", kind: "resource_shortcuts", config: { resourceIds: ["r1"] } });
+    expect(saved.widgets).toEqual([]);
+  });
+
   it("loads the saved resources and exposes the inspector", async () => {
     await act(async () => { root.render(createElement(App)); });
     expect(host.textContent).toContain("Roadmap.xlsx");

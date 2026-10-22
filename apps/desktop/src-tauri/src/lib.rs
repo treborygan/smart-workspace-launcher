@@ -3,16 +3,16 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::{File, OpenOptions},
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::AtomicBool,
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
@@ -266,6 +266,17 @@ const EXTENSION_PACKAGE_MAX_BYTES: usize = 2_150_400;
 const EXTENSION_MODULE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const EXTENSION_JSON_MAX_BYTES: usize = 64 * 1024;
 const EXTENSION_FUEL: u64 = 1_000_000;
+const EXTENSION_PREVIEW_TTL: Duration = Duration::from_secs(5 * 60);
+const EXTENSION_PREVIEW_MAX_TOKENS: usize = 32;
+
+struct ExtensionPreviewRecord {
+    package_path: String,
+    package_sha256: String,
+    expires_at: Instant,
+}
+
+static EXTENSION_PREVIEW_TOKENS: LazyLock<Mutex<HashMap<String, ExtensionPreviewRecord>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -6221,6 +6232,58 @@ fn digest_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn create_extension_preview_token(
+    package_path: &str,
+    package_sha256: &str,
+) -> Result<String, AppError> {
+    let now = Instant::now();
+    let expires_at = now + EXTENSION_PREVIEW_TTL;
+    let mut records = EXTENSION_PREVIEW_TOKENS
+        .lock()
+        .map_err(|_| AppError::Invalid("extension preview registry is unavailable".into()))?;
+    records.retain(|_, record| record.expires_at > now);
+    if records.len() >= EXTENSION_PREVIEW_MAX_TOKENS {
+        if let Some(oldest) = records
+            .iter()
+            .min_by_key(|(_, record)| record.expires_at)
+            .map(|(token, _)| token.clone())
+        {
+            records.remove(&oldest);
+        }
+    }
+    let token = Uuid::new_v4().to_string();
+    records.insert(
+        token.clone(),
+        ExtensionPreviewRecord {
+            package_path: package_path.to_string(),
+            package_sha256: package_sha256.to_string(),
+            expires_at,
+        },
+    );
+    Ok(token)
+}
+
+fn consume_extension_preview_token(
+    token: &str,
+    package_path: &str,
+    package_sha256: &str,
+) -> Result<(), AppError> {
+    let now = Instant::now();
+    let mut records = EXTENSION_PREVIEW_TOKENS
+        .lock()
+        .map_err(|_| AppError::Invalid("extension preview registry is unavailable".into()))?;
+    records.retain(|_, record| record.expires_at > now);
+    let record = records
+        .remove(token)
+        .ok_or_else(|| AppError::Invalid("extension preview expired or was already used".into()))?;
+    if record.package_path != package_path || record.package_sha256 != package_sha256 {
+        return Err(AppError::Invalid(
+            "extension preview token does not match this package".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn extension_result_uuid_is_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 36
@@ -6454,12 +6517,14 @@ fn preview_extension_package(
     request: ExtensionPackagePreviewRequest,
 ) -> Result<ExtensionPackagePreview, AppError> {
     let contents = extension_package_contents(&request.package_path)?;
+    let preview_token =
+        create_extension_preview_token(&request.package_path, &contents.package_sha256)?;
     Ok(ExtensionPackagePreview {
         manifest: contents.manifest,
         package_sha256: contents.package_sha256.clone(),
         module_sha256: contents.module_sha256,
         module_size_bytes: contents.module.len(),
-        preview_token: contents.package_sha256,
+        preview_token,
     })
 }
 
@@ -6467,10 +6532,13 @@ fn extension_package_install_on_conn(
     conn: &Connection,
     request: ExtensionPackageInstallRequest,
 ) -> Result<RegisteredExtension, AppError> {
+    consume_extension_preview_token(
+        &request.preview_token,
+        &request.package_path,
+        &request.package_sha256,
+    )?;
     let contents = extension_package_contents(&request.package_path)?;
-    if request.package_sha256 != contents.package_sha256
-        || request.preview_token != contents.package_sha256
-    {
+    if request.package_sha256 != contents.package_sha256 {
         return Err(AppError::Invalid(
             "package changed after preview; preview it again".into(),
         ));
@@ -6552,13 +6620,19 @@ fn extension_invocation_json(
                 .collect::<Result<Vec<_>, _>>()?;
             let item = serde_json::json!({"id":id,"displayName":name,"resourceType":resource_type,"category":category,"tags":tags,"favorite":favorite});
             summaries.push(item);
-            root["resourceMetadata"] =
+            let mut candidate = root.clone();
+            candidate["resourceMetadata"] =
                 serde_json::json!({"resources":summaries.clone(),"truncated":false});
-            if serde_json::to_vec(&root)?.len() > EXTENSION_JSON_MAX_BYTES {
+            let mut truncated_candidate = candidate.clone();
+            truncated_candidate["resourceMetadata"]["truncated"] = serde_json::Value::Bool(true);
+            if serde_json::to_vec(&candidate)?.len() > EXTENSION_JSON_MAX_BYTES
+                || serde_json::to_vec(&truncated_candidate)?.len() > EXTENSION_JSON_MAX_BYTES
+            {
                 summaries.pop();
                 truncated = true;
                 break;
             }
+            root = candidate;
         }
         root["resourceMetadata"] = serde_json::json!({"resources":summaries,"truncated":truncated});
     }
@@ -14420,14 +14494,44 @@ mod tests {
         zip.finish().unwrap();
     }
 
+    fn write_extension_zip_entries(path: &Path, entries: Vec<(String, Vec<u8>, Option<u32>)>) {
+        let file = File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        for (name, bytes, mode) in entries {
+            let mut options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            if let Some(mode) = mode {
+                options = options.unix_permissions(mode);
+            }
+            zip.start_file(name, options).unwrap();
+            zip.write_all(&bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
     fn extension_wat(output: &str) -> Vec<u8> {
         let escaped = serde_json::to_string(output).unwrap();
         let wasm = format!(
-            r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const {}) (data (i32.const 64) {}))"#,
+            r#"(module (memory (export "memory") 2 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const {}) (data (i32.const 64) {}))"#,
             (64u64 << 32) | output.len() as u64,
             escaped
         );
         wat::parse_str(wasm).unwrap()
+    }
+
+    fn extension_wat_with_abi(alloc: &str, handle: &str) -> Vec<u8> {
+        wat::parse_str(format!(
+            r#"(module (memory (export "memory") 2 2) (func (export "alloc") (param i32) (result i32) {alloc}) (func (export "handle") (param i32 i32) (result i64) {handle}))"#
+        ))
+        .unwrap()
+    }
+
+    fn set_extension_module(conn: &Connection, extension_id: &str, bytes: &[u8]) {
+        conn.execute(
+            "UPDATE extension_registry SET enabled=1,module_wasm=?2,module_sha256=?3 WHERE id=?1",
+            params![extension_id, bytes, digest_hex(bytes)],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -14459,7 +14563,7 @@ mod tests {
             package_path: path.display().to_string(),
         })
         .unwrap();
-        assert_eq!(preview.preview_token, preview.package_sha256);
+        assert_ne!(preview.preview_token, preview.package_sha256);
         let reviewed_hash = preview.package_sha256.clone();
         let reviewed_token = preview.preview_token.clone();
         let conn = database();
@@ -14490,15 +14594,29 @@ mod tests {
             },
         );
         assert!(stale.is_err());
+        assert!(consume_extension_preview_token(
+            &reviewed_token,
+            &path.display().to_string(),
+            &reviewed_hash
+        )
+        .is_err());
+        let duplicate_preview = preview_extension_package(ExtensionPackagePreviewRequest {
+            package_path: path.display().to_string(),
+        })
+        .unwrap();
         assert!(extension_package_install_on_conn(
             &conn,
             ExtensionPackageInstallRequest {
                 package_path: path.display().to_string(),
-                package_sha256: reviewed_hash.clone(),
-                preview_token: reviewed_token.clone()
+                package_sha256: duplicate_preview.package_sha256,
+                preview_token: duplicate_preview.preview_token
             }
         )
         .is_err());
+        let changed_preview = preview_extension_package(ExtensionPackagePreviewRequest {
+            package_path: path.display().to_string(),
+        })
+        .unwrap();
         write_extension_fixture(
             &path,
             &extension_wat(
@@ -14509,12 +14627,144 @@ mod tests {
             &conn,
             ExtensionPackageInstallRequest {
                 package_path: path.display().to_string(),
-                package_sha256: reviewed_hash,
-                preview_token: reviewed_token
+                package_sha256: changed_preview.package_sha256,
+                preview_token: changed_preview.preview_token
             }
         )
         .is_err());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn extension_package_rejects_nested_traversal_duplicate_symlink_and_oversized_entries() {
+        let manifest = serde_json::to_vec(&extension_manifest_fixture()).unwrap();
+        let module = extension_wat(r#"{"suggestions":[]}"#);
+        let cases: Vec<Vec<(String, Vec<u8>, Option<u32>)>> = vec![
+            vec![
+                ("nested/manifest.json".into(), manifest.clone(), None),
+                ("module.wasm".into(), module.clone(), None),
+            ],
+            vec![
+                ("../manifest.json".into(), manifest.clone(), None),
+                ("module.wasm".into(), module.clone(), None),
+            ],
+            vec![
+                ("manifest.json".into(), manifest.clone(), Some(0o120777)),
+                ("module.wasm".into(), module.clone(), None),
+            ],
+            vec![
+                (
+                    "manifest.json".into(),
+                    vec![b' '; EXTENSION_MANIFEST_MAX_BYTES + 1],
+                    None,
+                ),
+                ("module.wasm".into(), module.clone(), None),
+            ],
+            vec![
+                ("manifest.json".into(), manifest, None),
+                (
+                    "module.wasm".into(),
+                    vec![0; EXTENSION_MODULE_MAX_BYTES + 1],
+                    None,
+                ),
+            ],
+        ];
+        for entries in cases {
+            let path = std::env::temp_dir()
+                .join(format!("swl-extension-invalid-{}.swext", Uuid::new_v4()));
+            write_extension_zip_entries(&path, entries);
+            assert!(preview_extension_package(ExtensionPackagePreviewRequest {
+                package_path: path.display().to_string(),
+            })
+            .is_err());
+            std::fs::remove_file(path).unwrap();
+        }
+        let duplicate_path =
+            std::env::temp_dir().join(format!("swl-extension-duplicate-{}.swext", Uuid::new_v4()));
+        write_extension_zip_entries(
+            &duplicate_path,
+            vec![
+                (
+                    "manifest.json".into(),
+                    serde_json::to_vec(&extension_manifest_fixture()).unwrap(),
+                    None,
+                ),
+                (
+                    "manifest.jsox".into(),
+                    serde_json::to_vec(&extension_manifest_fixture()).unwrap(),
+                    None,
+                ),
+            ],
+        );
+        let mut duplicate_bytes = std::fs::read(&duplicate_path).unwrap();
+        let from = b"manifest.jsox";
+        let to = b"manifest.json";
+        let mut replacements = 0;
+        for index in 0..=duplicate_bytes.len() - from.len() {
+            if &duplicate_bytes[index..index + from.len()] == from {
+                duplicate_bytes[index..index + from.len()].copy_from_slice(to);
+                replacements += 1;
+            }
+        }
+        assert!(replacements >= 2);
+        std::fs::write(&duplicate_path, duplicate_bytes).unwrap();
+        assert!(preview_extension_package(ExtensionPackagePreviewRequest {
+            package_path: duplicate_path.display().to_string(),
+        })
+        .is_err());
+        std::fs::remove_file(duplicate_path).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("swl-extension-too-large-{}.swext", Uuid::new_v4()));
+        std::fs::write(&path, vec![0; EXTENSION_PACKAGE_MAX_BYTES + 1]).unwrap();
+        assert!(preview_extension_package(ExtensionPackagePreviewRequest {
+            package_path: path.display().to_string(),
+        })
+        .is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn extension_preview_tokens_are_path_bound_capped_and_one_time() {
+        let digest = "ab".repeat(32);
+        let token = create_extension_preview_token("one.swext", &digest).unwrap();
+        assert!(consume_extension_preview_token(&token, "other.swext", &digest).is_err());
+        assert!(consume_extension_preview_token(&token, "one.swext", &digest).is_err());
+
+        let expired = Uuid::new_v4().to_string();
+        EXTENSION_PREVIEW_TOKENS.lock().unwrap().insert(
+            expired.clone(),
+            ExtensionPreviewRecord {
+                package_path: "expired.swext".into(),
+                package_sha256: digest.clone(),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            },
+        );
+        assert!(consume_extension_preview_token(&expired, "expired.swext", &digest).is_err());
+
+        let tokens = (0..(EXTENSION_PREVIEW_MAX_TOKENS + 1))
+            .map(|_| create_extension_preview_token("bounded.swext", &digest).unwrap())
+            .collect::<Vec<_>>();
+        assert!(EXTENSION_PREVIEW_TOKENS.lock().unwrap().len() <= EXTENSION_PREVIEW_MAX_TOKENS);
+        assert!(consume_extension_preview_token(&tokens[0], "bounded.swext", &digest).is_err());
+
+        let concurrent = create_extension_preview_token("race.swext", &digest).unwrap();
+        let workers = (0..2)
+            .map(|_| {
+                let token = concurrent.clone();
+                let digest = digest.clone();
+                std::thread::spawn(move || {
+                    consume_extension_preview_token(&token, "race.swext", &digest).is_ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|success| *success)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -14552,12 +14802,66 @@ mod tests {
         let invalid_json = String::from_utf8(invalid).unwrap();
         assert!(invalid_json.contains("bad\\ntext"));
         assert!(extension_registry_run_on_conn(&conn, &ext.id, &pid).is_err());
+        for bad_output in ["not valid json", r#"{"suggestions":[],"unexpected":true}"#] {
+            let bad_module = extension_wat(bad_output);
+            set_extension_module(&conn, &ext.id, &bad_module);
+            assert!(extension_registry_run_on_conn(&conn, &ext.id, &pid).is_err());
+        }
         let looping = wat::parse_str(r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) (loop $forever (br $forever)) i64.const 0))"#).unwrap();
         assert!(run_extension_module(
             &looping,
             br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
         )
         .is_err());
+        assert!(run_extension_module(
+            &extension_wat(&"x".repeat(EXTENSION_JSON_MAX_BYTES + 1)),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
+        )
+        .is_err());
+        assert!(run_extension_module(
+            &extension_wat_with_abi("i32.const -1", "i64.const 0"),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
+        )
+        .is_err());
+        assert!(run_extension_module(
+            &extension_wat_with_abi("i32.const 131071", "i64.const 0"),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
+        )
+        .is_err());
+        assert!(run_extension_module(
+            &extension_wat_with_abi("i32.const 0", "i64.const 562962838323200"),
+            br#"{"sdkVersion":"1.0.0","grantedCapabilities":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn extension_results_accept_selected_profile_ids_and_reject_other_profiles() {
+        let mut conn = database();
+        let selected = profile(&conn);
+        let other = profile(&conn);
+        let selected_resource = resource("Selected profile resource");
+        let other_resource = resource("Other profile resource");
+        persist_resource(&mut conn, &selected_resource, true, Some(&selected)).unwrap();
+        persist_resource(&mut conn, &other_resource, true, Some(&other)).unwrap();
+        let extension =
+            extension_registry_register_on_conn(&conn, extension_manifest_fixture()).unwrap();
+
+        let selected_output = serde_json::json!({"suggestions":[{"title":"Selected","reason":"In the active profile","resourceIds":[selected_resource.id]}]}).to_string();
+        let selected_module = extension_wat(&selected_output);
+        set_extension_module(&conn, &extension.id, &selected_module);
+        assert_eq!(
+            extension_registry_run_on_conn(&conn, &extension.id, &selected)
+                .unwrap()
+                .suggestions
+                .len(),
+            1
+        );
+
+        let other_output = serde_json::json!({"suggestions":[{"title":"Other","reason":"Outside the active profile","resourceIds":[other_resource.id]}]}).to_string();
+        let other_module = extension_wat(&other_output);
+        set_extension_module(&conn, &extension.id, &other_module);
+        assert!(extension_registry_run_on_conn(&conn, &extension.id, &selected).is_err());
     }
 
     #[test]
@@ -14577,6 +14881,29 @@ mod tests {
                 .unwrap();
         assert!(metadata.get("resourceMetadata").is_some());
         assert!(metadata.get("workspaceSummary").is_none());
+    }
+
+    #[test]
+    fn extension_metadata_byte_truncation_reserves_true_flag_within_json_limit() {
+        let mut conn = database();
+        let pid = profile(&conn);
+        for index in 0..200 {
+            let resource = resource(&format!("{}-{index}", "x".repeat(240)));
+            persist_resource(&mut conn, &resource, true, Some(&pid)).unwrap();
+        }
+        let input =
+            extension_invocation_json(&conn, &pid, &[ExtensionCapability::ResourceMetadataRead])
+                .unwrap();
+        let bytes = serde_json::to_vec(&input).unwrap();
+        assert!(bytes.len() <= EXTENSION_JSON_MAX_BYTES);
+        assert_eq!(input["resourceMetadata"]["truncated"], true);
+        assert!(
+            input["resourceMetadata"]["resources"]
+                .as_array()
+                .unwrap()
+                .len()
+                < 200
+        );
     }
 
     #[test]

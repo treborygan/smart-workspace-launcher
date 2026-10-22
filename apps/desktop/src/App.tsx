@@ -12,6 +12,7 @@ import { ProfileThemeSettings } from "./components/ProfileThemeSettings";
 import { SmartCollectionsManager } from "./components/SmartCollectionsManager";
 import { DynamicShortcutsManager } from "./components/DynamicShortcutsManager";
 import { api } from "./lib/api";
+import { errorMessage, withNativeErrorContext } from "./lib/nativeErrors";
 import type { DashboardLayout, DynamicShortcut, QuickLaunchHotkeyStatus, ResourcePatch, SmartCollection } from "@sw/contracts";
 import type { Profile, Resource } from "./lib/contracts";
 import { matchesSmartCollection } from "./lib/smartCollections";
@@ -49,7 +50,7 @@ function AddResourceDialog({ profileId, onClose, onCreate }: { profileId?: strin
     try {
       const resource = await api.create({ profileId, resourceType: /^https:\/\//i.test(uri) ? "url" : kind, displayName: name.trim(), defaultAction: "open", targets: [{ id: crypto.randomUUID(), kind: /^https:\/\//i.test(uri) ? "url" : kind, canonicalUri: uri.trim(), priority: 0, arguments: [], active: true }] });
       onCreate(resource); onClose();
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not save this resource."); }
+    } catch (e) { setError(errorMessage(e, "Could not save this resource.")); }
   };
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
@@ -99,17 +100,23 @@ export default function App() {
   const shortcutDraft = shortcutDrafts[activeProfileId]?.value ?? configuredShortcut;
 
   const loadProfile = async (preferredProfileId?: string, activateProfile = false) => {
-    const availableProfiles = await api.profiles();
+    const availableProfiles = await withNativeErrorContext("Loading profiles", () => api.profiles());
     const rememberedProfile = preferredProfileId || localStorage.getItem("swl-active-profile");
     const profile = availableProfiles.find((item) => item.id === rememberedProfile) || availableProfiles[0];
-    if (profile && activateProfile) await api.switchProfile(profile.id);
+    if (profile && activateProfile) await withNativeErrorContext("Activating profile", () => api.switchProfile(profile.id));
     if (profile) {
       let configured = "Alt+Space";
       try { configured = JSON.parse(profile.settingsJson || "{}").quickLaunchShortcut || "Alt+Space"; } catch { /* keep the default */ }
       setShortcutDrafts((current) => current[profile.id] ? current : { ...current, [profile.id]: { value: configured, dirty: false } });
       setThemePreference(themeForProfile(profile));
     }
-    const [items, layout, dock, collections, shortcuts] = await Promise.all([api.resources(profile?.id), profile ? api.layout(profile.id) : Promise.resolve(null), profile ? api.layout(profile.id, "dock") : Promise.resolve(null), profile ? api.smartCollections(profile.id) : Promise.resolve([]), profile ? api.dynamicShortcuts(profile.id) : Promise.resolve([])]);
+    const [items, layout, dock, collections, shortcuts] = await Promise.all([
+      withNativeErrorContext("Loading resources", () => api.resources(profile?.id)),
+      profile ? withNativeErrorContext("Loading Dashboard layout", () => api.layout(profile.id)) : Promise.resolve(null),
+      profile ? withNativeErrorContext("Loading Dock layout", () => api.layout(profile.id, "dock")) : Promise.resolve(null),
+      profile ? withNativeErrorContext("Loading smart collections", () => api.smartCollections(profile.id)) : Promise.resolve([]),
+      profile ? withNativeErrorContext("Loading Quick Launch shortcuts", () => api.dynamicShortcuts(profile.id)) : Promise.resolve([]),
+    ]);
     const restored = restoreLayout(items, layout);
     setProfiles(availableProfiles); setActiveProfileId(profile?.id || ""); setResources(restored.resources); setCardWidths(restored.widths); setCardHeights(restored.heights); setDockLayout(dock); setSmartCollections(collections); setDynamicShortcuts(shortcuts);
     if (profile && selectedSmartCollections[profile.id] && !collections.some((item) => item.id === selectedSmartCollections[profile.id])) setSelectedSmartCollections((current) => ({ ...current, [profile.id]: null }));
@@ -119,7 +126,7 @@ export default function App() {
   };
   const reload = async () => {
     try { await loadProfile(undefined, true); }
-    catch (e) { setNotice(e instanceof Error ? e.message : "Could not connect to the local workspace."); }
+    catch (e) { setNotice(errorMessage(e, "Could not connect to the local workspace.")); }
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);

@@ -8,6 +8,7 @@ import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from jsonschema import Draft202012Validator, FormatChecker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "qa"))
@@ -66,6 +67,12 @@ def make_unsupported_compression_package():
     return package
 
 
+def validate_layout_schema(document):
+    schema = json.loads((ROOT / "contracts" / "layouts.schema.json").read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    return list(validator.iter_errors(document))
+
+
 class ProfileArchiveContractTests(unittest.TestCase):
     def test_valid_fixture_is_accepted(self):
         result = validate_profile_archive(VALID)
@@ -86,6 +93,23 @@ class ProfileArchiveContractTests(unittest.TestCase):
             self.assertEqual(validate_profile_archive(package), result)
         finally:
             package.unlink(missing_ok=True)
+
+    def test_layout_schema_accepts_valid_dashboard_widget(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        self.assertEqual(validate_layout_schema(layouts), [])
+
+    def test_layout_schema_rejects_widgets_on_dock(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        layouts["layouts"][0]["surface"] = "dock"
+        self.assertNotEqual(validate_layout_schema(layouts), [])
+
+    def test_layout_schema_rejects_widget_that_overflows_grid(self):
+        with zipfile.ZipFile(VALID_WIDGETS) as archive:
+            layouts = json.loads(archive.read("layouts.json"))
+        layouts["layouts"][0]["widgets"][0].update(x=11, w=2)
+        self.assertNotEqual(validate_layout_schema(layouts), [])
 
     def test_widget_templates_and_instances_reject_duplicate_or_cross_colliding_ids(self):
         layouts = json.loads(zipfile.ZipFile(VALID_WIDGETS).read("layouts.json"))

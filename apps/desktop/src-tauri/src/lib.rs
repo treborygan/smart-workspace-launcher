@@ -4141,7 +4141,7 @@ fn resource_relationship_list_on_conn(
         return Err(AppError::NotFound);
     }
     let mut stmt = conn.prepare("SELECT id,profile_id,source_resource_id,target_resource_id,label FROM resource_relationships WHERE profile_id=?1 ORDER BY label COLLATE NOCASE,id")?;
-    Ok(stmt
+    let relationships = stmt
         .query_map([profile_id], |row| {
             Ok(ResourceRelationship {
                 id: row.get(0)?,
@@ -4151,7 +4151,8 @@ fn resource_relationship_list_on_conn(
                 label: row.get(4)?,
             })
         })?
-        .collect::<Result<Vec<_>, _>>()?)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(relationships)
 }
 
 fn resource_relationship_save_on_conn(

@@ -9,7 +9,8 @@ Frontend: React, TypeScript, Tailwind/design tokens, accessible UI primitives, T
 - ResourceService: immutable UUID identity, CRUD, targets, categories/tags/memberships, immutable typed DTO.
 - LaunchService: request ID -> target resolution -> allowed scheme/command -> ShellExecuteEx on Windows -> exactly-once event -> UI notification. Handoff success is not proof target app loaded.
 - SearchService: SQLite FTS5 plus ranking/fuzzy/recency and indexed aliases. Search never reads filesystem synchronously on hot path.
-- ProfileService: local independent profile settings, layouts, memberships, per-device mapping override, safe profile switching.
+- ProfileService: local independent profile settings, layouts, memberships and safe profile switching.
+- DevicePathService: random identity in per-user OS app-local settings, approved local path-prefix rules, exact preview/commit, launch-only substitution; never rewrites canonical targets or includes local mappings in profile archives.
 - MetadataService: bounded async inspection, cached size/timestamps/accessibility/provenance, cancellation and timeouts.
 - AnalyticsService: immutable launch events, timestamps in UTC, provenance, aggregates by profile/source/time.
 - ImportExportService: strict versioned ZIP+JSON schema, absolute compressed/uncompressed byte limits, no zip slip, disallow scripts, preview and atomic apply; backups/rollback.

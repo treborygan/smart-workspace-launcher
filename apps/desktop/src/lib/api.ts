@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DevicePathMapping, DevicePathMappingPreview, DevicePathMappingPreviewRequest, DynamicShortcut, LaunchEvent, LaunchSource, LocalDeviceIdentity, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -81,6 +81,30 @@ function sameRelocationChanges(a: ResourceRelocationPreview, b: ResourceRelocati
 }
 
 export const api = {
+  async localDevice(): Promise<LocalDeviceIdentity> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("local_device_get");
+  },
+  async renameLocalDevice(name: string): Promise<LocalDeviceIdentity> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("local_device_rename", { name });
+  },
+  async devicePathMappings(): Promise<DevicePathMapping[]> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("device_path_mapping_list");
+  },
+  async previewDevicePathMapping(request: DevicePathMappingPreviewRequest): Promise<DevicePathMappingPreview> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("device_path_mapping_preview", { request });
+  },
+  async commitDevicePathMapping(preview: DevicePathMappingPreview): Promise<DevicePathMapping> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("device_path_mapping_commit", { preview });
+  },
+  async deleteDevicePathMapping(id: string): Promise<void> {
+    if (!isNative()) throw new Error("Device path settings require the Windows desktop app.");
+    return invokeTyped("device_path_mapping_delete", { id });
+  },
   async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
     if (isNative()) {
       const updated = await invokeTyped("profile_theme_set", { profileId, theme });

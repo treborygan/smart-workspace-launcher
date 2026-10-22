@@ -264,6 +264,18 @@ const EXTENSION_ID_MAX_BYTES: usize = 255;
 const EXTENSION_CAPABILITY_MAX_ITEMS: usize = 2;
 const EXTENSION_PACKAGE_MAX_BYTES: usize = 2_150_400;
 const EXTENSION_MODULE_MAX_BYTES: usize = 2 * 1024 * 1024;
+// Parser/validator limits are intentionally independent of the file-size and
+// execution-fuel limits: fuel does not cover compilation.
+const EXTENSION_WASM_MAX_TYPES: usize = 512;
+const EXTENSION_WASM_MAX_TYPE_ARITY: usize = 64;
+const EXTENSION_WASM_MAX_FUNCTIONS: usize = 512;
+const EXTENSION_WASM_MAX_GLOBALS: usize = 256;
+const EXTENSION_WASM_MAX_LOCALS_PER_FUNCTION: u32 = 1024;
+const EXTENSION_WASM_MAX_TOTAL_LOCALS: u64 = 16_384;
+const EXTENSION_WASM_MAX_OPERATORS: usize = 100_000;
+const EXTENSION_WASM_MAX_CUSTOM_SECTIONS: usize = 8;
+const EXTENSION_WASM_MAX_CUSTOM_BYTES: usize = 64 * 1024;
+const EXTENSION_WASM_MAX_DATA_SEGMENTS: usize = 64;
 const EXTENSION_JSON_MAX_BYTES: usize = 64 * 1024;
 const EXTENSION_FUEL: u64 = 1_000_000;
 const EXTENSION_PREVIEW_TTL: Duration = Duration::from_secs(5 * 60);
@@ -6408,10 +6420,21 @@ fn validate_extension_module(bytes: &[u8]) -> Result<(), AppError> {
         return Err(AppError::Package("Wasm module size is invalid".into()));
     }
     let mut saw_module = false;
+    let mut types = Vec::new();
+    let mut functions = Vec::new();
+    let mut memory = None;
     let mut declared_memories = 0usize;
     let mut declared_tables = 0usize;
+    let mut declared_globals = 0usize;
+    let mut sections = 0usize;
+    let mut custom_sections = 0usize;
+    let mut custom_bytes = 0usize;
+    let mut operators = 0usize;
+    let mut total_locals = 0u64;
+    let mut exports = Vec::new();
     for payload in wasmparser::Parser::new(0).parse_all(bytes) {
-        match payload.map_err(|_| AppError::Package("Wasm module is malformed".into()))? {
+        let payload = payload.map_err(|_| AppError::Package("Wasm module is malformed".into()))?;
+        match payload {
             wasmparser::Payload::Version {
                 encoding: wasmparser::Encoding::Module,
                 ..
@@ -6426,14 +6449,66 @@ fn validate_extension_module(bytes: &[u8]) -> Result<(), AppError> {
                     "Wasm start sections are not supported".into(),
                 ))
             }
+            wasmparser::Payload::TypeSection(section) => {
+                sections += 1;
+                if section.count() as usize > EXTENSION_WASM_MAX_TYPES {
+                    return Err(AppError::Package(
+                        "Wasm type count exceeds its limit".into(),
+                    ));
+                }
+                for ty in section.into_iter_err_on_gc_types() {
+                    let ty =
+                        ty.map_err(|_| AppError::Package("Wasm type section is malformed".into()))?;
+                    if ty.params().len() > EXTENSION_WASM_MAX_TYPE_ARITY
+                        || ty.results().len() > EXTENSION_WASM_MAX_TYPE_ARITY
+                    {
+                        return Err(AppError::Package(
+                            "Wasm function type arity exceeds its limit".into(),
+                        ));
+                    }
+                    types.push(ty);
+                }
+            }
+            wasmparser::Payload::ImportSection(section) => {
+                sections += 1;
+                if section.count() != 0 {
+                    return Err(AppError::Package("Wasm imports are prohibited".into()));
+                }
+            }
+            wasmparser::Payload::FunctionSection(section) => {
+                sections += 1;
+                if section.count() as usize > EXTENSION_WASM_MAX_FUNCTIONS {
+                    return Err(AppError::Package(
+                        "Wasm function count exceeds its limit".into(),
+                    ));
+                }
+                functions.reserve(section.count() as usize);
+                for index in section {
+                    functions.push(index.map_err(|_| {
+                        AppError::Package("Wasm function section is malformed".into())
+                    })?);
+                }
+            }
             wasmparser::Payload::MemorySection(section) => {
-                declared_memories = section.count() as usize
+                sections += 1;
+                declared_memories = section.count() as usize;
+                if declared_memories > 1 {
+                    return Err(AppError::Package(
+                        "Wasm module may declare one memory".into(),
+                    ));
+                }
+                for item in section {
+                    memory = Some(item.map_err(|_| {
+                        AppError::Package("Wasm memory section is malformed".into())
+                    })?);
+                }
             }
             wasmparser::Payload::TableSection(section) => {
+                sections += 1;
                 declared_tables = section.count() as usize;
-                if declared_tables > 1 {
+                if declared_tables > 0 {
                     return Err(AppError::Package(
-                        "Wasm module may declare at most one table".into(),
+                        "Wasm tables are not supported by this runtime".into(),
                     ));
                 }
                 for table in section {
@@ -6449,67 +6524,198 @@ fn validate_extension_module(bytes: &[u8]) -> Result<(), AppError> {
                     }
                 }
             }
+            wasmparser::Payload::GlobalSection(section) => {
+                sections += 1;
+                declared_globals = section.count() as usize;
+                if declared_globals > EXTENSION_WASM_MAX_GLOBALS {
+                    return Err(AppError::Package(
+                        "Wasm global count exceeds its limit".into(),
+                    ));
+                }
+            }
+            wasmparser::Payload::ExportSection(section) => {
+                sections += 1;
+                if section.count() > 3 {
+                    return Err(AppError::Package(
+                        "Wasm export count exceeds its limit".into(),
+                    ));
+                }
+                for export in section {
+                    exports.push(export.map_err(|_| {
+                        AppError::Package("Wasm export section is malformed".into())
+                    })?);
+                }
+            }
+            wasmparser::Payload::ElementSection(section) => {
+                sections += 1;
+                if section.count() > 64 {
+                    return Err(AppError::Package(
+                        "Wasm element segment count exceeds its limit".into(),
+                    ));
+                }
+            }
+            wasmparser::Payload::DataSection(section) => {
+                sections += 1;
+                if section.count() as usize > EXTENSION_WASM_MAX_DATA_SEGMENTS {
+                    return Err(AppError::Package(
+                        "Wasm data segment count exceeds its limit".into(),
+                    ));
+                }
+            }
+            wasmparser::Payload::DataCountSection { .. } => sections += 1,
+            wasmparser::Payload::TagSection(_) => {
+                sections += 1;
+                return Err(AppError::Package("Wasm tags are not supported".into()));
+            }
+            wasmparser::Payload::CodeSectionStart { count, .. } => {
+                sections += 1;
+                if count as usize > EXTENSION_WASM_MAX_FUNCTIONS {
+                    return Err(AppError::Package(
+                        "Wasm function count exceeds its limit".into(),
+                    ));
+                }
+            }
+            wasmparser::Payload::CodeSectionEntry(body) => {
+                let mut locals = body
+                    .get_locals_reader()
+                    .map_err(|_| AppError::Package("Wasm locals are malformed".into()))?;
+                let local_groups = locals.get_count();
+                let mut body_locals = 0u64;
+                for _ in 0..local_groups {
+                    let (count, _) = locals
+                        .read()
+                        .map_err(|_| AppError::Package("Wasm locals are malformed".into()))?;
+                    body_locals = body_locals.saturating_add(count as u64);
+                }
+                if body_locals > EXTENSION_WASM_MAX_LOCALS_PER_FUNCTION as u64 {
+                    return Err(AppError::Package(
+                        "Wasm locals per function exceed their limit".into(),
+                    ));
+                }
+                total_locals = total_locals.saturating_add(body_locals);
+                if total_locals > EXTENSION_WASM_MAX_TOTAL_LOCALS {
+                    return Err(AppError::Package(
+                        "Wasm total locals exceed their limit".into(),
+                    ));
+                }
+                let mut reader = body
+                    .get_operators_reader()
+                    .map_err(|_| AppError::Package("Wasm operators are malformed".into()))?;
+                while !reader.eof() {
+                    reader
+                        .read()
+                        .map_err(|_| AppError::Package("Wasm operators are malformed".into()))?;
+                    operators += 1;
+                    if operators > EXTENSION_WASM_MAX_OPERATORS {
+                        return Err(AppError::Package(
+                            "Wasm operator count exceeds its limit".into(),
+                        ));
+                    }
+                }
+            }
+            wasmparser::Payload::CustomSection(section) => {
+                custom_sections += 1;
+                custom_bytes = custom_bytes.saturating_add(section.data().len());
+                if custom_sections > EXTENSION_WASM_MAX_CUSTOM_SECTIONS
+                    || custom_bytes > EXTENSION_WASM_MAX_CUSTOM_BYTES
+                {
+                    return Err(AppError::Package(
+                        "Wasm custom sections exceed their limits".into(),
+                    ));
+                }
+            }
+            wasmparser::Payload::UnknownSection { .. } => {
+                return Err(AppError::Package(
+                    "unknown Wasm sections are not supported".into(),
+                ));
+            }
             _ => {}
         }
+        if sections > 16 {
+            return Err(AppError::Package(
+                "Wasm section count exceeds its limit".into(),
+            ));
+        }
     }
-    if !saw_module || declared_memories != 1 || declared_tables > 1 {
+    if !saw_module
+        || declared_memories != 1
+        || declared_tables != 0
+        || functions.len() > EXTENSION_WASM_MAX_FUNCTIONS
+    {
         return Err(AppError::Package("invalid Wasm module".into()));
     }
-    let mut config = wasmi::Config::default();
-    config.consume_fuel(true);
-    config.set_max_recursion_depth(128);
-    config.set_max_stack_height(64 * 1024);
-    let engine = wasmi::Engine::new(&config);
-    let module = wasmi::Module::new(&engine, bytes)
-        .map_err(|_| AppError::Package("Wasm module is not supported by this runtime".into()))?;
-    if module.imports().next().is_some() {
-        return Err(AppError::Package("Wasm imports are prohibited".into()));
+    let memory =
+        memory.ok_or_else(|| AppError::Package("Wasm memory section is required".into()))?;
+    if memory.memory64
+        || memory.initial > 2
+        || memory.maximum.is_none_or(|max| max > 2)
+        || memory.page_size_log2.is_some()
+    {
+        return Err(AppError::Package(
+            "Wasm memory must be limited to at most two pages".into(),
+        ));
     }
-    let exports = module.exports().collect::<Vec<_>>();
     if exports.len() != 3 {
         return Err(AppError::Package(
             "Wasm module must export exactly memory, alloc and handle".into(),
         ));
     }
-    let memory = module
-        .get_export("memory")
-        .and_then(|ty| ty.memory().copied())
-        .ok_or_else(|| AppError::Package("Wasm memory export is required".into()))?;
-    if memory.is_64() || memory.minimum() > 2 || memory.maximum().is_none_or(|max| max > 2) {
-        return Err(AppError::Package(
-            "Wasm memory must be limited to at most two pages".into(),
-        ));
-    }
-    for (name, params, results) in [
-        (
-            "alloc",
-            vec![wasmi::ValType::I32],
-            vec![wasmi::ValType::I32],
-        ),
-        (
-            "handle",
-            vec![wasmi::ValType::I32, wasmi::ValType::I32],
-            vec![wasmi::ValType::I64],
-        ),
-    ] {
-        let f = module
-            .get_export(name)
-            .and_then(|ty| ty.func().cloned())
-            .ok_or_else(|| AppError::Package(format!("Wasm {name} export is required")))?;
-        if f.params() != params.as_slice() || f.results() != results.as_slice() {
-            return Err(AppError::Package(format!(
-                "Wasm {name} export has the wrong signature"
-            )));
+    let mut seen_memory = false;
+    let mut seen_alloc = false;
+    let mut seen_handle = false;
+    for export in exports {
+        match (export.name, export.kind) {
+            ("memory", wasmparser::ExternalKind::Memory) if export.index == 0 => seen_memory = true,
+            ("alloc", wasmparser::ExternalKind::Func) => {
+                let type_idx = *functions
+                    .get(export.index as usize)
+                    .ok_or_else(|| AppError::Package("Wasm alloc export index is invalid".into()))?
+                    as usize;
+                let ty = types
+                    .get(type_idx)
+                    .ok_or_else(|| AppError::Package("Wasm alloc export type is invalid".into()))?;
+                if ty.params() != [wasmparser::ValType::I32]
+                    || ty.results() != [wasmparser::ValType::I32]
+                {
+                    return Err(AppError::Package(
+                        "Wasm alloc export has the wrong signature".into(),
+                    ));
+                }
+                seen_alloc = true;
+            }
+            ("handle", wasmparser::ExternalKind::Func) => {
+                let type_idx = *functions.get(export.index as usize).ok_or_else(|| {
+                    AppError::Package("Wasm handle export index is invalid".into())
+                })? as usize;
+                let ty = types.get(type_idx).ok_or_else(|| {
+                    AppError::Package("Wasm handle export type is invalid".into())
+                })?;
+                if ty.params() != [wasmparser::ValType::I32, wasmparser::ValType::I32]
+                    || ty.results() != [wasmparser::ValType::I64]
+                {
+                    return Err(AppError::Package(
+                        "Wasm handle export has the wrong signature".into(),
+                    ));
+                }
+                seen_handle = true;
+            }
+            _ => {
+                return Err(AppError::Package(
+                    "unknown or invalid Wasm exports are rejected".into(),
+                ))
+            }
         }
     }
-    if exports
-        .iter()
-        .any(|export| !["memory", "alloc", "handle"].contains(&export.name()))
-    {
+    if !seen_memory || !seen_alloc || !seen_handle {
         return Err(AppError::Package(
-            "unknown Wasm exports are rejected".into(),
+            "Wasm module is missing a required ABI export".into(),
         ));
     }
+    // Full validation is bounded by the structural limits above. Compilation
+    // is deferred until explicit execution, where Wasmi compiles exactly once.
+    wasmparser::Validator::new()
+        .validate_all(bytes)
+        .map_err(|_| AppError::Package("Wasm module is malformed or unsupported".into()))?;
     Ok(())
 }
 
@@ -6528,10 +6734,9 @@ fn preview_extension_package(
     })
 }
 
-fn extension_package_install_on_conn(
-    conn: &Connection,
+fn prepare_extension_install(
     request: ExtensionPackageInstallRequest,
-) -> Result<RegisteredExtension, AppError> {
+) -> Result<ExtensionPackageContents, AppError> {
     consume_extension_preview_token(
         &request.preview_token,
         &request.package_path,
@@ -6543,6 +6748,13 @@ fn extension_package_install_on_conn(
             "package changed after preview; preview it again".into(),
         ));
     }
+    Ok(contents)
+}
+
+fn install_extension_contents_on_conn(
+    conn: &Connection,
+    contents: ExtensionPackageContents,
+) -> Result<RegisteredExtension, AppError> {
     let tx = conn.unchecked_transaction()?;
     let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM extension_registry WHERE id=?1)",
@@ -6562,11 +6774,20 @@ fn extension_package_install_on_conn(
         .ok_or(AppError::NotFound)
 }
 
+fn extension_package_install_on_conn(
+    conn: &Connection,
+    request: ExtensionPackageInstallRequest,
+) -> Result<RegisteredExtension, AppError> {
+    let contents = prepare_extension_install(request)?;
+    install_extension_contents_on_conn(conn, contents)
+}
+
 fn extension_package_install(
     state: State<'_, AppState>,
     request: ExtensionPackageInstallRequest,
 ) -> Result<RegisteredExtension, AppError> {
-    extension_package_install_on_conn(&lock(&state)?, request)
+    let contents = prepare_extension_install(request)?;
+    install_extension_contents_on_conn(&lock(&state)?, contents)
 }
 
 fn extension_invocation_json(
@@ -6656,8 +6877,8 @@ fn run_extension_module(module_bytes: &[u8], input: &[u8]) -> Result<Vec<u8>, Ap
     let limits = wasmi::StoreLimitsBuilder::new()
         .memory_size(2 * 65536)
         .memories(1)
-        .table_elements(1024)
-        .tables(1)
+        .table_elements(0)
+        .tables(0)
         .instances(1)
         .build();
     let mut store = wasmi::Store::new(&engine, limits);
@@ -6724,11 +6945,11 @@ fn run_extension_module(module_bytes: &[u8], input: &[u8]) -> Result<Vec<u8>, Ap
     Ok(output)
 }
 
-fn extension_registry_run_on_conn(
+fn prepare_extension_run_on_conn(
     conn: &Connection,
     extension_id: &str,
     profile_id: &str,
-) -> Result<ExtensionRunResult, AppError> {
+) -> Result<(Vec<u8>, Vec<u8>), AppError> {
     validate_extension_id(extension_id)?;
     let (enabled,manifest_json,granted_json,module,module_sha): (bool,String,String,Option<Vec<u8>>,Option<String>)=conn.query_row("SELECT enabled,requested_capabilities_json,granted_capabilities_json,module_wasm,module_sha256 FROM extension_registry WHERE id=?1",[extension_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(AppError::NotFound)?;
     if !enabled {
@@ -6757,7 +6978,15 @@ fn extension_registry_run_on_conn(
     }
     let input = extension_invocation_json(conn, profile_id, &grants)?;
     let input_bytes = serde_json::to_vec(&input)?;
-    let output = run_extension_module(&module, &input_bytes)?;
+    Ok((module, input_bytes))
+}
+
+fn run_prepared_extension(
+    extension_id: &str,
+    module: &[u8],
+    input: &[u8],
+) -> Result<ExtensionRunResult, AppError> {
+    let output = run_extension_module(module, input)?;
     let parsed: serde_json::Value = serde_json::from_slice(&output)
         .map_err(|_| AppError::Package("extension output is not valid JSON".into()))?;
     if parsed
@@ -6828,12 +7057,6 @@ fn extension_registry_run_on_conn(
                     "suggestion contains duplicate resource IDs".into(),
                 ));
             }
-            let belongs:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",params![profile_id,id],|r|r.get::<_,i64>(0).map(|v|v!=0))?;
-            if !belongs {
-                return Err(AppError::Package(
-                    "suggestion references a resource outside the selected profile".into(),
-                ));
-            }
             resource_ids.push(id.to_string());
         }
         suggestions.push(ExtensionSuggestion {
@@ -6848,6 +7071,49 @@ fn extension_registry_run_on_conn(
     })
 }
 
+fn validate_extension_suggestion_membership(
+    conn: &Connection,
+    profile_id: &str,
+    result: &ExtensionRunResult,
+) -> Result<(), AppError> {
+    let profile_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    for id in result
+        .suggestions
+        .iter()
+        .flat_map(|suggestion| suggestion.resource_ids.iter())
+    {
+        let belongs: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+            params![profile_id, id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !belongs {
+            return Err(AppError::Package(
+                "suggestion references a resource outside the selected profile".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn extension_registry_run_on_conn(
+    conn: &Connection,
+    extension_id: &str,
+    profile_id: &str,
+) -> Result<ExtensionRunResult, AppError> {
+    let (module, input) = prepare_extension_run_on_conn(conn, extension_id, profile_id)?;
+    let result = run_prepared_extension(extension_id, &module, &input)?;
+    validate_extension_suggestion_membership(conn, profile_id, &result)?;
+    Ok(result)
+}
+
 #[tauri::command]
 fn extension_package_preview(
     request: ExtensionPackagePreviewRequest,
@@ -6860,7 +7126,13 @@ fn extension_registry_run(
     extension_id: String,
     profile_id: String,
 ) -> Result<ExtensionRunResult, AppError> {
-    extension_registry_run_on_conn(&lock(&state)?, &extension_id, &profile_id)
+    let (module, input) = {
+        let conn = lock(&state)?;
+        prepare_extension_run_on_conn(&conn, &extension_id, &profile_id)?
+    };
+    let result = run_prepared_extension(&extension_id, &module, &input)?;
+    validate_extension_suggestion_membership(&lock(&state)?, &profile_id, &result)?;
+    Ok(result)
 }
 
 fn extension_registry_list_on_conn(
@@ -14552,7 +14824,62 @@ mod tests {
         let wrong = wat::parse_str(r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i64) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
         assert!(validate_extension_module(&wrong).is_err());
         let table = wat::parse_str(r#"(module (memory (export "memory") 1 2) (table 1025 funcref) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#).unwrap();
-        assert!(validate_extension_module(&table).is_err());
+        assert!(validate_extension_module(&table)
+            .unwrap_err()
+            .to_string()
+            .contains("tables are not supported"));
+    }
+
+    #[test]
+    fn extension_runtime_rejects_modules_over_structural_budgets_before_compile() {
+        let functions = (0..=EXTENSION_WASM_MAX_FUNCTIONS)
+            .map(|_| "(func)")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let too_many_functions = wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1 2) {functions} (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#
+        ))
+        .unwrap();
+        assert!(validate_extension_module(&too_many_functions)
+            .unwrap_err()
+            .to_string()
+            .contains("function count"));
+
+        let locals = (0..=EXTENSION_WASM_MAX_LOCALS_PER_FUNCTION)
+            .map(|_| "i32")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let too_many_locals = wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) (local {locals}) i64.const 0))"#
+        ))
+        .unwrap();
+        assert!(validate_extension_module(&too_many_locals)
+            .unwrap_err()
+            .to_string()
+            .contains("locals per function"));
+
+        let operators = "nop ".repeat(EXTENSION_WASM_MAX_OPERATORS + 1);
+        let too_many_operators = wat::parse_str(format!(
+            r#"(module (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) {operators} i64.const 0))"#
+        ))
+        .unwrap();
+        assert!(validate_extension_module(&too_many_operators)
+            .unwrap_err()
+            .to_string()
+            .contains("operator count"));
+
+        let params = (0..=EXTENSION_WASM_MAX_TYPE_ARITY)
+            .map(|_| "i32")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let too_many_type_params = wat::parse_str(format!(
+            r#"(module (type $large (func (param {params}))) (memory (export "memory") 1 2) (func (export "alloc") (param i32) (result i32) i32.const 0) (func (export "handle") (param i32 i32) (result i64) i64.const 0))"#
+        ))
+        .unwrap();
+        assert!(validate_extension_module(&too_many_type_params)
+            .unwrap_err()
+            .to_string()
+            .contains("type arity"));
     }
 
     #[test]

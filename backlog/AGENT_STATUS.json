@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:31:00Z",
+  "updated_at_utc": "2026-10-22T02:36:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-020-device-paths"
+    "branch": "feature/sw-021-permissioned-extensions"
   },
   "active_pull_request": {
     "number": 46,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
     "state": "OPEN_DRAFT",
-    "head_sha": "2216bd66798f6977f3bd453014dc01ca93b1d59b",
+    "head_sha": "3a12ab7f4a2250acd38b3f9d11699eccc3681438",
     "base": "feature/sw-019-widget-templates",
-    "review_status": "Integrated Core/UI/docs pushed. Independent UI and Core QA passed after P1/P2 fixes. Frontend tests/typecheck/build pass (126 tests). Rust tests blocked before compile by GLib; Windows GNU check blocked by MinGW. No Windows acceptance."
+    "review_status": "SW-020 implementation/QA complete; documentation checkpoint pushed in 3a12ab7. SW-021 contract frozen through d7d33cf; Core/UI implementation active in isolated worktrees. PR #38/#41 review and inline-thread APIs rechecked 2026-10-22 02:33 UTC and remain empty."
   },
   "subagent_limit": 3,
   "agents": [
@@ -300,6 +300,50 @@
       "commit": null,
       "pr": 46,
       "task": "Initial P1/P2 UI findings fixed and re-reviewed; Core Unicode path P2 fixed and re-reviewed with no remaining blocker. Rust tests remain not run due missing GLib; no Windows certification."
+    },
+    {
+      "role": "research",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "state": "COMPLETE",
+      "issue": "SW-021 architecture seam research",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Read-only review confirmed no executable extension registry exists; recommended manifest/grant registry with no code execution, no native loading, default deny and backend validation. See agent report in session."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 contract security review",
+      "branch": "feature/sw-021-permissioned-extensions",
+      "commit": "d7d33cf",
+      "pr": null,
+      "task": "Read-only QA passed typed manifest/grant contract after bounded fields, closed capabilities, schema/fixture, unknown-field rejection and whitespace-only checks were specified; requested Core enforcement/tests."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-021 backend registry",
+      "branch": "feature/sw-021-core",
+      "commit": null,
+      "pr": null,
+      "task": "Implement migration v12, strict manifest validation, default-disabled registry CRUD and explicit grant/enable/remove commands plus Rust regression tests in /workspace/sw021-core."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-021 registry UI",
+      "branch": "feature/sw-021-ui",
+      "commit": null,
+      "pr": null,
+      "task": "Implement accessible manifest registry/grant management UI, typed API wrappers and tests in /workspace/sw021-ui; display that no extension code executes and grants are saved policy only."
     }
   ],
   "milestones": {
@@ -311,7 +355,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:31:00Z",
+    "at_utc": "2026-10-22T02:36:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -365,7 +409,7 @@
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "SW-020 is implemented and independently QA-passed on draft PR #46 (head 2216bd6, stacked after SW-019/#45). Integrated frontend checks pass (126 tests), formatting/handoff pass; Rust test compilation is blocked before app code by missing GLib/GObject development files, Windows GNU cross-check by missing MinGW, and real Windows 11 acceptance is unavailable. Continue SW-021 issue #21 in dependency order on a branch stacked after #46; keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance. PR #38/#41 review/thread APIs were empty at 2026-10-22 02:14 UTC; recheck later.",
+  "next_action": "Complete SW-021 Core and UI in isolated branches from frozen contract d7d33cf; integrate and run cross-platform checks plus independent QA, open a draft PR stacked after #46. PR #38/#41 reviews/threads remain empty as of 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -420,14 +464,6 @@
   ],
   "open_pull_requests": [
     {
-      "number": 38,
-      "issue": "SW-014",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
-      "state": "OPEN",
-      "head_sha": "fb22dff",
-      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
-    },
-    {
       "number": 39,
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/39",
@@ -435,15 +471,6 @@
       "head_sha": "8e797d2",
       "base": "feature/sw-015-usage-retention",
       "note": "Closed as superseded; no code merged."
-    },
-    {
-      "number": 41,
-      "issue": "SW-015",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
-      "state": "OPEN",
-      "head_sha": "c4c8f47",
-      "base": "feature/sw-014-action-sequences",
-      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC; stacked on #38. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
     },
     {
       "number": 42,
@@ -473,13 +500,40 @@
       "note": "Implementation/independent QA complete; tests/Windows limitations and medium root/.lnk race documented."
     },
     {
+      "number": 38,
+      "issue": "SW-014",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+      "state": "OPEN",
+      "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
+      "base": "main",
+      "note": "PR metadata refreshed 2026-10-22 02:33 UTC; no GitHub review submissions or inline review threads; separate read-only QA found no actionable blocker."
+    },
+    {
+      "number": 41,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
+      "state": "OPEN",
+      "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
+      "base": "feature/sw-014-action-sequences",
+      "note": "PR metadata refreshed 2026-10-22 02:33 UTC; no GitHub review submissions or inline review threads; separate read-only QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+    },
+    {
+      "number": 45,
+      "issue": "SW-019",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/45",
+      "state": "OPEN_DRAFT",
+      "head_sha": "9a984e514923e3b21db4c32723b48291aa8dc931",
+      "base": "feature/sw-018-discovery-import",
+      "note": "Implementation and independent QA complete; Rust tests blocked before compile by missing GLib/GObject; no Windows acceptance."
+    },
+    {
       "number": 46,
       "issue": "SW-020",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
       "state": "OPEN_DRAFT",
-      "head_sha": "2216bd6",
+      "head_sha": "3a12ab7f4a2250acd38b3f9d11699eccc3681438",
       "base": "feature/sw-019-widget-templates",
-      "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode-path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by missing GLib; Windows GNU check blocked by MinGW; no real Windows acceptance."
+      "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by GLib; Windows GNU check by MinGW; no real Windows acceptance."
     }
   ],
   "contract_commits": [

@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:31 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:36 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -8,18 +8,23 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`; review and inline-thread APIs returned no submissions at 2026-10-22 02:14 UTC. Independent QA read-only review found no actionable blocker.
-- PR #41 (SW-015) OPEN, stacked on #38; review and inline-thread APIs returned no submissions at 2026-10-22 02:14 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
+- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs returned no submissions at 2026-10-22 02:33 UTC. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs returned no submissions at 2026-10-22 02:33 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
-- PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `2216bd6`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
+- PR #45 (SW-019) OPEN_DRAFT, base PR #44, head `9a984e5`; implementation and independent QA are complete. Rust test compilation remains blocked by missing GLib/GObject; no Windows acceptance.
+- PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `3a12ab7`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## SW-020 implementation — issue #20
 
 SW-020 adds random per-user local device identity, device labels, approved-by-construction path-prefix rules, exact preview/transactional commit/delete and launch-time-only mapping. Mappings are not exported with profiles, and copied portable data uses a different local identity on the destination machine. Drive-letter/UNC paths only; mapping is boundary-safe and Unicode case-insensitive, with most-specific prefix precedence. Only active file/folder target URIs are translated in the explicit launch copy; stored paths, arguments, working directories and history/export identity remain untouched. No scanning/copying/moving/automatic launching occurs. UI review fixed delayed-preview divergence and keyboard focus; Core review fixed Unicode comparisons.
+
+## SW-021 contract and implementation — issue #21
+
+SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33cf`. The registry stores validated manifests and explicit grants only; it does not execute extension code or provide filesystem/process/network/shell capabilities. Extensions default disabled; grants are a subset of unique requested capabilities. The typed API supports manifest list/register, grant updates, explicit enablement and removal. Manifest fields are bounded, unknown fields rejected and serialized input capped at 4 KiB. Independent QA passed the contract after bounds were added. Core and UI implementation are active in isolated worktrees `/workspace/sw021-core` and `/workspace/sw021-ui`; Windows V1 remains blocked.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
 
@@ -58,9 +63,11 @@ SW-020 adds random per-user local device identity, device labels, approved-by-co
 
 No Shell, `.lnk`, mapped-drive, DPI/multi-monitor, portable-package or W-001..W-014 acceptance has run on Windows. V1 / SW-012 remain BLOCKED; there is no tested Windows EXE, V1 Release asset or READY notice. No GitHub Actions were added by this continuation.
 
+SW-021 contract checks: `npm run typecheck` — PASS; `python scripts/verify_handoff.py` — PASS including the new extension manifest schema/fixture (consistency only); `git diff --check` — PASS. Core handler execution tests and Windows checks are pending.
+
 ## Next executable tasks
 
-1. Continue with SW-021 (issue #21, permissioned extension SDK/registry) on a branch stacked after SW-020/#46; freeze a bounded, inert capability contract before implementation.
+1. Integrate and independently QA SW-021 Core/UI work after their commits; open a draft PR stacked after #46 with exact verification and limitations.
 2. Continue tracking PR #38/#41 external review; refresh their review state and run blocked Rust tests on capable hosts.
 3. Continue SW-022..SW-025 in dependency order. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.
 

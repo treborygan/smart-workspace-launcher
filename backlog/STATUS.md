@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 03:04 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 03:06 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -81,3 +81,5 @@ SW-021 UI integration at `4041757`: `npm run typecheck` — PASS; `npm test -- -
 Independent Core QA findings on `b8a48ff`: integration is held pending opaque one-time preview token enforcement, hostile ZIP/output regression coverage, and an exact final 64 KiB invocation cap when truncation is marked. Core is remediating in its isolated worktree.
 
 Integrated SW-021 Core follow-up: `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1`, `python scripts/verify_handoff.py`, `git diff --check` — PASS. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` — BLOCKED before app compilation because `glib-2.0.pc` / `gobject-2.0.pc` >=2.70 are absent and `PKG_CONFIG_PATH` is unset; tests authored but NOT_RUN. Independent contract/Core/UI QA PASS. Release gate remains BLOCKED.
+
+Latest extended SW-021 security review (03:05 UTC) found two additional P2 merge blockers: Wasm structural compilation complexity needs explicit caps beyond file size, and package/module work must not hold the app-wide SQLite mutex. Core is implementing both in its isolated worktree; keep PR #47 draft and do not merge yet.

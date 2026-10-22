@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T03:04:00Z",
+  "updated_at_utc": "2026-10-22T03:06:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -15,7 +15,7 @@
     "state": "OPEN_DRAFT",
     "head_sha": "71eded85511d6995fa67056a2a5bdf565026c7d4",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 runtime Core and UI now integrated at 71eded8. Independent contract, Core (including token/truncation/hostile ZIP/profile/output regression remediations) and UI reviews PASS. Frontend 17 files/137 tests, typecheck/build, Rust fmt, cargo metadata, handoff verify and diff checks PASS. Rust application test is BLOCKED before crate compilation by absent GLib/GObject >=2.70 pkg-config files; tests authored but NOT_RUN. Release gate BLOCKED; V1 BLOCKED. PR #47 remains draft stacked on PR #46."
+    "review_status": "Integrated Core/UI at 71eded8; previous independent contract/Core/UI checks passed, frontend 137 tests/typecheck/build, fmt, cargo metadata and handoff pass. Latest extended security pass found P2s before merge: Wasm module structure lacks complexity caps beyond bytes, and package parse/validation plus guest run hold app-wide DB mutex. Core is remediating these in isolated worktree. App Rust tests are NOT_RUN/BLOCKED at missing GLib/GObject; V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -360,12 +360,12 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "COMPLETE",
+      "state": "ACTIVE",
       "issue": "SW-021 sandbox package and runtime implementation",
       "branch": "feature/sw-021-runtime-core",
       "commit": "95294e4",
       "pr": 47,
-      "task": "Core v13 package preview/install and no-import/no-start bounded Wasmi runtime; opaque one-time tokens; adversarial ZIP, ABI/pointer/fuel/output/profile and count/byte-truncation regressions. Independent Core QA PASS. App Cargo tests blocked before project compile by missing GLib/GObject."
+      "task": "Core implementation integrated and previous review fixes pass; addressing latest extended QA P2s: explicit Wasm structure/function/operator/local/custom-section caps, avoid duplicate compilation, parse package and execute module outside global SQLite mutex. Not merge-ready."
     },
     {
       "role": "ui",
@@ -377,6 +377,17 @@
       "commit": "ef67dfd",
       "pr": 47,
       "task": "Implemented package preview/install/permissions/enable/explicit-run UI; independent UI QA PASS. Targeted 46 tests and full 137 frontend tests/typecheck/build/diff checks pass."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 extended sandbox resource-exhaustion review",
+      "branch": null,
+      "commit": null,
+      "pr": 47,
+      "task": "Extended read-only security pass found P2s: Wasm validation/compilation has no structural complexity caps beyond 2MiB and app-wide DB mutex is held through package validation and guest execution. Core is remediating; do not merge until re-review."
     }
   ],
   "milestones": {
@@ -514,11 +525,15 @@
       {
         "command": "Independent SW-021 UI review",
         "result": "PASS; preview/install token freshness, default-disabled grants, explicit run, profile-scoped inert text output, accessibility and errors reviewed."
+      },
+      {
+        "command": "Independent extended SW-021 security review",
+        "result": "P2 blockers found: add Wasm structural complexity bounds beyond module byte size and do not hold app-wide SQLite mutex during package parsing/validation, compilation, guest execution or output parsing. Core remediation active; not ready to merge."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Seek a supported Linux Rust test environment with GLib/GObject >=2.70 or run app tests on an approved native host; until then SW-021 behavior has static/isolated-harness evidence only and SW-022/SW-023/SW-024 dependent work stays gated. Latest review APIs at 2026-10-22 03:03 UTC: PR #38/#41 have no GitHub reviews or inline threads; independent QA finds no actionable blocker, PR #41 CSV lock-duration risk remains non-blocking. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Finish Core remediation for bounded Wasm structural complexity, one compile per run and SQLite mutex-free package parsing/guest execution; run tests/static checks, then independent QA re-review and integrate. PR #38/#41 review/thread APIs refreshed 03:03 UTC and are empty. Keep PR #47 draft. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -649,9 +664,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "71eded85511d6995fa67056a2a5bdf565026c7d4",
+      "head_sha": "d0bb06dd02338cb519e7cc07151b8120c95f84b8",
       "base": "feature/sw-020-device-paths",
-      "note": "Draft PR updated with integrated runtime. Core/UI and contract QA pass; frontend 137 tests/typecheck/build and Rust fmt/metadata/handoff pass. App Rust tests are NOT_RUN/BLOCKED before compile by missing GLib/GObject. Base PR #46 remains in dependency chain; V1 blocked."
+      "note": "Draft PR body refreshed; integrated runtime is under new extended security remediation. Latest QA P2s: Wasm structural complexity cap and app-wide DB mutex held during package parsing/module run. Core fix in progress. Rust app tests blocked at GLib/GObject; Windows V1 blocked."
     }
   ],
   "contract_commits": [

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DashboardLayout, ResourceRelationship, WorkspaceSnapshot } from "@sw/contracts";
+import type { DashboardLayout, ResourceRelocationPreview, ResourceRelationship, WorkspaceSnapshot } from "@sw/contracts";
 
 const { emitTyped, invokeTyped, listenTyped } = vi.hoisted(() => ({ emitTyped: vi.fn(), invokeTyped: vi.fn(), listenTyped: vi.fn() }));
 vi.mock("@sw/contracts", () => ({ emitTyped, invokeTyped, listenTyped }));
 import { api } from "./api";
+import type { Resource } from "./contracts";
 
 const layout: DashboardLayout = {
   profileId: "profile-work", surface: "dashboard", version: 1,
@@ -329,5 +330,67 @@ describe("profile archive API", () => {
     await expect(api.previewProfileImport("in.swprofile")).rejects.toThrow("Windows desktop app");
     await expect(api.commitProfileImport("in.swprofile", "duplicate", undefined, "sha", "token")).rejects.toThrow("Windows desktop app");
     expect(invokeTyped).not.toHaveBeenCalled();
+  });
+});
+
+describe("duplicate and relocation API", () => {
+  it("duplicates a resource with fresh IDs and no copied usage history", async () => {
+    const source = (await api.resources("p1")).find((resource) => resource.id === "a1")!;
+    const copy = await api.duplicateResource({ profileId: "p1", resourceId: source.id });
+    expect(copy.displayName).toBe(`Copy of ${source.displayName}`);
+    expect(copy.id).not.toBe(source.id);
+    expect(copy.targets).toHaveLength(source.targets.length);
+    expect(copy.targets[0].id).not.toBe(source.targets[0].id);
+    expect(copy.targets[0].canonicalUri).toBe(source.targets[0].canonicalUri);
+    expect(copy.launchCount).toBe(0);
+    expect(copy.lastLaunchedUtc).toBeNull();
+    expect((await api.resources("p1")).some((resource) => resource.id === copy.id)).toBe(true);
+  });
+
+  it("uses native typed commands for duplicate, relocation preview, and preview-bound commit", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    const duplicate = { id: "copy", displayName: "Copy", targets: [], favorite: false, launchCount: 0 } as unknown as Resource;
+    const preview: ResourceRelocationPreview = { profileId: "p1", sourcePrefix: "C:\\Old", destinationPrefix: "D:\\New", previewToken: "bound", changes: [] };
+    const result = { updatedTargetCount: 1, updatedResourceIds: ["r1"] };
+    invokeTyped.mockResolvedValueOnce(duplicate).mockResolvedValueOnce(preview).mockResolvedValueOnce(result);
+    expect(await api.duplicateResource({ profileId: "p1", resourceId: "r1" })).toBe(duplicate);
+    expect(await api.previewResourceRelocation({ profileId: "p1", sourcePrefix: preview.sourcePrefix, destinationPrefix: preview.destinationPrefix })).toBe(preview);
+    expect(await api.commitResourceRelocation(preview)).toBe(result);
+    expect(invokeTyped.mock.calls).toEqual([
+      ["resource_duplicate", { request: { profileId: "p1", resourceId: "r1" } }],
+      ["resource_relocation_preview", { request: { profileId: "p1", sourcePrefix: "C:\\Old", destinationPrefix: "D:\\New" } }],
+      ["resource_relocation_commit", { preview }],
+    ]);
+  });
+
+  it("previews only segment-boundary file and folder targets, then commits after confirmation", async () => {
+    const preview = await api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace", destinationPrefix: "D:\\Archive" });
+    expect(preview.changes.map(({ fromUri, toUri }) => [fromUri, toUri])).toEqual([
+      ["C:\\Workspace\\Design review", "D:\\Archive\\Design review"],
+      ["C:\\Workspace\\Q3 Planning.xlsx", "D:\\Archive\\Q3 Planning.xlsx"],
+    ]);
+    expect((await api.resources("p1")).find((resource) => resource.id === "a1")?.targets[0].canonicalUri).toBe("C:\\Workspace\\Design review");
+    const result = await api.commitResourceRelocation(preview);
+    expect(result).toEqual({ updatedTargetCount: 2, updatedResourceIds: ["a1", "a2"] });
+    expect((await api.resources("p1")).find((resource) => resource.id === "a1")?.targets[0].canonicalUri).toBe("D:\\Archive\\Design review");
+  });
+
+  it("does not match a sibling path that only shares the prefix text", async () => {
+    const items = await api.resources("p1");
+    const template = items.find((resource) => resource.id === "a1")!;
+    const sibling = { ...template, id: "outside-prefix", displayName: "Sibling folder", targets: [{ ...template.targets[0], id: "outside-target", canonicalUri: "C:\\Workspace backup\\file.txt" }] };
+    localStorage.setItem("swl-ui-demo-resources-v1", JSON.stringify([...items, sibling]));
+    const preview = await api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace", destinationPrefix: "D:\\Archive" });
+    expect(preview.changes.some((change) => change.resourceId === sibling.id)).toBe(false);
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace\\..\\private", destinationPrefix: "D:\\Archive" })).rejects.toThrow("cannot contain . or ..");
+  });
+
+  it("rejects changed targets and malformed prefixes without applying a partial relocation", async () => {
+    const preview = await api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace", destinationPrefix: "D:\\Archive" });
+    const resource = (await api.resources("p1")).find((item) => item.id === "a1")!;
+    await api.update(resource.id, { targets: resource.targets.map((target) => ({ ...target, canonicalUri: "C:\\Moved\\Design review" })) });
+    await expect(api.commitResourceRelocation(preview)).rejects.toThrow("Resources changed after the preview");
+    expect((await api.resources("p1")).find((item) => item.id === "a2")?.targets[0].canonicalUri).toBe("C:\\Workspace\\Q3 Planning.xlsx");
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "https://example.com", destinationPrefix: "D:\\Archive" })).rejects.toThrow("not a URL");
   });
 });

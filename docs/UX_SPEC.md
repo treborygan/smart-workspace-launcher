@@ -12,7 +12,7 @@ Independent optional window; screen edge, orientation, monitor, icon size, spaci
 ## Explorer/Inspector
 Sortable/editable table with bulk actions, draggable columns, show/hide/resize/reorder, filters and CSV export. Inspector sections: targets, permissions, metadata, usage events, connections, profile overrides. Distinguish launcher launches from OS last-access values.
 
-Device path settings show the current local device label and approved mapping rules. Creating a rule requires a preview of its exact affected target paths and explicit confirmation; mappings affect launch resolution only and do not rewrite canonical target records. Profile import on a new installation preserves original paths and leaves local mappings for the user to configure.
+Device path settings show the current local device label and approved mapping rules. Creating a rule requires a preview of its exact affected target paths and explicit confirmation; mappings affect launch resolution only and do not rewrite canonical target records. Accept absolute Windows drive-letter and UNC paths only. Profile import on a new installation preserves original paths and leaves local mappings for the user to configure. If a portable data bundle is copied to another computer, its local OS identity differs, leaving copied device mappings inert until new mappings are previewed and approved.
 
 ## Themes/accessibility
 Light/dark/system, custom color variables, density presets, contrast and focus rings, keyboard-only accessible menus, reduced motion, 100–200% DPI. No platform-specific hardcoded file icons requiring privileged install.

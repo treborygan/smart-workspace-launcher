@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T01:30:54Z",
+  "updated_at_utc": "2026-10-22T01:50:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-017-duplicate-relocation"
+    "branch": "feature/sw-018-discovery-import"
   },
   "active_pull_request": {
-    "number": 42,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
+    "number": 43,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/43",
     "state": "OPEN_DRAFT",
-    "head_sha": "c7630fc",
-    "base": "feature/sw-015-usage-retention",
-    "review_status": "SW-016 independent QA passed on implementation; awaiting external review; Rust tests blocked by missing GLib. PR #38/#41 dependency reviews remain pending."
+    "head_sha": "a2fad7ab5a8581d8d5b0e7019699c0c3b5e7fdb4",
+    "base": "feature/sw-016-resource-graph",
+    "review_status": "SW-017 independent QA passed; awaiting external review. SW-016 migration test correction is included."
   },
   "subagent_limit": 3,
   "agents": [
@@ -140,7 +140,7 @@
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-017 backend",
       "branch": "feature/sw-017-duplicate-relocation",
       "commit": null,
@@ -151,7 +151,7 @@
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-017 UI",
       "branch": "feature/sw-017-duplicate-relocation",
       "commit": null,
@@ -162,12 +162,78 @@
       "role": "qa",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-017 independent QA",
       "branch": "feature/sw-017-duplicate-relocation",
       "commit": null,
       "pr": null,
       "task": "Independently review SW-017 profile scope, path matching, preview staleness, rollback, and no filesystem side effects."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-017 backend",
+      "branch": "feature/sw-017-duplicate-relocation",
+      "commit": "9fb3f4b",
+      "pr": 43,
+      "task": "Profile-local duplication and preview-bound transactional relocation; relocation refreshes affected resource timestamps atomically."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-017 frontend",
+      "branch": "feature/sw-017-duplicate-relocation",
+      "commit": "72690bb",
+      "pr": 43,
+      "task": "Typed duplicate/relocation preview and confirm UI; overlap validation, bounded inputs and stale token cleanup; 107 tests."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-017 independent QA",
+      "branch": null,
+      "commit": null,
+      "pr": 43,
+      "task": "Reviewed profile scope, IDs, path boundaries, overlap checks, stale preview, rollback, timestamps and no filesystem side effects; passed."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-018 backend",
+      "branch": "feature/sw-018-discovery-import",
+      "commit": null,
+      "pr": null,
+      "task": "Implementing depth/count/byte-bounded discovery and stale-preview transactional import; fixing audit findings around unbounded directory collection and file growth."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-018 frontend",
+      "branch": "feature/sw-018-discovery-import",
+      "commit": "1172761",
+      "pr": null,
+      "task": "Implemented accessible scan/preview/selection/commit UI with duplicate policy and pending-commit locking; full frontend suite passed."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-018 independent QA",
+      "branch": "feature/sw-018-discovery-import",
+      "commit": null,
+      "pr": null,
+      "task": "UI passes independent review. Reviewing corrected backend scanner for memory bounds, reparse/TOCTOU safety, URL allowlist, stale preview, atomicity and no auto-execution."
     }
   ],
   "milestones": {
@@ -179,29 +245,37 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T01:30:54Z",
+    "at_utc": "2026-10-22T01:49:51Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64 host; Windows GNU target installed but MinGW compiler absent; GLib >=2.70 development files absent.",
     "results": [
       {
-        "command": "npm run typecheck",
-        "result": "PASS on frozen SW-017 contract commit bff3cdd."
+        "command": "npm run typecheck && npm test -- --run",
+        "result": "PASS on SW-018 UI commits 85418f3 and 1172761: 14 files / 115 tests."
       },
       {
-        "command": "git diff --check",
-        "result": "PASS on SW-017 contract commit."
+        "command": "npm run frontend:build",
+        "result": "PASS on SW-018 UI; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS at SW-016 checkpoint; no compiled app/runtime/Windows tests."
+        "result": "PASS: handoff file presence, 25 issue catalog, models, schemas, fixtures; does not execute application/runtime tests."
       },
       {
-        "command": "SW-016 verification",
-        "result": "PASS frontend typecheck, 13 files/97 tests, build, cargo fmt, diff check and handoff verifier; independent QA pass. Rust tests blocked by missing GLib; Windows target check blocked by missing MinGW."
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
+        "result": "INTERIM FAIL while Core was editing Windows .lnk code; two formatting differences. Rerun after Core stabilizes."
+      },
+      {
+        "command": "Rust SW-018 tests",
+        "result": "NOT_YET_RUN on stable code. Cargo compilation remains blocked in this environment by missing GLib/GObject >=2.70 development files."
+      },
+      {
+        "command": "Windows acceptance / packaging",
+        "result": "NOT_RUN; real Windows 11 x64 and PowerShell unavailable. V1 remains BLOCKED."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Implement SW-017 on feature/sw-017-duplicate-relocation from frozen contract bff3cdd. Core/UI/QA are active on disjoint paths. SW-016 draft PR #42 remains open; SW-014 #38 and SW-015 #41 remain OPEN with no reviews/inline threads on 2026-10-22; PR #39 was closed as superseded. V1 remains BLOCKED without real Windows 11 x64 acceptance.",
+  "next_action": "Complete SW-018 Core bounded scanner and preview-bound transaction on feature/sw-018-discovery-import; have QA review the stable backend; run feasible checks; push/open a draft PR atop SW-017. UI is complete at 1172761. PR #38 and #41 remain open without reviews/inline threads (checked 2026-10-22); #42/#43 are stacked drafts. V1 remains BLOCKED without actual Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -261,7 +335,7 @@
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
       "head_sha": "fb22dff",
-      "note": "SW-014 implementation; GitHub review check 2026-10-22 found no submitted reviews or inline threads."
+      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22."
     },
     {
       "number": 39,
@@ -270,7 +344,7 @@
       "state": "CLOSED_SUPERSEDED",
       "head_sha": "8e797d2",
       "base": "feature/sw-015-usage-retention",
-      "note": "Closed 2026-10-22 as superseded by integrated PR #41; no code was merged."
+      "note": "Closed as superseded; no code merged."
     },
     {
       "number": 41,
@@ -279,16 +353,25 @@
       "state": "OPEN",
       "head_sha": "c4c8f47",
       "base": "feature/sw-014-action-sequences",
-      "note": "Integrated SW-015 implementation; GitHub review check 2026-10-22 found no submitted reviews or inline threads; stacked on #38."
+      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22; stacked on #38."
     },
     {
       "number": 42,
       "issue": "SW-016",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
       "state": "OPEN_DRAFT",
-      "head_sha": "c7630fc",
+      "head_sha": "d90204f",
       "base": "feature/sw-015-usage-retention",
-      "note": "Independent QA passed; draft because native Rust backend tests are blocked by missing GLib >=2.70. Stacked on #41/#38."
+      "note": "SW-016 independent QA passed; migration test corrected for schema v10 in d90204f; draft; backend tests blocked by missing GLib."
+    },
+    {
+      "number": 43,
+      "issue": "SW-017",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/43",
+      "state": "OPEN_DRAFT",
+      "head_sha": "a2fad7a",
+      "base": "feature/sw-016-resource-graph",
+      "note": "Independent QA passed on implementation head 72690bb. Current branch also carries SW-018 contract doc commit a2fad7a; SW-018 implementation is stacked on this branch. Native Rust tests blocked by GLib; V1 remains blocked."
     }
   ]
 }

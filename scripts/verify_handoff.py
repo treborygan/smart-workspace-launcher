@@ -12,8 +12,8 @@ required=[
 "backlog/ROADMAP.md","backlog/STATUS.md","backlog/AGENT_STATUS.json",
 "backlog/issues.json","releases/v1/readiness.json"]
 required += [".codex/agents/"+r+".toml" for r in ["core","ui","qa","research","release"]]
-required += ["contracts/"+f+".schema.json" for f in ["manifest","profile","resources","layouts","extension_manifest"]]
-required += ["fixtures/valid/"+f+".json" for f in ["manifest","profile","resources","layouts","extension_manifest"]]
+required += ["contracts/"+f+".schema.json" for f in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]]
+required += ["fixtures/valid/"+f+".json" for f in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]]
 required += ["fixtures/valid/example.swprofile","fixtures/invalid/bad_archive.zip"]
 missing=[p for p in required if not (root/p).is_file()]
 if missing:
@@ -31,7 +31,7 @@ try:
  from jsonschema import Draft202012Validator,FormatChecker
 except ImportError:
  print("FAIL: pip install -r requirements-handoff.txt");sys.exit(1)
-for name in ["manifest","profile","resources","layouts","extension_manifest"]:
+for name in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]:
  schema=j("contracts/"+name+".schema.json")
  validator=Draft202012Validator(schema,format_checker=FormatChecker())
  obj=j("fixtures/valid/"+name+".json")

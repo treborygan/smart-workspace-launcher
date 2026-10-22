@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:41:00Z",
+  "updated_at_utc": "2026-10-22T02:48:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "7614a31ece437bb40c91d05a62259411ba437389",
+    "head_sha": "2ca5ea46b4f7d96385a67b5c67281597aaac33d2",
     "base": "feature/sw-020-device-paths",
-    "review_status": "Registry/policy foundation only; no extension code runtime/effective grants. Contract, Core, UI independent reviews pass after fixture correction. Frontend 132 tests/typecheck/build, Rust fmt, handoff and diff checks pass. Rust tests blocked before project compile by missing GLib/GObject. Issue remains in progress. GitHub reports stacked PR not mergeable pending base chain; no merge. V1 blocked."
+    "review_status": "Runtime contract frozen and independently QA-approved in commit 2ca5ea4 (invocation schema enforces capability/data pairing; result controls rejected; deterministic 64 KiB metadata truncation, no imports, no start section, fuel/memory/stack/recursion limits). Runtime implementation is in progress on isolated Core/UI worktrees; PR #47 remains an incomplete draft. Handoff verification passes. Core Rust compile/testing is blocked by missing GLib/GObject; Windows unavailable. V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -344,6 +344,39 @@
       "commit": "fa89c60",
       "pr": null,
       "task": "Added typed APIs, accessible extension registry UI, metadata manifest registration, explicit grants/enabled state, confirmed removal and explicit inert-grant/no-runtime disclosure. Six focused and integrated UI tests pass."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 sandbox runtime contract review",
+      "branch": null,
+      "commit": null,
+      "pr": 47,
+      "task": "Independent review of invocation capability/data pairing, output control rules, deterministic 64 KiB budget, no imports/start, and resource bounds; PASS."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-021 sandbox package and runtime implementation",
+      "branch": "feature/sw-021-runtime-core",
+      "commit": null,
+      "pr": 47,
+      "task": "Implement bounded .swext preview/install, module storage, permissioned explicit Wasm run, safe ABI validation and Core tests in isolated worktree /workspace/sw021-runtime-core."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-021 package/runtime UI",
+      "branch": "feature/sw-021-runtime-ui",
+      "commit": null,
+      "pr": 47,
+      "task": "Implement typed package preview/install, grant/enable and explicit run/suggestion UX in isolated worktree /workspace/sw021-runtime-ui."
     }
   ],
   "milestones": {
@@ -355,7 +388,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:40:00Z",
+    "at_utc": "2026-10-22T02:47:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -409,11 +442,19 @@
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_registry --lib",
         "result": "BLOCKED before application compilation: glib-2.0.pc / GLib >=2.70 development files missing (exit 101); authored Rust tests NOT_RUN."
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS on frozen SW-021 runtime contract commit 2ca5ea4; validates JSON schemas and valid fixtures but is not runtime proof."
+      },
+      {
+        "command": "git diff --check",
+        "result": "PASS on frozen SW-021 runtime contract commit 2ca5ea4."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Continue SW-021 beyond the registry foundation by implementing a separately reviewed sandbox runtime and permission-enforced host API; issue #21 is not complete while code does not execute and grants have no effect. PR #47 is open draft stacked on SW-020/#46 and must not merge out of dependency order. PR #38/#41 reviews and inline threads remain empty as of 2026-10-22 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
+  "next_action": "Implement and independently review the SW-021 package preview/install and explicit Wasm run path in /workspace/sw021-runtime-core and corresponding UI in /workspace/sw021-runtime-ui, then integrate, test and update draft PR #47. Latest review APIs at 2026-10-22 02:47 UTC: PR #38 and #41 have no reviews or inline threads. Continue in dependency order; keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -510,7 +551,7 @@
       "state": "OPEN",
       "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
       "base": "main",
-      "note": "PR metadata refreshed 2026-10-22 02:33 UTC; no GitHub review submissions or inline review threads; separate read-only QA found no actionable blocker."
+      "note": "PR metadata as last refreshed 2026-10-22 02:47 UTC; no GitHub review submissions or inline review threads; independent QA found no actionable blocker."
     },
     {
       "number": 41,
@@ -519,7 +560,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
       "base": "feature/sw-014-action-sequences",
-      "note": "PR metadata refreshed 2026-10-22 02:33 UTC; no GitHub review submissions or inline review threads; separate read-only QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+      "note": "PR metadata as last refreshed 2026-10-22 02:47 UTC; no GitHub review submissions or inline review threads; independent QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
     },
     {
       "number": 45,
@@ -559,6 +600,11 @@
       "issue": "SW-020",
       "sha": "9b905cd8998ed81c92ad684e9cc1e3ef9103d86a",
       "scope": "Clarified local identity outside portable bundle and supported Windows drive/UNC forms."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "2ca5ea46b4f7d96385a67b5c67281597aaac33d2",
+      "scope": "Frozen Wasm package/runtime ABI, input/output schemas, capability-to-data validation, deterministic 64 KiB metadata bounds, no-import/no-start policy and stack/recursion/fuel/memory limits; independent contract QA PASS."
     }
   ]
 }

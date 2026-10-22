@@ -1,38 +1,23 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-22 02:40 UTC
+## Checkpoint — 2026-10-22 02:48 UTC
 
-Repository: `treborygan/smart-workspace-launcher`. Canonical state: `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. Coordinator worktree `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, integrated code head `6073856ad3f150f61970d8f11fb1a9967ba2cf2c` (includes local status checkpoint commit to follow). SW-021 implementation branches are based on frozen contract `d7d33cf`; Core commit `01d16f7`, UI commit `fa89c60`, both independently reviewed. Current host is Debian 13 x86_64, not Windows.
+Repository `treborygan/smart-workspace-launcher`, coordinator `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, current commit `2ca5ea46b4f7d96385a67b5c67281597aaac33d2`. Canonical live progress is in `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. Host is Debian 13 x86_64; no real Windows 11 x64 or PowerShell verification is available. V1/SW-012 remains BLOCKED.
 
-## SW-021 current scope and next work
+## Active SW-021 work
 
-Issue #21 is NOT COMPLETE. The current implementation is the validated manifest registry and stored-grant policy foundation only. It adds migration v12; Rust typed list/register/grant/enable/remove commands with strict ID/name/version/capability/unknown-field/4 KiB validation; and an accessible UI for manual metadata registration, requested/granted capabilities, explicit enablement, and confirmed removal. The UI clearly says the app does not load or execute third-party code and saved grants have no runtime effect. Independent QA passed contract, Core (after fixing invalid hyphenated test ID), and UI.
+SW-021 issue #21 and draft PR #47 are incomplete. The earlier integrated code is registry/policy only (schema v12) and must not be represented as a working runtime. A separately reviewed sandbox contract was frozen and pushed in `2ca5ea4`; contract QA passed. It defines `.swext` package bounds and exact entries; content-hash-bound preview/install; duplicate ID removal policy; Wasm ABI, no imports/no start section, explicit run only, fuel/memory/recursion/stack/input/output bounds; typed capability/data pairing; bounded profile metadata and suggestions; and output restrictions. Detailed contract: `docs/EXTENSION_SDK.md`, `contracts/extension_invocation.schema.json`, `contracts/extension_result.schema.json`.
 
-Next executable work must implement a separately reviewed sandbox runtime and permission-enforced host API before SW-021 can be declared done or dependent SW-022 can start. Maintain no arbitrary native code/script, filesystem, process, network, launch, shell, or secret access. Freeze an exact module/package ABI, resource/fuel bounds, no-WASI policy, permission data surface and output validation before delegating Core work. Current `wasmi` 2.0.0 was checked against crates.io and declares Rust 1.86 minimum; no dependency has been added yet. No external module has been run.
+Core implementation is active in `/workspace/sw021-runtime-core` on `feature/sw-021-runtime-core`; it owns only `apps/desktop/src-tauri/**`. UI implementation is active in `/workspace/sw021-runtime-ui` on `feature/sw-021-runtime-ui`; it owns only `apps/desktop/src/**` and tests. Do not modify shared contracts, package manifests, status files, or integration branch from those agents. Root owns integration and canonical state. After agents finish: inspect both diffs, independent QA, cherry-pick in dependency order, run frontend checks, Rust formatting, focused tests if possible, handoff/release checks, update PR #47 and status. Rust application compilation currently cannot run here because GLib/GObject development files are absent; do not claim Rust tests passed if not executed.
 
-## Integrated checks and blockers
+Latest `python scripts/verify_handoff.py` and `git diff --check` passed on contract commit. Current UI typecheck is expected to fail until UI/Core catch up: old `extension_registry_register` command and an old test fixture omitting `moduleSha256` remain.
 
-On integrated SW-021 code head `6073856`:
+## Review and release tracking
 
-- `npm run typecheck` — PASS.
-- `npm test -- --run` — PASS, 17 files / 132 tests.
-- `npm run frontend:build` — PASS with existing nonfatal Vite `INEFFECTIVE_DYNAMIC_IMPORT` warning.
-- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
-- `git diff --check` — PASS.
-- `python scripts/verify_handoff.py` — PASS schema/fixture consistency only; no compiled-app evidence.
-- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_registry --lib` — BLOCKED before project compile because `glib-2.0.pc` / GLib >=2.70 dev files are absent (exit 101); Rust regressions authored but NOT_RUN.
-- `python scripts/check_release_gate.py` — BLOCKED, `NOT READY: BLOCKED` (exit 2).
+At 2026-10-22 02:47 UTC, GitHub review and inline-thread APIs returned empty for both PR #38 (SW-014) and #41 (SW-015). Independent read-only QA previously found no actionable blocker; #41 has a non-blocking shared database lock duration concern during large CSV export. Do not merge stacked changes out of dependency order.
 
-No Windows 11 x64, PowerShell, MinGW, Windows Shell, packaging, or W-001..W-014 acceptance is available. V1/SW-012 remains BLOCKED. Do not claim a working EXE, release, or READY notice. No GitHub Actions.
-
-## PR review tracking and feature chain
-
-At 2026-10-22 02:33 UTC, review and inline-thread APIs were empty for PR #38 (SW-014, head `fb22dff5201418f53d0c8dfa9c1f5a463d0a365c`) and PR #41 (SW-015, head `c4c8f4726677855ed7074f95f4e0853aa3488494`). Static QA found no blocker; PR #41 has a non-blocking shared DB lock duration concern for large CSV exports. Do not merge stacked changes ahead of review/dependencies.
-
-PR #46 (SW-020) is open draft at `3a12ab7f4a2250acd38b3f9d11699eccc3681438`, based on PR #45. SW-020 implementation/QA complete; Rust tests blocked by GLib and Windows GNU check by MinGW. Draft PR #47 is open at `7614a31ece437bb40c91d05a62259411ba437389`, stacked on `feature/sw-020-device-paths` / PR #46. GitHub currently reports #47 not mergeable because its base chain is unmerged; do not merge out of dependency order. No PR should close issue #21 while sandbox execution is absent.
+PR #47 stays draft and stacked on PR #46/SW-020; issue #21 stays open until the sandbox runtime and permission behavior are implemented and verified. No Windows runner, PowerShell, MinGW, WebView2/packaging, or Windows acceptance is available. Never claim a working EXE or V1 release. No GitHub Actions.
 
 ## Continue
 
-1. Commit/push canonical status and resume checkpoint after recording PR #47.
-2. Freeze the sandbox runtime contract, then implement and test that SW-021 continuation. Keep issue open until the extension call path and permissions are real and tested.
-3. Continue SW-022..SW-025 in dependency order only after their prerequisites; keep Windows V1 gate blocked pending real acceptance.
+Implement and QA the SW-021 sandbox runtime, integrate Core and UI, update PR/status/checkpoints, then continue later backlog tasks in dependency order. Windows V1 remains BLOCKED until real Windows 11 x64 acceptance.

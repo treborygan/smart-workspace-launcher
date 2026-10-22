@@ -1,0 +1,4 @@
+{
+  "sdkVersion": "1.0.0",
+  "grantedCapabilities": ["resource_metadata.read"]
+}

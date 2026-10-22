@@ -1,0 +1,5 @@
+{
+  "suggestions": [
+    { "title": "Bad\ntext", "reason": "control character", "resourceIds": [] }
+  ]
+}

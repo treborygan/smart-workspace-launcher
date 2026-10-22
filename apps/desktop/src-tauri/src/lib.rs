@@ -216,6 +216,52 @@ pub struct DevicePathMappingPreview {
     pub changes: Vec<DevicePathMappingChange>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub enum ExtensionCapability {
+    #[serde(rename = "resource_metadata.read")]
+    ResourceMetadataRead,
+    #[serde(rename = "workspace_summary.read")]
+    WorkspaceSummaryRead,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionManifest {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub sdk_version: String,
+    pub description: String,
+    pub requested_capabilities: Vec<ExtensionCapability>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisteredExtension {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub sdk_version: String,
+    pub description: String,
+    pub requested_capabilities: Vec<ExtensionCapability>,
+    pub granted_capabilities: Vec<ExtensionCapability>,
+    pub enabled: bool,
+    pub installed_utc: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExtensionPermissionUpdate {
+    pub extension_id: String,
+    pub manifest_version: String,
+    pub granted_capabilities: Vec<ExtensionCapability>,
+}
+
+const EXTENSION_SDK_VERSION: &str = "1.0.0";
+const EXTENSION_MANIFEST_MAX_BYTES: usize = 4096;
+const EXTENSION_ID_MAX_BYTES: usize = 255;
+const EXTENSION_CAPABILITY_MAX_ITEMS: usize = 2;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceImportSource {
@@ -3693,6 +3739,8 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
         )?;
     }
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (11,'sw020-device-path-mappings-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS extension_registry (id TEXT PRIMARY KEY, name TEXT NOT NULL, version TEXT NOT NULL, sdk_version TEXT NOT NULL, description TEXT NOT NULL, requested_capabilities_json TEXT NOT NULL, granted_capabilities_json TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)), installed_utc TEXT NOT NULL);")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (12,'sw021-extension-registry-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -6026,6 +6074,298 @@ fn device_path_mapping_delete(state: State<'_, AppState>, id: String) -> Result<
     } else {
         Err(AppError::NotFound)
     }
+}
+
+fn validate_extension_id(value: &str) -> Result<(), AppError> {
+    if value.len() < 5 || value.len() > EXTENSION_ID_MAX_BYTES || !value.is_ascii() {
+        return Err(AppError::Invalid(
+            "extension id must be a lowercase reverse-DNS identifier up to 255 ASCII characters"
+                .into(),
+        ));
+    }
+    let labels = value.split('.').collect::<Vec<_>>();
+    if labels.len() < 3
+        || labels.iter().any(|label| {
+            label.is_empty()
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+        || !labels[0].as_bytes()[0].is_ascii_lowercase()
+    {
+        return Err(AppError::Invalid(
+            "extension id must use lowercase reverse-DNS labels".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extension_version(value: &str) -> Result<(), AppError> {
+    let components = value.split('.').collect::<Vec<_>>();
+    if components.len() != 3
+        || components.iter().any(|component| {
+            component.is_empty()
+                || component.len() > 9
+                || !component.bytes().all(|byte| byte.is_ascii_digit())
+                || (component.len() > 1 && component.starts_with('0'))
+        })
+    {
+        return Err(AppError::Invalid(
+            "extension version must be numeric MAJOR.MINOR.PATCH with components up to 9 digits"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_extension_manifest(
+    mut manifest: ExtensionManifest,
+) -> Result<ExtensionManifest, AppError> {
+    let serialized = serde_json::to_vec(&manifest)?;
+    if serialized.len() > EXTENSION_MANIFEST_MAX_BYTES {
+        return Err(AppError::Invalid(
+            "extension manifest exceeds the 4 KiB limit".into(),
+        ));
+    }
+    validate_extension_id(&manifest.id)?;
+    validate_extension_version(&manifest.version)?;
+    if manifest.sdk_version != EXTENSION_SDK_VERSION {
+        return Err(AppError::Invalid(format!(
+            "extension SDK version must be {EXTENSION_SDK_VERSION}"
+        )));
+    }
+    manifest.name = manifest.name.trim().to_string();
+    manifest.description = manifest.description.trim().to_string();
+    for (field, value, maximum) in [
+        ("name", manifest.name.as_str(), 80),
+        ("description", manifest.description.as_str(), 240),
+    ] {
+        let length = value.chars().count();
+        if length == 0 || length > maximum || value.chars().any(char::is_control) {
+            return Err(AppError::Invalid(format!(
+                "extension {field} must contain 1 to {maximum} printable characters"
+            )));
+        }
+    }
+    if manifest.requested_capabilities.len() > EXTENSION_CAPABILITY_MAX_ITEMS {
+        return Err(AppError::Invalid(
+            "extension requests too many capabilities".into(),
+        ));
+    }
+    let unique = manifest
+        .requested_capabilities
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != manifest.requested_capabilities.len() {
+        return Err(AppError::Invalid(
+            "extension capabilities must not contain duplicates".into(),
+        ));
+    }
+    Ok(manifest)
+}
+
+fn extension_registry_list_on_conn(
+    conn: &Connection,
+) -> Result<Vec<RegisteredExtension>, AppError> {
+    let mut statement = conn.prepare("SELECT id,name,version,sdk_version,description,requested_capabilities_json,granted_capabilities_json,enabled,installed_utc FROM extension_registry ORDER BY name COLLATE NOCASE,id")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, bool>(7)?,
+            row.get::<_, String>(8)?,
+        ))
+    })?;
+    let mut extensions = Vec::new();
+    for row in rows {
+        let (
+            id,
+            name,
+            version,
+            sdk_version,
+            description,
+            requested,
+            granted,
+            enabled,
+            installed_utc,
+        ) = row?;
+        extensions.push(RegisteredExtension {
+            id,
+            name,
+            version,
+            sdk_version,
+            description,
+            requested_capabilities: serde_json::from_str(&requested)?,
+            granted_capabilities: serde_json::from_str(&granted)?,
+            enabled,
+            installed_utc,
+        });
+    }
+    Ok(extensions)
+}
+
+fn extension_registry_register_on_conn(
+    conn: &Connection,
+    manifest: ExtensionManifest,
+) -> Result<RegisteredExtension, AppError> {
+    let manifest = validate_extension_manifest(manifest)?;
+    let already_registered: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM extension_registry WHERE id=?1)",
+        [&manifest.id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if already_registered {
+        return Err(AppError::Invalid("extension is already registered".into()));
+    }
+    let timestamp = now_utc();
+    conn.execute(
+        "INSERT INTO extension_registry(id,name,version,sdk_version,description,requested_capabilities_json,granted_capabilities_json,enabled,installed_utc) VALUES (?1,?2,?3,?4,?5,?6,'[]',0,?7)",
+        params![
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.sdk_version,
+            manifest.description,
+            serde_json::to_string(&manifest.requested_capabilities)?,
+            timestamp,
+        ],
+    )?;
+    extension_registry_list_on_conn(conn)?
+        .into_iter()
+        .find(|extension| extension.id == manifest.id)
+        .ok_or(AppError::NotFound)
+}
+
+fn extension_registry_permissions_set_on_conn(
+    conn: &Connection,
+    update: ExtensionPermissionUpdate,
+) -> Result<RegisteredExtension, AppError> {
+    validate_extension_id(&update.extension_id)?;
+    if update.granted_capabilities.len() > EXTENSION_CAPABILITY_MAX_ITEMS {
+        return Err(AppError::Invalid("too many extension grants".into()));
+    }
+    let extension = extension_registry_list_on_conn(conn)?
+        .into_iter()
+        .find(|extension| extension.id == update.extension_id)
+        .ok_or(AppError::NotFound)?;
+    if update.manifest_version != extension.version {
+        return Err(AppError::Invalid(
+            "extension manifest changed; reload it before updating permissions".into(),
+        ));
+    }
+    let unique = update
+        .granted_capabilities
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != update.granted_capabilities.len() {
+        return Err(AppError::Invalid(
+            "extension grants must not contain duplicates".into(),
+        ));
+    }
+    if update
+        .granted_capabilities
+        .iter()
+        .any(|capability| !extension.requested_capabilities.contains(capability))
+    {
+        return Err(AppError::Invalid(
+            "an extension can only receive capabilities it requested".into(),
+        ));
+    }
+    let serialized_grants = serde_json::to_string(&update.granted_capabilities)?;
+    let changed = conn.execute(
+        "UPDATE extension_registry SET granted_capabilities_json=?2 WHERE id=?1 AND version=?3",
+        params![
+            update.extension_id,
+            serialized_grants,
+            update.manifest_version
+        ],
+    )?;
+    if changed != 1 {
+        return Err(AppError::Invalid(
+            "extension manifest changed; reload it before updating permissions".into(),
+        ));
+    }
+    extension_registry_list_on_conn(conn)?
+        .into_iter()
+        .find(|extension| extension.id == update.extension_id)
+        .ok_or(AppError::NotFound)
+}
+
+fn extension_registry_enabled_set_on_conn(
+    conn: &Connection,
+    extension_id: &str,
+    enabled: bool,
+) -> Result<RegisteredExtension, AppError> {
+    validate_extension_id(extension_id)?;
+    let changed = conn.execute(
+        "UPDATE extension_registry SET enabled=?2 WHERE id=?1",
+        params![extension_id, enabled],
+    )?;
+    if changed != 1 {
+        return Err(AppError::NotFound);
+    }
+    extension_registry_list_on_conn(conn)?
+        .into_iter()
+        .find(|extension| extension.id == extension_id)
+        .ok_or(AppError::NotFound)
+}
+
+fn extension_registry_remove_on_conn(
+    conn: &Connection,
+    extension_id: &str,
+) -> Result<(), AppError> {
+    validate_extension_id(extension_id)?;
+    let removed = conn.execute("DELETE FROM extension_registry WHERE id=?1", [extension_id])?;
+    if removed == 1 {
+        Ok(())
+    } else {
+        Err(AppError::NotFound)
+    }
+}
+
+#[tauri::command]
+fn extension_registry_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<RegisteredExtension>, AppError> {
+    extension_registry_list_on_conn(&lock(&state)?)
+}
+
+#[tauri::command]
+fn extension_registry_register(
+    state: State<'_, AppState>,
+    manifest: ExtensionManifest,
+) -> Result<RegisteredExtension, AppError> {
+    extension_registry_register_on_conn(&lock(&state)?, manifest)
+}
+
+#[tauri::command]
+fn extension_registry_permissions_set(
+    state: State<'_, AppState>,
+    update: ExtensionPermissionUpdate,
+) -> Result<RegisteredExtension, AppError> {
+    extension_registry_permissions_set_on_conn(&lock(&state)?, update)
+}
+
+#[tauri::command]
+fn extension_registry_enabled_set(
+    state: State<'_, AppState>,
+    extension_id: String,
+    enabled: bool,
+) -> Result<RegisteredExtension, AppError> {
+    extension_registry_enabled_set_on_conn(&lock(&state)?, &extension_id, enabled)
+}
+
+#[tauri::command]
+fn extension_registry_remove(
+    state: State<'_, AppState>,
+    extension_id: String,
+) -> Result<(), AppError> {
+    extension_registry_remove_on_conn(&lock(&state)?, &extension_id)
 }
 
 #[tauri::command]
@@ -9297,6 +9637,11 @@ pub fn run() {
             device_path_mapping_preview,
             device_path_mapping_commit,
             device_path_mapping_delete,
+            extension_registry_list,
+            extension_registry_register,
+            extension_registry_permissions_set,
+            extension_registry_enabled_set,
+            extension_registry_remove,
             resource_import_scan,
             resource_import_commit,
             resource_delete,
@@ -13362,7 +13707,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -13374,6 +13719,13 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(shortcuts_exist, 1);
+        let extension_registry_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='extension_registry'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(extension_registry_exists, 1);
+        assert!(extension_registry_list_on_conn(&conn).unwrap().is_empty());
         let relationship_table: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='resource_relationships'",
             [],
@@ -13419,6 +13771,166 @@ mod tests {
             .unwrap();
         assert_eq!(device_tables, 3);
         assert!(Uuid::parse_str(&local_device_from_conn(&conn).unwrap().id).is_ok());
+    }
+
+    fn extension_manifest_fixture() -> ExtensionManifest {
+        ExtensionManifest {
+            id: "com.example.focus-summary".into(),
+            name: "Focus summary".into(),
+            version: "1.0.0".into(),
+            sdk_version: EXTENSION_SDK_VERSION.into(),
+            description: "Summarizes the current workspace.".into(),
+            requested_capabilities: vec![ExtensionCapability::WorkspaceSummaryRead],
+        }
+    }
+
+    #[test]
+    fn extension_manifest_validation_enforces_identifiers_fields_and_capability_bounds() {
+        let valid = validate_extension_manifest(extension_manifest_fixture()).unwrap();
+        assert_eq!(valid.id, "com.example.focus-summary");
+
+        for id in [
+            "Com.example.plugin",
+            "com.example",
+            "com..plugin",
+            "com.exämple.plugin",
+        ] {
+            let mut manifest = extension_manifest_fixture();
+            manifest.id = id.into();
+            assert!(
+                validate_extension_manifest(manifest).is_err(),
+                "accepted id {id}"
+            );
+        }
+        for version in ["01.0.0", "1.0", "1.0.0-alpha", "1234567890.0.0"] {
+            let mut manifest = extension_manifest_fixture();
+            manifest.version = version.into();
+            assert!(
+                validate_extension_manifest(manifest).is_err(),
+                "accepted version {version}"
+            );
+        }
+        let mut wrong_sdk = extension_manifest_fixture();
+        wrong_sdk.sdk_version = "2.0.0".into();
+        assert!(validate_extension_manifest(wrong_sdk).is_err());
+
+        let mut blank_name = extension_manifest_fixture();
+        blank_name.name = " \t ".into();
+        assert!(validate_extension_manifest(blank_name).is_err());
+        let mut control_description = extension_manifest_fixture();
+        control_description.description = "line\nbreak".into();
+        assert!(validate_extension_manifest(control_description).is_err());
+
+        let mut duplicate_capability = extension_manifest_fixture();
+        duplicate_capability.requested_capabilities = vec![
+            ExtensionCapability::WorkspaceSummaryRead,
+            ExtensionCapability::WorkspaceSummaryRead,
+        ];
+        assert!(validate_extension_manifest(duplicate_capability).is_err());
+        let mut too_many_capabilities = extension_manifest_fixture();
+        too_many_capabilities.requested_capabilities = vec![
+            ExtensionCapability::WorkspaceSummaryRead,
+            ExtensionCapability::ResourceMetadataRead,
+            ExtensionCapability::ResourceMetadataRead,
+        ];
+        assert!(validate_extension_manifest(too_many_capabilities).is_err());
+        let mut oversized = extension_manifest_fixture();
+        oversized.description = "x".repeat(5000);
+        assert!(validate_extension_manifest(oversized).is_err());
+    }
+
+    #[test]
+    fn extension_manifest_deserialization_rejects_unknown_fields_and_capabilities() {
+        let unknown_field = serde_json::json!({
+            "id": "com.example.plugin",
+            "name": "Example",
+            "version": "1.0.0",
+            "sdkVersion": "1.0.0",
+            "description": "Example manifest",
+            "requestedCapabilities": [],
+            "executablePath": "C:/untrusted.exe"
+        });
+        assert!(serde_json::from_value::<ExtensionManifest>(unknown_field).is_err());
+        let unknown_capability = serde_json::json!({
+            "id": "com.example.plugin",
+            "name": "Example",
+            "version": "1.0.0",
+            "sdkVersion": "1.0.0",
+            "description": "Example manifest",
+            "requestedCapabilities": ["process.execute"]
+        });
+        assert!(serde_json::from_value::<ExtensionManifest>(unknown_capability).is_err());
+    }
+
+    #[test]
+    fn extension_registry_registers_disabled_and_removal_clears_policy() {
+        let conn = database();
+        let extension =
+            extension_registry_register_on_conn(&conn, extension_manifest_fixture()).unwrap();
+        assert!(!extension.enabled);
+        assert!(extension.granted_capabilities.is_empty());
+        assert_eq!(
+            extension_registry_list_on_conn(&conn).unwrap(),
+            vec![extension.clone()]
+        );
+        assert!(extension_registry_register_on_conn(&conn, extension_manifest_fixture()).is_err());
+        extension_registry_permissions_set_on_conn(
+            &conn,
+            ExtensionPermissionUpdate {
+                extension_id: extension.id.clone(),
+                manifest_version: extension.version.clone(),
+                granted_capabilities: vec![ExtensionCapability::WorkspaceSummaryRead],
+            },
+        )
+        .unwrap();
+        extension_registry_remove_on_conn(&conn, &extension.id).unwrap();
+        assert!(extension_registry_list_on_conn(&conn).unwrap().is_empty());
+        assert!(extension_registry_remove_on_conn(&conn, &extension.id).is_err());
+    }
+
+    #[test]
+    fn extension_registry_permissions_require_current_manifest_and_requested_subset() {
+        let conn = database();
+        let extension =
+            extension_registry_register_on_conn(&conn, extension_manifest_fixture()).unwrap();
+        let wrong_version = ExtensionPermissionUpdate {
+            extension_id: extension.id.clone(),
+            manifest_version: "2.0.0".into(),
+            granted_capabilities: vec![],
+        };
+        assert!(extension_registry_permissions_set_on_conn(&conn, wrong_version).is_err());
+        let unrequested = ExtensionPermissionUpdate {
+            extension_id: extension.id.clone(),
+            manifest_version: extension.version.clone(),
+            granted_capabilities: vec![ExtensionCapability::ResourceMetadataRead],
+        };
+        assert!(extension_registry_permissions_set_on_conn(&conn, unrequested).is_err());
+        let duplicate = ExtensionPermissionUpdate {
+            extension_id: extension.id.clone(),
+            manifest_version: extension.version.clone(),
+            granted_capabilities: vec![
+                ExtensionCapability::WorkspaceSummaryRead,
+                ExtensionCapability::WorkspaceSummaryRead,
+            ],
+        };
+        assert!(extension_registry_permissions_set_on_conn(&conn, duplicate).is_err());
+        let approved = extension_registry_permissions_set_on_conn(
+            &conn,
+            ExtensionPermissionUpdate {
+                extension_id: extension.id.clone(),
+                manifest_version: extension.version.clone(),
+                granted_capabilities: vec![ExtensionCapability::WorkspaceSummaryRead],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            approved.granted_capabilities,
+            vec![ExtensionCapability::WorkspaceSummaryRead]
+        );
+        let enabled = extension_registry_enabled_set_on_conn(&conn, &extension.id, true).unwrap();
+        assert!(enabled.enabled);
+        let disabled = extension_registry_enabled_set_on_conn(&conn, &extension.id, false).unwrap();
+        assert!(!disabled.enabled);
     }
 
     #[test]

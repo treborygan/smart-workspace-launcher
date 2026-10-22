@@ -51,6 +51,8 @@ describe("DevicePathSettings", () => {
     const previewButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Preview mapping")!;
     await click(previewButton);
     expect(api.previewDevicePathMapping).toHaveBeenCalledWith({ sourcePrefix: preview.sourcePrefix, targetPrefix: preview.targetPrefix });
+    expect(host.textContent).toContain(preview.sourcePrefix);
+    expect(host.textContent).toContain(preview.targetPrefix);
     expect(host.textContent).toContain(preview.changes[0].fromUri);
     expect(host.textContent).toContain(preview.changes[0].toUri);
     expect(api.commitDevicePathMapping).not.toHaveBeenCalled();
@@ -58,6 +60,23 @@ describe("DevicePathSettings", () => {
     await click(approve);
     expect(api.commitDevicePathMapping).toHaveBeenCalledWith(preview);
     expect(host.textContent).toContain("Device path mapping approved and saved.");
+  });
+
+  it("disables path edits while preview is pending and discards a response after an edit", async () => {
+    let resolvePreview!: (value: DevicePathMappingPreview) => void;
+    vi.mocked(api.previewDevicePathMapping).mockImplementation(() => new Promise((resolve) => { resolvePreview = resolve; }));
+    await render();
+    await setInput("#mapping-source", preview.sourcePrefix);
+    await setInput("#mapping-target", preview.targetPrefix);
+    await click([...host.querySelectorAll("button")].find((button) => button.textContent === "Preview mapping")!);
+    expect((host.querySelector("#mapping-source") as HTMLInputElement).disabled).toBe(true);
+    expect((host.querySelector("#mapping-target") as HTMLInputElement).disabled).toBe(true);
+
+    // Exercise the stale-result guard even if an input event races with the disabled control.
+    await setInput("#mapping-target", "E:\\Changed\\Path");
+    await act(async () => { resolvePreview(preview); await Promise.resolve(); });
+    expect(host.textContent).not.toContain("Review before approval");
+    expect(api.commitDevicePathMapping).not.toHaveBeenCalled();
   });
 
   it("clears a stale preview when paths are edited and after a stale commit fails", async () => {
@@ -68,6 +87,7 @@ describe("DevicePathSettings", () => {
     expect(host.textContent).toContain("Review before approval");
     await setInput("#mapping-target", "E:\\Projects");
     expect(host.textContent).not.toContain("Review before approval");
+    vi.mocked(api.previewDevicePathMapping).mockResolvedValue({ ...preview, targetPrefix: "E:\\Projects" });
     await click([...host.querySelectorAll("button")].find((button) => button.textContent === "Preview mapping")!);
     await click([...host.querySelectorAll("button")].find((button) => button.textContent === "Approve and save mapping")!);
     expect(host.textContent).not.toContain("Review before approval");
@@ -80,6 +100,7 @@ describe("DevicePathSettings", () => {
     await click(host.querySelector('[aria-label^="Remove mapping"]') as HTMLButtonElement);
     expect(api.deleteDevicePathMapping).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Remove this rule?");
+    expect(document.activeElement?.textContent).toBe("Keep");
     await click([...host.querySelectorAll("button")].find((button) => button.textContent === "Remove")!);
     expect(api.deleteDevicePathMapping).toHaveBeenCalledWith(mapping.id);
     expect(host.textContent).toContain("Device path mapping removed.");

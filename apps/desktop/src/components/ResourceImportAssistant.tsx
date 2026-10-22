@@ -90,13 +90,13 @@ export function ResourceImportAssistant({ profileId, onImported }: { profileId: 
     </div>
     {scan && <div className="resource-import-card resource-import-preview" aria-label="Import preview">
       <header><div><h2>Review candidates</h2><p>{scan.candidates.length} candidates · {existingCount} already in this profile · {scan.ignoredCount} unsupported or excluded</p></div></header>
-      <fieldset className="resource-import-policy"><legend>When a target already exists in this profile</legend>
+      <fieldset className="resource-import-policy" disabled={busy}><legend>When a target already exists in this profile</legend>
         <label><input type="radio" name="duplicate-policy" value="skip_existing" checked={duplicatePolicy === "skip_existing"} onChange={() => setDuplicatePolicy("skip_existing")} /> Skip existing targets</label>
         <label><input type="radio" name="duplicate-policy" value="create_duplicate" checked={duplicatePolicy === "create_duplicate"} onChange={() => setDuplicatePolicy("create_duplicate")} /> Create another resource</label>
       </fieldset>
-      <div className="resource-import-table-wrap"><table className="resource-import-table"><thead><tr><th><input aria-label="Select all candidates" type="checkbox" checked={scan.candidates.length > 0 && selected.size === scan.candidates.length} onChange={(event) => setSelected(event.target.checked ? new Set(scan.candidates.map((candidate) => candidate.candidateId)) : new Set())} /></th><th>Resource</th><th>Target</th><th>Source</th><th>Match</th></tr></thead>
+      <div className="resource-import-table-wrap"><table className="resource-import-table"><thead><tr><th><input aria-label="Select all candidates" type="checkbox" disabled={busy} checked={scan.candidates.length > 0 && selected.size === scan.candidates.length} onChange={(event) => setSelected(event.target.checked ? new Set(scan.candidates.map((candidate) => candidate.candidateId)) : new Set())} /></th><th>Resource</th><th>Target</th><th>Source</th><th>Match</th></tr></thead>
         <tbody>{scan.candidates.map((candidate) => <tr key={candidate.candidateId}>
-          <td><input aria-label={`Select ${candidate.displayName}`} type="checkbox" checked={selected.has(candidate.candidateId)} onChange={(event) => setSelected((current) => { const next = new Set(current); event.target.checked ? next.add(candidate.candidateId) : next.delete(candidate.candidateId); return next; })} /></td>
+          <td><input aria-label={`Select ${candidate.displayName}`} type="checkbox" disabled={busy} checked={selected.has(candidate.candidateId)} onChange={(event) => setSelected((current) => { const next = new Set(current); event.target.checked ? next.add(candidate.candidateId) : next.delete(candidate.candidateId); return next; })} /></td>
           <td><b>{candidate.displayName}</b><small>{candidate.resourceType}</small></td><td><code title={candidate.targetUri}>{candidate.targetUri}</code></td><td><b>{candidate.sourceLabel}</b><small>{candidate.provenance}</small></td>
           <td>{candidate.existingResourceId ? <span className="resource-import-match">Already in profile</span> : <span>New</span>}</td>
         </tr>)}</tbody></table></div>

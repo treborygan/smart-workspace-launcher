@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:36:00Z",
+  "updated_at_utc": "2026-10-22T02:40:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -10,12 +10,12 @@
     "branch": "feature/sw-021-permissioned-extensions"
   },
   "active_pull_request": {
-    "number": 46,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
+    "number": 47,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "3a12ab7f4a2250acd38b3f9d11699eccc3681438",
-    "base": "feature/sw-019-widget-templates",
-    "review_status": "SW-020 implementation/QA complete; documentation checkpoint pushed in 3a12ab7. SW-021 contract frozen through d7d33cf; Core/UI implementation active in isolated worktrees. PR #38/#41 review and inline-thread APIs rechecked 2026-10-22 02:33 UTC and remain empty."
+    "head_sha": "6073856ad3f150f61970d8f11fb1a9967ba2cf2c",
+    "base": "feature/sw-020-device-paths",
+    "review_status": "SW-021 registry/policy foundation only; no extension code runtime/effective grants. Contract, Core and UI independent reviews pass after fixture correction. Frontend 132 tests/typecheck/build, Rust fmt, handoff and diff checks pass. Rust tests blocked before project compile by missing GLib/GObject. Issue remains in progress; Windows V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -321,29 +321,29 @@
       "branch": "feature/sw-021-permissioned-extensions",
       "commit": "d7d33cf",
       "pr": null,
-      "task": "Read-only QA passed typed manifest/grant contract after bounded fields, closed capabilities, schema/fixture, unknown-field rejection and whitespace-only checks were specified; requested Core enforcement/tests."
+      "task": "Read-only contract/Core/UI QA passed after fixed schema-invalid fixture ID. Core validation, default-off storage, capability subsets, inert runtime disclosure, accessible controls and confirmation states reviewed. Rust execution blocked by missing GLib."
     },
     {
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-021 backend registry",
       "branch": "feature/sw-021-core",
-      "commit": null,
+      "commit": "01d16f7",
       "pr": null,
-      "task": "Implement migration v12, strict manifest validation, default-disabled registry CRUD and explicit grant/enable/remove commands plus Rust regression tests in /workspace/sw021-core."
+      "task": "Added v12 extension_registry table, strict backend manifest validation, list/register/permission/enable/remove commands and Rust regressions. Fixed test fixture ID per QA. fmt/diff pass; cargo test blocked before project compile by absent GLib."
     },
     {
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-021 registry UI",
       "branch": "feature/sw-021-ui",
-      "commit": null,
+      "commit": "fa89c60",
       "pr": null,
-      "task": "Implement accessible manifest registry/grant management UI, typed API wrappers and tests in /workspace/sw021-ui; display that no extension code executes and grants are saved policy only."
+      "task": "Added typed APIs, accessible extension registry UI, metadata manifest registration, explicit grants/enabled state, confirmed removal and explicit inert-grant/no-runtime disclosure. Six focused and integrated UI tests pass."
     }
   ],
   "milestones": {
@@ -355,7 +355,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:36:00Z",
+    "at_utc": "2026-10-22T02:40:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -364,11 +364,11 @@
       },
       {
         "command": "npm run typecheck",
-        "result": "PASS on integrated PR #46 branch head 2216bd6."
+        "result": "PASS on integrated SW-021 coordinator head `6073856`."
       },
       {
         "command": "npm test -- --run",
-        "result": "PASS, 16 files / 126 tests on integrated PR #46 branch head 2216bd6."
+        "result": "PASS, 17 files / 132 tests on integrated SW-021 coordinator head `6073856`."
       },
       {
         "command": "npm run frontend:build",
@@ -376,15 +376,15 @@
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS."
+        "result": "PASS on integrated SW-021 branch."
       },
       {
         "command": "git diff --check",
-        "result": "PASS."
+        "result": "PASS on integrated SW-021 branch."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS issue/catalog/schema/fixture consistency only; reports that no compiled app or Windows runtime tests executed."
+        "result": "PASS including extension manifest schema/fixture consistency; not app runtime proof."
       },
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib",
@@ -405,11 +405,15 @@
       {
         "command": "PR #38/#41 review and inline-thread APIs",
         "result": "EMPTY for both PRs at 2026-10-22 02:14 UTC; independent read-only QA found no actionable blocker; no comments or review requests sent."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_registry --lib",
+        "result": "BLOCKED before application compilation: glib-2.0.pc / GLib >=2.70 development files missing (exit 101); authored Rust tests NOT_RUN."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Complete SW-021 Core and UI in isolated branches from frozen contract d7d33cf; integrate and run cross-platform checks plus independent QA, open a draft PR stacked after #46. PR #38/#41 reviews/threads remain empty as of 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
+  "next_action": "Continue SW-021 beyond the registry foundation by implementing a separately reviewed sandbox runtime and permission-enforced host API; issue #21 is not complete while code does not execute and grants have no effect. PR #47 is a draft stacked on SW-020/#46. PR #38/#41 reviews and inline threads remain empty as of 2026-10-22 02:33 UTC. Keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -534,6 +538,15 @@
       "head_sha": "3a12ab7f4a2250acd38b3f9d11699eccc3681438",
       "base": "feature/sw-019-widget-templates",
       "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by GLib; Windows GNU check by MinGW; no real Windows acceptance."
+    },
+    {
+      "number": 47,
+      "issue": "SW-021",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
+      "state": "OPEN_DRAFT",
+      "head_sha": "6073856ad3f150f61970d8f11fb1a9967ba2cf2c",
+      "base": "feature/sw-020-device-paths",
+      "note": "Registry/policy foundation only. No extension runtime/effective grants; issue remains in progress pending sandbox and host API. Core/UI QA passes; frontend 132 tests pass; Rust tests blocked by GLib; no Windows acceptance."
     }
   ],
   "contract_commits": [

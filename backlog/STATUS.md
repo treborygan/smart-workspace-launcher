@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:36 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:40 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -16,6 +16,7 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
 - PR #45 (SW-019) OPEN_DRAFT, base PR #44, head `9a984e5`; implementation and independent QA are complete. Rust test compilation remains blocked by missing GLib/GObject; no Windows acceptance.
 - PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `3a12ab7`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
+- PR #47 (SW-021) draft implementation is on `feature/sw-021-permissioned-extensions`, stacked on #46. It contains manifest validation, local registry, stored grant policy and UI; it does **not** execute extension code, so SW-021 remains in progress pending a sandbox runtime and effective permission-enforced host APIs.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## SW-020 implementation — issue #20
@@ -24,7 +25,7 @@ SW-020 adds random per-user local device identity, device labels, approved-by-co
 
 ## SW-021 contract and implementation — issue #21
 
-SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33cf`. The registry stores validated manifests and explicit grants only; it does not execute extension code or provide filesystem/process/network/shell capabilities. Extensions default disabled; grants are a subset of unique requested capabilities. The typed API supports manifest list/register, grant updates, explicit enablement and removal. Manifest fields are bounded, unknown fields rejected and serialized input capped at 4 KiB. Independent QA passed the contract after bounds were added. Core and UI implementation are active in isolated worktrees `/workspace/sw021-core` and `/workspace/sw021-ui`; Windows V1 remains blocked.
+SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33cf`. Core migration v12 and the accessible registry UI are implemented on the draft branch. The registry stores validated manifests and explicit grants only; it does not execute extension code or provide filesystem/process/network/shell capabilities. Extensions default disabled; grants are a subset of unique requested capabilities. The typed API supports manifest list/register, grant updates, explicit enablement and removal. Manifest fields are bounded, unknown fields rejected and serialized input capped at 4 KiB. Independent QA passed the contract, Core (after fixing the test ID), and UI. This is the registry/policy foundation only; SW-021 remains in progress until a separately reviewed sandbox runtime and permission-enforced host API exist. Windows V1 remains blocked.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
 
@@ -63,11 +64,11 @@ SW-021's contract was frozen in `aebf60e` and tightened by `115064c` and `d7d33c
 
 No Shell, `.lnk`, mapped-drive, DPI/multi-monitor, portable-package or W-001..W-014 acceptance has run on Windows. V1 / SW-012 remain BLOCKED; there is no tested Windows EXE, V1 Release asset or READY notice. No GitHub Actions were added by this continuation.
 
-SW-021 contract checks: `npm run typecheck` — PASS; `python scripts/verify_handoff.py` — PASS including the new extension manifest schema/fixture (consistency only); `git diff --check` — PASS. Core handler execution tests and Windows checks are pending.
+Integrated SW-021 branch checks: `npm run typecheck` — PASS; `npm test -- --run` — PASS, 17 files / 132 tests; `npm run frontend:build` — PASS with existing nonfatal Vite `INEFFECTIVE_DYNAMIC_IMPORT` warning; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS; `git diff --check` — PASS; `python scripts/verify_handoff.py` — PASS schema/fixture consistency only. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_registry --lib` — BLOCKED before project compilation: `glib-2.0.pc` / GLib >=2.70 dev files absent (exit 101); Rust regressions are authored but NOT_RUN. `python scripts/check_release_gate.py` — BLOCKED (`NOT READY: BLOCKED`, exit 2). No Windows 11 x64 acceptance.
 
 ## Next executable tasks
 
-1. Integrate and independently QA SW-021 Core/UI work after their commits; open a draft PR stacked after #46 with exact verification and limitations.
+1. Continue SW-021 with a sandboxed extension runtime and permission-checked host API; do not mark issue #21 done or start dependent SW-022 until executable behavior and its tests pass.
 2. Continue tracking PR #38/#41 external review; refresh their review state and run blocked Rust tests on capable hosts.
 3. Continue SW-022..SW-025 in dependency order. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.
 

@@ -13,7 +13,7 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "8aa19f809e52de2feeed457cd936ff4fe99c9172",
+    "head_sha": "87a022c8a986611128eb96c06a7971432e58f288",
     "base": "feature/sw-020-device-paths",
     "review_status": "PR #47 code head 8aa19f8; full Rust library suite PASS 116/116 on Debian 13/sysroot; focused extension 13/13 and directory scanner 2/2; frontend typecheck, 17 files/137 tests and build PASS; independent QA passed purge/replay fix. Windows-only junction NOT_RUN; V1 BLOCKED. SW-022 contract research found missing provider/encryption/conflict/data-selection decisions; freeze contract before implementation."
   },
@@ -621,7 +621,7 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "8aa19f809e52de2feeed457cd936ff4fe99c9172",
+      "head_sha": "87a022c8a986611128eb96c06a7971432e58f288",
       "base": "feature/sw-020-device-paths",
       "note": "Open draft at code head 8aa19f8, stacked on SW-020/PR #46. Rust full suite PASS 116/116; extension 13/13; scanner 2/2 Linux; frontend typecheck, 137 tests, build, formatting, diff/handoff PASS. Independent QA passed purge/replay fix; Windows junction NOT_RUN. SW-022 contract incomplete; V1 BLOCKED."
     }

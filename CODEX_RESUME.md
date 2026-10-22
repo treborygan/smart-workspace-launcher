@@ -2,7 +2,7 @@
 
 ## Current checkpoint — 2026-10-22 03:40 UTC
 
-Repository: `treborygan/smart-workspace-launcher`. Coordinator: `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, HEAD `8aa19f809e52de2feeed457cd936ff4fe99c9172`; PR #47 is open draft, stacked on PR #46/SW-020. Host: Debian 13 x86_64. No real Windows 11 x64, PowerShell, or MinGW is available. V1/SW-012 remains BLOCKED. No Windows EXE, portable package, release, or READY notice is claimed.
+Repository: `treborygan/smart-workspace-launcher`. Coordinator: `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, code head `8aa19f809e52de2feeed457cd936ff4fe99c9172`; latest status commit `87a022c8a986611128eb96c06a7971432e58f288`; PR #47 is open draft, stacked on PR #46/SW-020. Host: Debian 13 x86_64. No real Windows 11 x64, PowerShell, or MinGW is available. V1/SW-012 remains BLOCKED. No Windows EXE, portable package, release, or READY notice is claimed.
 
 ## Review tracking
 

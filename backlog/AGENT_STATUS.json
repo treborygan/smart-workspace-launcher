@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:52:00Z",
+  "updated_at_utc": "2026-10-22T02:55:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "4041757a46815df8162e54db8f1db89c37655673",
+    "head_sha": "8128e28",
     "base": "feature/sw-020-device-paths",
-    "review_status": "Frozen sandbox runtime contract in 2ca5ea4; frontend package review/install/run flow integrated in 4041757 and independently QA PASS. Frontend typecheck, all 137 tests, production build and diff check pass. Core v13 storage and Wasmi runtime implementation still active in isolated worktree; does not yet run in integrated app. Rust test execution blocked before project compilation by missing GLib/GObject. V1 blocked."
+    "review_status": "Frontend UI integrated and independently QA PASS; typecheck, 137 frontend tests, build and diff pass. Frozen runtime contract is in place. Core v13 runtime commit b8a48ff has formatting/metadata/isolated Wasmi harness checks, but independent Core QA identified three P2 blockers: public digest used as preview token (preview can be bypassed), missing hostile package/output boundary tests, and near-limit truncation can exceed 64 KiB after truncated=true. Core is fixing these before integration. Rust tests blocked at missing GLib/GObject; V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -363,9 +363,9 @@
       "state": "ACTIVE",
       "issue": "SW-021 sandbox package and runtime implementation",
       "branch": "feature/sw-021-runtime-core",
-      "commit": null,
+      "commit": "b8a48ff",
       "pr": 47,
-      "task": "Implement bounded .swext preview/install, module storage, permissioned explicit Wasm run, safe ABI validation and Core tests in isolated worktree /workspace/sw021-runtime-core."
+      "task": "Core implementation complete at b8a48ff but under independent QA remediation: replace derivable preview digest token with opaque one-time/path+digest-bound expiry token; add hostile ZIP/output/profile/pointer/truncation tests; fix 64KiB final truncated flag edge. Not integrated."
     },
     {
       "role": "ui",
@@ -388,7 +388,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:52:00Z",
+    "at_utc": "2026-10-22T02:55:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -470,11 +470,15 @@
       {
         "command": "Independent SW-021 UI review",
         "result": "PASS; UI branch ef67dfd reviewed for stale preview/install tokens, permissions, profile result scope, inert text output, accessible errors/focus and tests."
+      },
+      {
+        "command": "Independent SW-021 Core review on b8a48ff",
+        "result": "BLOCKED pending fixes for P2: install preview token is derivable from public digest, hostile ZIP/output regression coverage is incomplete, and byte budget can be exceeded after setting truncated=true. Core is remediating; no integration yet."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Finish Core sandbox implementation in /workspace/sw021-runtime-core, inspect its security-critical diff, integrate only after Core static checks, then run independent Core QA and full cross-platform tests. Latest review APIs at 02:47 UTC: PR #38/#41 review and inline threads empty. Keep V1 blocked until real Windows 11 x64 acceptance.",
+  "next_action": "Hold Core integration until follow-up commit fixes preview-bypass token, test coverage and truncation cap, then obtain independent QA re-review. UI is integrated/verified. PR #38/#41 review/thread APIs were empty as of 02:47 UTC. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,

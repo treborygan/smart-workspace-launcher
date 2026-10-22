@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:52 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:55 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -77,3 +77,5 @@ Integrated SW-021 registry branch checks before runtime UI: `npm run typecheck` 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Session continuation: [`CODEX_RESUME.md`](../CODEX_RESUME.md).
 
 SW-021 UI integration at `4041757`: `npm run typecheck` — PASS; `npm test -- --run` — PASS, 17 files / 137 tests; `npm run frontend:build` — PASS with the existing nonfatal Vite warning; `git diff --check` — PASS. Independent UI review passed. Core runtime tests have not run yet; the current host lacks GLib/GObject development files.
+
+Independent Core QA findings on `b8a48ff`: integration is held pending opaque one-time preview token enforcement, hostile ZIP/output regression coverage, and an exact final 64 KiB invocation cap when truncation is marked. Core is remediating in its isolated worktree.

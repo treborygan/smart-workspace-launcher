@@ -181,6 +181,40 @@ export interface ResourceRelocationResult {
   updatedResourceIds: string[];
 }
 
+/** Installation-local identity; it never contains a hostname or hardware identifier. */
+export interface LocalDeviceIdentity {
+  id: string;
+  name: string;
+}
+
+/** An approved local path-prefix translation. Canonical resource targets remain unchanged. */
+export interface DevicePathMapping {
+  id: string;
+  deviceId: string;
+  sourcePrefix: string;
+  targetPrefix: string;
+  createdUtc: string;
+}
+
+export interface DevicePathMappingChange {
+  resourceId: string;
+  targetId: string;
+  fromUri: string;
+  toUri: string;
+}
+
+/** A preview-bound request to create one local device mapping rule. */
+export interface DevicePathMappingPreviewRequest {
+  sourcePrefix: string;
+  targetPrefix: string;
+}
+
+export interface DevicePathMappingPreview extends DevicePathMappingPreviewRequest {
+  deviceId: string;
+  previewToken: string;
+  changes: DevicePathMappingChange[];
+}
+
 /** Explicit source selected by the user; scanning is bounded and read-only. */
 export type ResourceImportSourceKind = "directory" | "start_menu" | "bookmarks";
 export type ResourceImportDuplicatePolicy = "skip_existing" | "create_duplicate";
@@ -456,6 +490,12 @@ export interface CommandMap {
   resource_duplicate: { args: { request: ResourceDuplicateRequest }; result: Resource };
   resource_relocation_preview: { args: { request: ResourceRelocationPreviewRequest }; result: ResourceRelocationPreview };
   resource_relocation_commit: { args: { preview: ResourceRelocationPreview }; result: ResourceRelocationResult };
+  local_device_get: { args?: undefined; result: LocalDeviceIdentity };
+  local_device_rename: { args: { name: string }; result: LocalDeviceIdentity };
+  device_path_mapping_list: { args?: undefined; result: DevicePathMapping[] };
+  device_path_mapping_preview: { args: { request: DevicePathMappingPreviewRequest }; result: DevicePathMappingPreview };
+  device_path_mapping_commit: { args: { preview: DevicePathMappingPreview }; result: DevicePathMapping };
+  device_path_mapping_delete: { args: { id: string }; result: void };
   resource_import_scan: { args: { request: ResourceImportScanRequest }; result: ResourceImportScanResult };
   resource_import_commit: { args: { request: ResourceImportCommitRequest }; result: ResourceImportCommitResult };
   workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };

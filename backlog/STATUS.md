@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated 2026-10-22 02:02 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
+Updated 2026-10-22 02:31 UTC. Repository: [`treborygan/smart-workspace-launcher`](https://github.com/treborygan/smart-workspace-launcher). Main contains the foundational implementation through SW-013 (PR #37). Cross-platform advanced work is progressing in stacked feature branches. The current environment is Debian 13 x86_64 and is not a Windows acceptance environment.
 
 ## Completed / merged foundations
 
@@ -8,13 +8,18 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`; review and inline-thread APIs returned no submissions on 2026-10-22 02:01 UTC. Independent QA read-only review found no actionable blocker.
-- PR #41 (SW-015) OPEN, stacked on #38; review and inline-thread APIs returned no submissions at the same check. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
+- PR #38 (SW-014) OPEN against `main`; review and inline-thread APIs returned no submissions at 2026-10-22 02:14 UTC. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38; review and inline-thread APIs returned no submissions at 2026-10-22 02:14 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
-- SW-019 (issue #19; issue #18 is SW-007) is in progress on `feature/sw-019-widget-templates`, stacked after SW-018. Contract was frozen in `431fa55`, archive casing corrected in `3202298`, and schema bounds/security tightened in `a20003a`. Core and UI are working in isolated branches; independent QA review confirms the schema casing and identifies runtime gates now being implemented/tested: unique IDs, template references and profile membership.
+- PR #45 (SW-019) OPEN_DRAFT, base PR #44 at head `9a984e5`; implementation and independent QA are complete. Rust tests are blocked before compilation by missing GLib/GObject; no Windows acceptance.
+- PR #46 (SW-020) OPEN_DRAFT, base `feature/sw-019-widget-templates`, integrated head `2216bd6`. Implementation and independent QA are complete; frontend 126 tests/typecheck/build, Rust formatting, diff and handoff checks pass. Rust test compilation is blocked by missing GLib/GObject, Windows GNU check by missing MinGW. V1 remains BLOCKED.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
+
+## SW-020 implementation — issue #20
+
+SW-020 adds random per-user local device identity, device labels, approved-by-construction path-prefix rules, exact preview/transactional commit/delete and launch-time-only mapping. Mappings are not exported with profiles, and copied portable data uses a different local identity on the destination machine. Drive-letter/UNC paths only; mapping is boundary-safe and Unicode case-insensitive, with most-specific prefix precedence. Only active file/folder target URIs are translated in the explicit launch copy; stored paths, arguments, working directories and history/export identity remain untouched. No scanning/copying/moving/automatic launching occurs. UI review fixed delayed-preview divergence and keyboard focus; Core review fixed Unicode comparisons.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
 
@@ -23,6 +28,20 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 - Core scans only user-selected local directories/Start Menu folders or Netscape-format bookmark HTML. It uses `cap-std`/`cap-fs-ext` 4.0.3 capability-relative traversal, no-follow descendant/file opens, max depth 4, max 1,000 entries and max 4 MiB bookmark input; `.url` and bookmarks accept HTTPS only. Windows `.lnk` metadata reads reject arguments and never resolve or execute the target. Network roots are rejected including mapped drives on Windows.
 - Commit rescans the bounded source, verifies a token bound to the candidate/source snapshot, destination profile and duplicate match map, validates selection, then inserts resources/targets/profile memberships transactionally. Failure rolls back the batch. Duplicate policy is skip-existing or create-duplicate.
 - Independent QA passed with no merge blocker. A medium same-user path race remains for initial root opening and Windows `.lnk` metadata loading by absolute path through `IPersistFile::Load`; descendants and ordinary leaf reads use capability-relative no-follow handles. This limitation is documented and no race-free-isolation claim is made.
+
+## SW-020 verification on integrated PR #46 head 2216bd6
+
+- `npm ci --cache /tmp/swl-npm-cache` — PASS.
+- `npm run typecheck` — PASS.
+- `npm test -- --run` — PASS, 16 files / 126 tests.
+- `npm run frontend:build` — PASS; existing nonfatal Vite `INEFFECTIVE_DYNAMIC_IMPORT` warning.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
+- `git diff --check` — PASS.
+- `python scripts/verify_handoff.py` — PASS consistency only; not app compile/runtime proof.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib` — BLOCKED before app compilation: GLib/GObject >=2.70 (`glib-2.0.pc`) missing; tests are authored but NOT_RUN.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib` — BLOCKED: `x86_64-w64-mingw32-gcc` missing.
+- `python scripts/check_release_gate.py` — BLOCKED (`NOT READY: BLOCKED`, exit 2).
+- Independent QA re-reviewed UI and Core fixes and found no remaining blocker. No Windows acceptance.
 
 ## Verification and release status
 
@@ -41,8 +60,8 @@ No Shell, `.lnk`, mapped-drive, DPI/multi-monitor, portable-package or W-001..W-
 
 ## Next executable tasks
 
-1. Complete SW-019 (widget templates, issue #19) after the implemented SW-016 dependency using the frozen product/security boundaries; keep work stacked behind the existing review chain.
-2. Run SW-018 Rust import tests and Windows mapped-drive/shortcut checks on capable hosts; continue tracking #38/#41 external review.
-3. Continue SW-020..SW-025 in dependency order. Keep V1 blocked until real Windows 11 x64 acceptance.
+1. Continue with SW-021 (issue #21, permissioned extension SDK/registry) on a branch stacked after SW-020/#46; freeze a bounded, inert capability contract before implementation.
+2. Continue tracking PR #38/#41 external review; refresh their review state and run blocked Rust tests on capable hosts.
+3. Continue SW-022..SW-025 in dependency order. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Session continuation: [`CODEX_RESUME.md`](../CODEX_RESUME.md).

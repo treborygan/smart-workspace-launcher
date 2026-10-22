@@ -1,23 +1,19 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-22 02:02 UTC
+## Checkpoint — 2026-10-22 02:31 UTC
 
-Continue implementation, not a plan or browser mock. Canonical state: `backlog/AGENT_STATUS.json`; human state: `backlog/STATUS.md`. Repository is `treborygan/smart-workspace-launcher`. Current coordinator worktree is `/workspace/sw018-integration`, branch `feature/sw-019-widget-templates`, based on the SW-018 integration branch. Contract commits `431fa55` (types/decisions), `3202298` (archive casing), and `a20003a` (Dock/geometry/name schema bounds) are pushed. Core and UI worktrees are `/workspace/sw019-core` (`feature/sw-019-core`) and `/workspace/sw019-ui` (`feature/sw-019-ui`), both based on `431fa55`.
+Continue implementation, not another plan or browser mock. Repository: `treborygan/smart-workspace-launcher`. Canonical state is `backlog/AGENT_STATUS.json`; readable progress is `backlog/STATUS.md`. Active branch/worktree `/workspace/sw020-core`, `feature/sw-020-device-paths`; draft PR #46 is open against `feature/sw-019-widget-templates`, integrated head `2216bd66798f6977f3bd453014dc01ca93b1d59b`. PR #45 SW-019 remains open draft at `9a984e5`. SW-020 contract commits are `583f95f` and `9b905cd`; Core implementation `2dd0a4b`, Unicode fix `3a9f0d4`, UI `43af2e7` + fix `441ed32`, model docs integrated at `2216bd6`.
+
+## Current implementation
+
+SW-020 implements local random device identity in per-user app-local settings, label editing, preview/approve/list/delete for local path mappings, migration v11, and launch-only path substitution. Profile archives omit local mappings. Mappings are bounded to 100 rules and 5,000 affected targets/preview, accept absolute Windows drive-letter and UNC paths, match path components Unicode case-insensitively, and use most-specific prefix precedence. Canonical targets, args, working directories and history stay unchanged. Independent UI and Core QA passed after fixing preview/input staleness, delete keyboard focus and Unicode comparisons.
+
+Integrated verification on PR #46 head 2216bd6: `npm ci --cache /tmp/swl-npm-cache`, `npm run typecheck`, `npm test -- --run` (16 files / 126 tests), `npm run frontend:build` (pass with existing nonfatal Vite warning), `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `git diff --check` and `python scripts/verify_handoff.py` pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib` is BLOCKED before app compile because GLib/GObject >=2.70 dev files are missing. Windows GNU check is BLOCKED because MinGW is missing. Release-gate script returns `NOT READY: BLOCKED` exit 2. No Windows 11 x64 acceptance; V1/SW-012 remains BLOCKED.
 
 ## PR review tracking
 
-As checked through GitHub review and inline-thread APIs at 2026-10-22 02:01 UTC, PR #38 (SW-014) and #41 (SW-015) are OPEN and still have no submitted reviews or inline threads. Independent QA reviewed both current code heads read-only and found no actionable correctness/security blocker. A non-blocking scale concern for SW-015 is that CSV export holds the shared database lock while writing potentially large unlimited-retention exports. Do not merge these stacked changes without external review and dependency-order checks. PR #42 (SW-016) and #43 (SW-017) are OPEN_DRAFT; PR #44 (SW-018) is OPEN_DRAFT and follows #43. PR #39 was closed as superseded. No review requests/comments were sent.
+PR #38 (SW-014) and #41 (SW-015) are open; connected GitHub review and inline-thread APIs returned empty for both at 02:14 UTC 2026-10-22. Independent read-only QA found no actionable blocker; SW-015 has a non-blocking concern that CSV export holds the shared DB lock through potentially large exports. Refresh review state as work continues. Do not merge stacked changes before review and dependency order. PR #46 is draft and updated with exact tests/limitations. No GitHub Actions added.
 
-## SW-018 state
+## Next work
 
-Issue #17 is implemented and independently QA-reviewed on PR #44. Implementation branch `feature/sw-018-discovery-import` has code commit `1ec5a7a`, followed by status checkpoint commit `1cae52c`; PR #44 head is `1cae52c0d6c8a8496f5b9e198030171081724af5`. See backlog status for implementation detail, test evidence and the documented medium same-user root/.lnk path race.
-
-## SW-019 in progress
-
-The correct GitHub issue is #19 (issue #18 is SW-007). SW-016 code/QA is available on draft PR #42 and is the direct roadmap dependency. Contract is frozen on `feature/sw-019-widget-templates`: `431fa55` adds the typed contract, `3202298` aligns nested archive fields to camelCase, and `a20003a` enforces Dock-empty, widget x+w geometry and nonblank template names in the archive schema. Types: built-in resource shortcuts, recent launches, launch summary, and related resources; at most 20 templates and 50 dashboard instances, bounded profile-local references and dimensions. Widgets are dashboard-only inert app-rendered data views, persisted inside the existing layout, snapshot and manual archive shape; older layouts without widget data deserialize as empty. There are no scripts/arbitrary HTML/SQL/URLs/executable payloads. Independent contract QA confirmed the casing and called out runtime gates: globally unique template/instance IDs, valid template references, profile membership for resource IDs, plus old layout/archive/snapshot compatibility. Core owns Rust validation/snapshot/archive handling; UI owns dashboard manager/rendering; QA owns archive harness regressions; root owns integration/status. Three active subagent cap is enforced.
-
-## Environment and gates
-
-Environment is Debian 13 x86_64, Node 24.19/npm 11.9, Rust 1.99.1 stable. There is no PowerShell, no real Windows 11 x64 host and no MinGW compiler; GLib/GObject >=2.70 development libraries are also missing. Frontend execution is available; Rust app compilation and native Windows acceptance are not. `python scripts/verify_handoff.py` passes consistency checks only. `python scripts/check_release_gate.py` reports BLOCKED. V1/SW-012 remains BLOCKED; do not claim Windows build/runtime/package/release/READY evidence.
-
-No GitHub Actions were added. Continue SW-019, then SW-020 through SW-025 in dependency order while updating canonical state. See `docs/MULTI_AGENT_WORKFLOW.md`, `docs/CODEX_RUNTIME_SETUP.md` and `docs/NOTIFICATIONS_AND_RELEASE_GATES.md` for binding constraints.
+Continue SW-021 issue #21 after this SW-020 PR, on a new feature branch stacked after #46. Read all local instructions and freeze a safe typed capability contract first. Then proceed through SW-025 in dependency order. Keep status/PR descriptions updated with issue IDs, commits, exact commands/results, risks and next tasks. Never claim Windows proof; publish V1 only after real Windows 11 x64 acceptance and release gates.

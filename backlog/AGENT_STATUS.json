@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:05:00Z",
+  "updated_at_utc": "2026-10-22T02:31:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-019-widget-templates"
+    "branch": "feature/sw-020-device-paths"
   },
   "active_pull_request": {
-    "number": 44,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/44",
+    "number": 46,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
     "state": "OPEN_DRAFT",
-    "head_sha": "1cae52c0d6c8a8496f5b9e198030171081724af5",
-    "base": "feature/sw-017-duplicate-relocation",
-    "review_status": "Independent SW-018 QA passed. PR body/tests limitations include GLib build blocker, unavailable Windows host and documented medium root/.lnk path race."
+    "head_sha": "2216bd66798f6977f3bd453014dc01ca93b1d59b",
+    "base": "feature/sw-019-widget-templates",
+    "review_status": "Integrated Core/UI/docs pushed. Independent UI and Core QA passed after P1/P2 fixes. Frontend tests/typecheck/build pass (126 tests). Rust tests blocked before compile by GLib; Windows GNU check blocked by MinGW. No Windows acceptance."
   },
   "subagent_limit": 3,
   "agents": [
@@ -244,13 +244,13 @@
       "branch": null,
       "commit": null,
       "pr": "38,41",
-      "task": "Live GitHub review and inline-thread APIs were empty at 2026-10-22 02:01 UTC. Independent static review found no actionable correctness/security blocker. Non-blocking scale concern: SW-015 CSV export holds shared DB lock for full output."
+      "task": "Connected GitHub review and inline-thread APIs both returned empty at 2026-10-22 02:14 UTC; independent static review found no actionable blocker. Non-blocking SW-015 CSV export shared-lock duration concern."
     },
     {
       "role": "core",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-019 backend: typed validation, snapshots, profile archive round-trip",
       "branch": "feature/sw-019-core",
       "commit": null,
@@ -261,37 +261,70 @@
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-019 reusable widget editor and dashboard rendering",
       "branch": "feature/sw-019-ui",
       "commit": null,
       "pr": null,
       "task": "Implement real typed-IPC SW-019 widgets from frozen contract 431fa55 in isolated /workspace/sw019-ui; focused accessible UI tests."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-020 Core device-local mapping backend",
+      "branch": "feature/sw-020-device-paths",
+      "commit": "3a9f0d4",
+      "pr": 46,
+      "task": "Schema v11, per-user local device UUID, mapping preview/commit/delete, transactional staleness binding, bounded target scan, Unicode component matching and launch-only substitution. cargo fmt/diff pass; Rust compile blocked by GLib."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-020 Device paths settings UI",
+      "branch": "feature/sw-020-ui",
+      "commit": "441ed32",
+      "pr": 46,
+      "task": "Device label/mapping settings, exact preview, approve/delete, accessible IPC/stale errors. Fixed preview staleness and delete keyboard focus; 126 integrated frontend tests pass."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-020 independent UI/Core QA",
+      "branch": null,
+      "commit": null,
+      "pr": 46,
+      "task": "Initial P1/P2 UI findings fixed and re-reviewed; Core Unicode path P2 fixed and re-reviewed with no remaining blocker. Rust tests remain not run due missing GLib; no Windows certification."
     }
   ],
   "milestones": {
     "V1.0": "IN_PROGRESS",
     "V1.1": "IN_PROGRESS",
-    "V1.2": "NOT_STARTED",
+    "V1.2": "IN_PROGRESS",
     "V2.0": "NOT_STARTED"
   },
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:05:00Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64; MinGW absent; GLib >=2.70 development files absent.",
+    "at_utc": "2026-10-22T02:31:00Z",
+    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
         "command": "npm ci --cache /tmp/swl-npm-cache",
-        "result": "PASS."
+        "result": "PASS on integrated PR #46 branch head 2216bd6."
       },
       {
         "command": "npm run typecheck",
-        "result": "PASS on SW-018 UI/API."
+        "result": "PASS on integrated PR #46 branch head 2216bd6."
       },
       {
         "command": "npm test -- --run",
-        "result": "PASS, 14 files / 115 tests."
+        "result": "PASS, 16 files / 126 tests on integrated PR #46 branch head 2216bd6."
       },
       {
         "command": "npm run frontend:build",
@@ -299,7 +332,7 @@
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS on final SW-018 code head after network-source guard."
+        "result": "PASS."
       },
       {
         "command": "git diff --check",
@@ -307,32 +340,32 @@
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS; handoff/catalog/schema/fixture consistency only."
+        "result": "PASS issue/catalog/schema/fixture consistency only; reports that no compiled app or Windows runtime tests executed."
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import --lib",
-        "result": "BLOCKED before app compilation: missing GLib/GObject >=2.70 development files (glib-2.0.pc). Rust tests authored but NOT_RUN."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib",
+        "result": "BLOCKED before project compilation because glib-2.0.pc / GLib >=2.70 development files are missing (exit 101); Rust tests authored but NOT_RUN."
       },
       {
         "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED: x86_64-w64-mingw32-gcc is missing."
+        "result": "BLOCKED during bundled SQLite build because x86_64-w64-mingw32-gcc is absent (exit 101)."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED as expected: NOT READY: BLOCKED (exit 2). No real Windows 11 x64 host."
+        "result": "BLOCKED; NOT READY: BLOCKED (exit 2)."
       },
       {
-        "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
-        "result": "PASS on SW-019 contract commit 431fa55: schema is valid JSON and handoff catalog/schema/fixture checks pass. This does not compile or execute app runtime."
+        "command": "Independent SW-020 UI/Core review",
+        "result": "PASS after fixes for preview staleness, delete confirmation focus, and Unicode case-insensitive path matching; no remaining static blocker. No Windows certification."
       },
       {
-        "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
-        "result": "PASS on SW-019 contract head a20003a: JSON syntax and repository handoff/schema/fixture checks pass. QA schema review completed; runtime uniqueness, reference, membership, and compatibility assertions remain assigned to Core/QA."
+        "command": "PR #38/#41 review and inline-thread APIs",
+        "result": "EMPTY for both PRs at 2026-10-22 02:14 UTC; independent read-only QA found no actionable blocker; no comments or review requests sent."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Finish SW-019 Core/UI/archive QA changes in isolated branches from the frozen contract, integrate and run full cross-platform checks, then independent final QA. PR #38/#41 review APIs remain empty and current read-only QA found no actionable blocker. Continue SW-020..SW-025 in dependency order. Windows V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "SW-020 is implemented and independently QA-passed on draft PR #46 (head 2216bd6, stacked after SW-019/#45). Integrated frontend checks pass (126 tests), formatting/handoff pass; Rust test compilation is blocked before app code by missing GLib/GObject development files, Windows GNU cross-check by missing MinGW, and real Windows 11 acceptance is unavailable. Continue SW-021 issue #21 in dependency order on a branch stacked after #46; keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance. PR #38/#41 review/thread APIs were empty at 2026-10-22 02:14 UTC; recheck later.",
   "recent_merges": [
     {
       "number": 32,
@@ -438,6 +471,27 @@
       "head_sha": "1ec5a7a",
       "base": "feature/sw-017-duplicate-relocation",
       "note": "Implementation/independent QA complete; tests/Windows limitations and medium root/.lnk race documented."
+    },
+    {
+      "number": 46,
+      "issue": "SW-020",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
+      "state": "OPEN_DRAFT",
+      "head_sha": "2216bd6",
+      "base": "feature/sw-019-widget-templates",
+      "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode-path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by missing GLib; Windows GNU check blocked by MinGW; no real Windows acceptance."
+    }
+  ],
+  "contract_commits": [
+    {
+      "issue": "SW-020",
+      "sha": "583f95fac2006ddece5b538e56a1c1b79f955401",
+      "scope": "Typed local device identity, preview/commit/delete mapping command boundary and safe mapping semantics."
+    },
+    {
+      "issue": "SW-020",
+      "sha": "9b905cd8998ed81c92ad684e9cc1e3ef9103d86a",
+      "scope": "Clarified local identity outside portable bundle and supported Windows drive/UNC forms."
     }
   ]
 }

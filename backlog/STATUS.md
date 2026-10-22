@@ -13,7 +13,7 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
-- SW-019 (issue #19; issue #18 is SW-007) is in progress on `feature/sw-019-widget-templates`, stacked after SW-018. Contract is frozen in commit `431fa55`; Core and UI are working in isolated branches from this commit, with independent QA work in progress for #38/#41 tracking complete.
+- SW-019 (issue #19; issue #18 is SW-007) is in progress on `feature/sw-019-widget-templates`, stacked after SW-018. Contract was frozen in `431fa55`, archive casing corrected in `3202298`, and schema bounds/security tightened in `a20003a`. Core and UI are working in isolated branches; independent QA review confirms the schema casing and identifies runtime gates now being implemented/tested: unique IDs, template references and profile membership.
 - PR #39 was closed as superseded without merging. No PR review requests or comments were sent. Do not merge stacked work before review and dependency-order checks.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)

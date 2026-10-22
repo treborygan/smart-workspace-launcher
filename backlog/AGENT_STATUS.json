@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:02:00Z",
+  "updated_at_utc": "2026-10-22T02:05:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -255,7 +255,7 @@
       "branch": "feature/sw-019-core",
       "commit": null,
       "pr": null,
-      "task": "Implement backend SW-019 from frozen contract 431fa55 in isolated /workspace/sw019-core; Rust tests, strict config/profile checks, snapshot/archive compatibility."
+      "task": "Implement strict Rust widget DTO/layout validation, snapshot restore compatibility and profile archive round-trip/import membership remapping. Cherry-picked shared schema correction commits 3202298 and a20003a (local hashes differ)."
     },
     {
       "role": "ui",
@@ -278,7 +278,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:02:00Z",
+    "at_utc": "2026-10-22T02:05:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64; MinGW absent; GLib >=2.70 development files absent.",
     "results": [
       {
@@ -324,11 +324,15 @@
       {
         "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
         "result": "PASS on SW-019 contract commit 431fa55: schema is valid JSON and handoff catalog/schema/fixture checks pass. This does not compile or execute app runtime."
+      },
+      {
+        "command": "python -m json.tool contracts/layouts.schema.json && python scripts/verify_handoff.py && git diff --check",
+        "result": "PASS on SW-019 contract head a20003a: JSON syntax and repository handoff/schema/fixture checks pass. QA schema review completed; runtime uniqueness, reference, membership, and compatibility assertions remain assigned to Core/QA."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Finish SW-019 Core/UI in isolated branches from 431fa55, integrate and run all cross-platform checks, then independent QA. Keep SW-014 #38 and SW-015 #41 review tracking open; current APIs have no reviews/threads and independent QA found no actionable blocker. Continue SW-020..SW-025 in dependency order. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Finish SW-019 Core/UI/archive QA changes in isolated branches from the frozen contract, integrate and run full cross-platform checks, then independent final QA. PR #38/#41 review APIs remain empty and current read-only QA found no actionable blocker. Continue SW-020..SW-025 in dependency order. Windows V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,

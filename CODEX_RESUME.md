@@ -2,7 +2,7 @@
 
 ## Checkpoint — 2026-10-22 02:02 UTC
 
-Continue implementation, not a plan or browser mock. Canonical state: `backlog/AGENT_STATUS.json`; human state: `backlog/STATUS.md`. Repository is `treborygan/smart-workspace-launcher`. Current coordinator worktree is `/workspace/sw018-integration`, branch `feature/sw-019-widget-templates`, based on the SW-018 integration branch. Contract commit `431fa55` is pushed. Core and UI worktrees are `/workspace/sw019-core` (`feature/sw-019-core`) and `/workspace/sw019-ui` (`feature/sw-019-ui`), both based on `431fa55`.
+Continue implementation, not a plan or browser mock. Canonical state: `backlog/AGENT_STATUS.json`; human state: `backlog/STATUS.md`. Repository is `treborygan/smart-workspace-launcher`. Current coordinator worktree is `/workspace/sw018-integration`, branch `feature/sw-019-widget-templates`, based on the SW-018 integration branch. Contract commits `431fa55` (types/decisions), `3202298` (archive casing), and `a20003a` (Dock/geometry/name schema bounds) are pushed. Core and UI worktrees are `/workspace/sw019-core` (`feature/sw-019-core`) and `/workspace/sw019-ui` (`feature/sw-019-ui`), both based on `431fa55`.
 
 ## PR review tracking
 
@@ -14,7 +14,7 @@ Issue #17 is implemented and independently QA-reviewed on PR #44. Implementation
 
 ## SW-019 in progress
 
-The correct GitHub issue is #19 (issue #18 is SW-007). SW-016 code/QA is available on draft PR #42 and is the direct roadmap dependency. Contract is frozen in pushed commit `431fa55` on `feature/sw-019-widget-templates`. Types: built-in resource shortcuts, recent launches, launch summary, and related resources; at most 20 templates and 50 dashboard instances, bounded profile-local references and dimensions. Widgets are dashboard-only inert app-rendered data views, persisted inside the existing layout, snapshot and manual archive shape; older layouts without widget data deserialize as empty. There are no scripts/arbitrary HTML/SQL/URLs/executable payloads. Core owns Rust validation/snapshot/archive handling; UI owns dashboard manager/rendering; root owns shared contract, integration and status; QA is currently available after completing #38/#41 review tracking. Three active subagent cap is enforced.
+The correct GitHub issue is #19 (issue #18 is SW-007). SW-016 code/QA is available on draft PR #42 and is the direct roadmap dependency. Contract is frozen on `feature/sw-019-widget-templates`: `431fa55` adds the typed contract, `3202298` aligns nested archive fields to camelCase, and `a20003a` enforces Dock-empty, widget x+w geometry and nonblank template names in the archive schema. Types: built-in resource shortcuts, recent launches, launch summary, and related resources; at most 20 templates and 50 dashboard instances, bounded profile-local references and dimensions. Widgets are dashboard-only inert app-rendered data views, persisted inside the existing layout, snapshot and manual archive shape; older layouts without widget data deserialize as empty. There are no scripts/arbitrary HTML/SQL/URLs/executable payloads. Independent contract QA confirmed the casing and called out runtime gates: globally unique template/instance IDs, valid template references, profile membership for resource IDs, plus old layout/archive/snapshot compatibility. Core owns Rust validation/snapshot/archive handling; UI owns dashboard manager/rendering; QA owns archive harness regressions; root owns integration/status. Three active subagent cap is enforced.
 
 ## Environment and gates
 

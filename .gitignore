@@ -40,3 +40,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.pyc
+apps/desktop/src-tauri/gen/

@@ -133,6 +133,7 @@ def validate_profile_archive(path: str | Path) -> dict[str, Any]:
         known_resource_ids = set(resource_ids)
         if not set(docs["profile.json"]["memberships"]).issubset(known_resource_ids):
             raise ProfileArchiveError("profile membership refers to an unknown resource")
+        profile_resource_ids = set(docs["profile.json"]["memberships"])
         profile = docs["profile.json"]
         sequence_ids: set[str] = set()
         sequence_step_ids: set[str] = set()
@@ -166,6 +167,37 @@ def validate_profile_archive(path: str | Path) -> dict[str, Any]:
                 raise ProfileArchiveError("layout refers to an unknown resource")
             if any(card["x"] + card["w"] > 12 for card in layout["cards"]):
                 raise ProfileArchiveError("layout card exceeds the 12-column grid")
+
+            templates = layout.get("widget_templates", [])
+            widgets = layout.get("widgets", [])
+            if layout.get("surface", "dashboard") == "dock" and (templates or widgets):
+                raise ProfileArchiveError("Dock layouts cannot contain widgets")
+            if any(widget["x"] + widget["w"] > 12 for widget in widgets):
+                raise ProfileArchiveError("widget exceeds the 12-column grid")
+            template_ids = [template["id"] for template in templates]
+            widget_ids = [widget["id"] for widget in widgets]
+            template_id_set = set(template_ids)
+            widget_id_set = set(widget_ids)
+            if len(template_ids) != len(template_id_set):
+                raise ProfileArchiveError("widget template IDs must be unique")
+            if len(widget_ids) != len(widget_id_set):
+                raise ProfileArchiveError("widget IDs must be unique")
+            if template_id_set & widget_id_set:
+                raise ProfileArchiveError("widget template and instance IDs must be distinct")
+
+            for template in templates:
+                if template["kind"] == "resource_shortcuts":
+                    referenced_resources = template["config"]["resourceIds"]
+                elif template["kind"] == "related_resources":
+                    referenced_resources = [template["config"]["resourceId"]]
+                else:
+                    referenced_resources = []
+                if any(resource_id not in profile_resource_ids for resource_id in referenced_resources):
+                    raise ProfileArchiveError("widget resource is not a profile member")
+
+            for widget in widgets:
+                if widget["templateId"] not in template_id_set:
+                    raise ProfileArchiveError("widget instance refers to an unknown template")
         for resource in resources:
             for target in resource["targets"]:
                 if target["kind"] == "url" and not target["value"].lower().startswith("https://"):

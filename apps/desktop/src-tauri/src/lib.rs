@@ -514,6 +514,10 @@ struct ProfilePackageLayout {
     surface: Option<String>,
     breakpoint: String,
     cards: Vec<ProfilePackageLayoutCard>,
+    #[serde(default)]
+    widget_templates: Vec<WidgetTemplate>,
+    #[serde(default)]
+    widgets: Vec<DashboardWidget>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1069,6 +1073,45 @@ fn validate_package_fields(package: &ValidatedProfilePackage) -> Result<(), AppE
                 return Err(package_error("invalid layout card"));
             }
         }
+        let template_ids = layout
+            .widget_templates
+            .iter()
+            .map(WidgetTemplate::id)
+            .collect::<std::collections::HashSet<_>>();
+        if layout.widget_templates.len() > 20
+            || layout.widgets.len() > 50
+            || (layout.surface.as_deref().unwrap_or("dashboard") == "dock"
+                && (!layout.widget_templates.is_empty() || !layout.widgets.is_empty()))
+        {
+            return Err(package_error("invalid widget layout count or surface"));
+        }
+        let structural_layout = DashboardLayout {
+            profile_id: package.profile.id.clone(),
+            surface: layout.surface.clone().unwrap_or_else(|| "dashboard".into()),
+            version: 1,
+            cards: Vec::new(),
+            widget_templates: layout.widget_templates.clone(),
+            widgets: layout.widgets.clone(),
+        };
+        // Archive cards are validated in their snake_case package representation above.
+        validate_layout(&structural_layout)
+            .map_err(|_| package_error("invalid widget template or instance"))?;
+        for template in &layout.widget_templates {
+            for resource_id in template.resource_ids() {
+                if !known_resources.contains(resource_id) || !membership_ids.contains(resource_id) {
+                    return Err(package_error(
+                        "widget references a resource outside the profile",
+                    ));
+                }
+            }
+        }
+        for widget in &layout.widgets {
+            if !template_ids.contains(widget.template_id.as_str()) {
+                return Err(package_error(
+                    "widget instance references an unknown template",
+                ));
+            }
+        }
     }
     if let Some(history) = &package.history {
         if history.events.len() > 100_000 {
@@ -1468,10 +1511,31 @@ fn profile_package_from_db(
                 card_type: card.card_type,
             })
             .collect();
+        let widget_templates = layout
+            .widget_templates
+            .into_iter()
+            .filter(|template| {
+                template
+                    .resource_ids()
+                    .into_iter()
+                    .all(|id| membership_set.contains(id))
+            })
+            .collect::<Vec<_>>();
+        let template_ids = widget_templates
+            .iter()
+            .map(WidgetTemplate::id)
+            .collect::<std::collections::HashSet<_>>();
+        let widgets = layout
+            .widgets
+            .into_iter()
+            .filter(|widget| template_ids.contains(widget.template_id.as_str()))
+            .collect();
         layouts.push(ProfilePackageLayout {
             surface: Some(surface),
             breakpoint: "desktop".into(),
             cards,
+            widget_templates,
+            widgets,
         });
     }
     let history = if include_history {
@@ -2432,6 +2496,51 @@ fn import_profile_workspace_sequences(
     Ok(imported)
 }
 
+fn remap_widget_template(
+    template: &WidgetTemplate,
+    resource_map: &std::collections::HashMap<String, String>,
+) -> Result<WidgetTemplate, AppError> {
+    let mapped = |resource_id: &str| {
+        resource_map
+            .get(resource_id)
+            .cloned()
+            .ok_or_else(|| package_error("widget resource mapping is missing"))
+    };
+    Ok(match template {
+        WidgetTemplate::ResourceShortcuts { id, name, config } => {
+            WidgetTemplate::ResourceShortcuts {
+                id: id.clone(),
+                name: name.clone(),
+                config: ResourceShortcutsConfig {
+                    resource_ids: config
+                        .resource_ids
+                        .iter()
+                        .map(|resource_id| mapped(resource_id))
+                        .collect::<Result<Vec<_>, _>>()?,
+                },
+            }
+        }
+        WidgetTemplate::RecentLaunches { id, name, config } => WidgetTemplate::RecentLaunches {
+            id: id.clone(),
+            name: name.clone(),
+            config: config.clone(),
+        },
+        WidgetTemplate::LaunchSummary { id, name, config } => WidgetTemplate::LaunchSummary {
+            id: id.clone(),
+            name: name.clone(),
+            config: config.clone(),
+        },
+        WidgetTemplate::RelatedResources { id, name, config } => WidgetTemplate::RelatedResources {
+            id: id.clone(),
+            name: name.clone(),
+            config: RelatedResourcesConfig {
+                resource_id: mapped(&config.resource_id)?,
+                limit: config.limit,
+            },
+        },
+    })
+}
+
 fn import_profile_package(
     conn: &mut Connection,
     package: &ValidatedProfilePackage,
@@ -2658,12 +2767,30 @@ fn import_profile_package(
                     })
             })
             .collect::<Vec<_>>();
+        let widget_templates = layout
+            .widget_templates
+            .iter()
+            .map(|template| remap_widget_template(template, &resource_map))
+            .collect::<Result<Vec<_>, _>>()?;
+        let known_widget_template_ids = widget_templates
+            .iter()
+            .map(WidgetTemplate::id)
+            .collect::<std::collections::HashSet<_>>();
+        let widgets = layout
+            .widgets
+            .iter()
+            .filter(|widget| known_widget_template_ids.contains(widget.template_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
         let value = DashboardLayout {
             profile_id: target_id.clone(),
             surface: surface.into(),
             version: 1,
             cards,
+            widget_templates,
+            widgets,
         };
+        validate_layout(&value).map_err(|_| package_error("imported widget layout is invalid"))?;
         let json = serde_json::to_string(&value)?;
         if strategy == "merge" {
             tx.execute("INSERT OR IGNORE INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5)", params![target_id, surface, value.version, json, now])?;
@@ -2861,6 +2988,97 @@ pub struct LayoutCard {
     pub card_type: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceShortcutsConfig {
+    pub resource_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecentLaunchesConfig {
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LaunchSummaryConfig {
+    pub period: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelatedResourcesConfig {
+    pub resource_id: String,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WidgetTemplate {
+    ResourceShortcuts {
+        id: String,
+        name: String,
+        config: ResourceShortcutsConfig,
+    },
+    RecentLaunches {
+        id: String,
+        name: String,
+        config: RecentLaunchesConfig,
+    },
+    LaunchSummary {
+        id: String,
+        name: String,
+        config: LaunchSummaryConfig,
+    },
+    RelatedResources {
+        id: String,
+        name: String,
+        config: RelatedResourcesConfig,
+    },
+}
+
+impl WidgetTemplate {
+    fn id(&self) -> &str {
+        match self {
+            Self::ResourceShortcuts { id, .. }
+            | Self::RecentLaunches { id, .. }
+            | Self::LaunchSummary { id, .. }
+            | Self::RelatedResources { id, .. } => id,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::ResourceShortcuts { name, .. }
+            | Self::RecentLaunches { name, .. }
+            | Self::LaunchSummary { name, .. }
+            | Self::RelatedResources { name, .. } => name,
+        }
+    }
+
+    fn resource_ids(&self) -> Vec<&str> {
+        match self {
+            Self::ResourceShortcuts { config, .. } => {
+                config.resource_ids.iter().map(String::as_str).collect()
+            }
+            Self::RelatedResources { config, .. } => vec![config.resource_id.as_str()],
+            Self::RecentLaunches { .. } | Self::LaunchSummary { .. } => Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DashboardWidget {
+    pub id: String,
+    pub template_id: String,
+    pub x: i64,
+    pub y: i64,
+    pub w: i64,
+    pub h: i64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DashboardLayout {
@@ -2868,6 +3086,10 @@ pub struct DashboardLayout {
     pub surface: String,
     pub version: i64,
     pub cards: Vec<LayoutCard>,
+    #[serde(default)]
+    pub widget_templates: Vec<WidgetTemplate>,
+    #[serde(default)]
+    pub widgets: Vec<DashboardWidget>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -5597,7 +5819,102 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
             ));
         }
     }
+    if layout.widget_templates.len() > 20 || layout.widgets.len() > 50 {
+        return Err(AppError::Invalid(
+            "layout exceeds widget template or instance limit".into(),
+        ));
+    }
+    if layout.surface == "dock"
+        && (!layout.widget_templates.is_empty() || !layout.widgets.is_empty())
+    {
+        return Err(AppError::Invalid(
+            "widgets are supported only on the dashboard".into(),
+        ));
+    }
+    let mut template_ids = std::collections::HashSet::with_capacity(layout.widget_templates.len());
+    for template in &layout.widget_templates {
+        if !is_valid_uuid(template.id())
+            || !template_ids.insert(template.id())
+            || template.name().trim().is_empty()
+            || template.name().chars().count() > 60
+        {
+            return Err(AppError::Invalid(
+                "widget template identity or name is invalid".into(),
+            ));
+        }
+        match template {
+            WidgetTemplate::ResourceShortcuts { config, .. } => {
+                if !(1..=12).contains(&config.resource_ids.len()) {
+                    return Err(AppError::Invalid(
+                        "resource shortcuts must contain 1 to 12 resources".into(),
+                    ));
+                }
+                let mut refs = std::collections::HashSet::new();
+                for resource_id in &config.resource_ids {
+                    if !is_valid_uuid(resource_id) || !refs.insert(resource_id) {
+                        return Err(AppError::Invalid(
+                            "resource shortcut references must be unique UUIDs".into(),
+                        ));
+                    }
+                }
+            }
+            WidgetTemplate::RecentLaunches { config, .. } if !(1..=20).contains(&config.limit) => {
+                return Err(AppError::Invalid(
+                    "recent launch limit must be between 1 and 20".into(),
+                ));
+            }
+            WidgetTemplate::LaunchSummary { config, .. }
+                if !matches!(config.period.as_str(), "7d" | "30d" | "all") =>
+            {
+                return Err(AppError::Invalid(
+                    "launch summary period is unsupported".into(),
+                ));
+            }
+            WidgetTemplate::RelatedResources { config, .. }
+                if !is_valid_uuid(&config.resource_id) || !(1..=12).contains(&config.limit) =>
+            {
+                return Err(AppError::Invalid(
+                    "related resources config is invalid".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut instance_ids = std::collections::HashSet::with_capacity(layout.widgets.len());
+    for widget in &layout.widgets {
+        if !is_valid_uuid(&widget.id)
+            || !instance_ids.insert(widget.id.as_str())
+            || !template_ids.contains(widget.template_id.as_str())
+            || widget.x < 0
+            || widget.x > 11
+            || widget.y < 0
+            || widget.y > 9999
+            || widget.w < 1
+            || widget.w > 12
+            || widget.h < 1
+            || widget.h > 100
+            || widget.x + widget.w > 12
+        {
+            return Err(AppError::Invalid(
+                "widget instance violates UUID, template, or grid bounds".into(),
+            ));
+        }
+    }
     Ok(())
+}
+
+fn widget_template_refs_belong_to_profile(
+    conn: &Connection,
+    profile_id: &str,
+    templates: &[WidgetTemplate],
+) -> Result<bool, AppError> {
+    let mut stmt = conn.prepare("SELECT EXISTS(SELECT 1 FROM resources r JOIN profile_resources pr ON pr.resource_id=r.id WHERE r.id=?1 AND pr.profile_id=?2)")?;
+    for resource_id in templates.iter().flat_map(WidgetTemplate::resource_ids) {
+        if stmt.query_row(params![resource_id, profile_id], |row| row.get::<_, i64>(0))? == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn layout_get_from_conn(
@@ -5633,6 +5950,8 @@ fn layout_get_from_conn(
             surface: surface.to_owned(),
             version: 1,
             cards: Vec::new(),
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         });
     };
     if json.len() > MAX_LAYOUT_BYTES {
@@ -5658,6 +5977,27 @@ fn layout_get_from_conn(
         }
     }
     filtered.cards = cards;
+    let mut active_templates = Vec::with_capacity(filtered.widget_templates.len());
+    for template in filtered.widget_templates.drain(..) {
+        let mut belongs = true;
+        for resource_id in template.resource_ids() {
+            if stmt.query_row(params![resource_id, profile_id], |row| row.get::<_, i64>(0))? == 0 {
+                belongs = false;
+                break;
+            }
+        }
+        if belongs {
+            active_templates.push(template);
+        }
+    }
+    let active_template_ids = active_templates
+        .iter()
+        .map(WidgetTemplate::id)
+        .collect::<std::collections::HashSet<_>>();
+    filtered
+        .widgets
+        .retain(|widget| active_template_ids.contains(widget.template_id.as_str()));
+    filtered.widget_templates = active_templates;
     Ok(filtered)
 }
 
@@ -5693,6 +6033,11 @@ fn layout_save_to_conn(
         }
     }
     drop(stmt);
+    if !widget_template_refs_belong_to_profile(&tx, &layout.profile_id, &layout.widget_templates)? {
+        return Err(AppError::Invalid(
+            "widget template contains a resource not assigned to this profile".into(),
+        ));
+    }
     tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![layout.profile_id,layout.surface,layout.version,json,now_utc()])?;
     tx.commit()?;
     Ok(layout.clone())
@@ -6094,6 +6439,18 @@ fn workspace_snapshot_restore_on_conn(
             missing.insert(resource_id.clone());
         }
     }
+    for template in snapshot
+        .dashboard
+        .widget_templates
+        .iter()
+        .chain(snapshot.dock.widget_templates.iter())
+    {
+        for resource_id in template.resource_ids() {
+            if !current.contains(resource_id) {
+                missing.insert(resource_id.to_owned());
+            }
+        }
+    }
     let mut restore_layout = |saved: &DashboardLayout| -> Result<(), AppError> {
         let existing = layout_get_from_conn(&tx, profile_id, &saved.surface)?;
         let saved_ids = saved
@@ -6114,11 +6471,54 @@ fn workspace_snapshot_restore_on_conn(
                 .into_iter()
                 .filter(|card| !saved_ids.contains(card.resource_id.as_str())),
         );
+        let saved_template_ids = saved
+            .widget_templates
+            .iter()
+            .map(WidgetTemplate::id)
+            .collect::<std::collections::HashSet<_>>();
+        let mut widget_templates = saved
+            .widget_templates
+            .iter()
+            .filter(|template| {
+                template
+                    .resource_ids()
+                    .into_iter()
+                    .all(|id| current.contains(id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        widget_templates.extend(
+            existing
+                .widget_templates
+                .into_iter()
+                .filter(|template| !saved_template_ids.contains(template.id())),
+        );
+        let template_ids = widget_templates
+            .iter()
+            .map(WidgetTemplate::id)
+            .collect::<std::collections::HashSet<_>>();
+        let saved_widget_ids = saved
+            .widgets
+            .iter()
+            .map(|widget| widget.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let mut widgets = saved
+            .widgets
+            .iter()
+            .filter(|widget| template_ids.contains(widget.template_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        widgets.extend(existing.widgets.into_iter().filter(|widget| {
+            !saved_widget_ids.contains(widget.id.as_str())
+                && template_ids.contains(widget.template_id.as_str())
+        }));
         let merged = DashboardLayout {
             profile_id: profile_id.to_owned(),
             surface: saved.surface.clone(),
             version: saved.version,
             cards,
+            widget_templates,
+            widgets,
         };
         let serialized = serde_json::to_string(&merged)?;
         if serialized.len() > MAX_LAYOUT_BYTES {
@@ -8761,6 +9161,9 @@ mod tests {
                         h: 2,
                         card_type: "icon".into(),
                     }],
+
+                    widget_templates: Vec::new(),
+                    widgets: Vec::new(),
                 }],
             },
             history: None,
@@ -9087,10 +9490,39 @@ mod tests {
     }
 
     #[test]
-    fn profile_export_import_roundtrip_preserves_smart_collections_and_old_packages_default_empty()
-    {
+    fn profile_export_import_roundtrip_preserves_smart_collections_widgets_and_old_packages_default_empty(
+    ) {
         let mut conn = database();
         let source_profile = profile(&conn);
+        let widget_resource = resource("Widget shortcut");
+        persist_resource(&mut conn, &widget_resource, true, Some(&source_profile)).unwrap();
+        let widget_template_id = Uuid::new_v4().to_string();
+        let widget_instance_id = Uuid::new_v4().to_string();
+        layout_save_to_conn(
+            &mut conn,
+            &DashboardLayout {
+                profile_id: source_profile.clone(),
+                surface: "dashboard".into(),
+                version: 1,
+                cards: Vec::new(),
+                widget_templates: vec![WidgetTemplate::ResourceShortcuts {
+                    id: widget_template_id.clone(),
+                    name: "Useful links".into(),
+                    config: ResourceShortcutsConfig {
+                        resource_ids: vec![widget_resource.id.clone()],
+                    },
+                }],
+                widgets: vec![DashboardWidget {
+                    id: widget_instance_id.clone(),
+                    template_id: widget_template_id,
+                    x: 0,
+                    y: 2,
+                    w: 6,
+                    h: 2,
+                }],
+            },
+        )
+        .unwrap();
         let source_collection = SmartCollection {
             id: Uuid::new_v4().to_string(),
             profile_id: source_profile.clone(),
@@ -9113,6 +9545,8 @@ mod tests {
             package.profile.smart_collections[0].filters,
             source_collection.filters
         );
+        assert_eq!(package.layouts.layouts[0].widget_templates.len(), 1);
+        assert_eq!(package.layouts.layouts[0].widgets[0].id, widget_instance_id);
 
         let mut old_package = package.clone();
         let mut old_profile_json = serde_json::to_value(&old_package.profile).unwrap();
@@ -9122,6 +9556,13 @@ mod tests {
             .remove("smart_collections");
         old_package.profile = serde_json::from_value(old_profile_json).unwrap();
         assert!(old_package.profile.smart_collections.is_empty());
+        let mut old_layouts_json = serde_json::to_value(&old_package.layouts).unwrap();
+        let layout = old_layouts_json["layouts"][0].as_object_mut().unwrap();
+        layout.remove("widget_templates");
+        layout.remove("widgets");
+        old_package.layouts = serde_json::from_value(old_layouts_json).unwrap();
+        assert!(old_package.layouts.layouts[0].widget_templates.is_empty());
+        assert!(old_package.layouts.layouts[0].widgets.is_empty());
         validate_package_fields(&old_package).unwrap();
 
         let imported = import_profile_package(&mut conn, &package, "duplicate", None).unwrap();
@@ -9131,6 +9572,18 @@ mod tests {
         assert_ne!(imported_collections[0].id, source_collection.id);
         assert_eq!(imported_collections[0].name, source_collection.name);
         assert_eq!(imported_collections[0].filters, source_collection.filters);
+        let imported_layout =
+            layout_get_from_conn(&conn, &imported.profile_id, "dashboard").unwrap();
+        let WidgetTemplate::ResourceShortcuts { config, .. } = &imported_layout.widget_templates[0]
+        else {
+            panic!("expected resource shortcut template")
+        };
+        assert_ne!(config.resource_ids[0], widget_resource.id);
+        assert_eq!(imported_layout.widgets[0].id, widget_instance_id);
+        assert_eq!(
+            imported_layout.widgets[0].template_id,
+            imported_layout.widget_templates[0].id()
+        );
     }
 
     #[test]
@@ -11533,6 +11986,9 @@ mod tests {
                 h: 2,
                 card_type: "compact".into(),
             }],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         let saved = layout_save_to_conn(&mut conn, &layout).unwrap();
         assert_eq!(saved.cards.len(), 1);
@@ -11552,6 +12008,113 @@ mod tests {
             .unwrap()
             .cards
             .is_empty());
+    }
+
+    #[test]
+    fn widget_layout_is_bounded_profile_scoped_and_dashboard_only() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let other_profile = profile(&conn);
+        let resource = resource("Allowed shortcut");
+        let outsider = resource("Outside profile");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &outsider, true, Some(&other_profile)).unwrap();
+
+        let template_id = Uuid::new_v4().to_string();
+        let template = WidgetTemplate::ResourceShortcuts {
+            id: template_id.clone(),
+            name: "Shortcuts".into(),
+            config: ResourceShortcutsConfig {
+                resource_ids: vec![resource.id.clone()],
+            },
+        };
+        let good = DashboardLayout {
+            profile_id: profile_id.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: Vec::new(),
+            widget_templates: vec![template.clone()],
+            widgets: vec![DashboardWidget {
+                id: Uuid::new_v4().to_string(),
+                template_id: template_id.clone(),
+                x: 11,
+                y: 9999,
+                w: 1,
+                h: 100,
+            }],
+        };
+        layout_save_to_conn(&mut conn, &good).unwrap();
+        assert_eq!(
+            layout_get_from_conn(&conn, &profile_id, "dashboard")
+                .unwrap()
+                .widgets,
+            good.widgets
+        );
+
+        let wrong_profile = DashboardLayout {
+            widget_templates: vec![WidgetTemplate::ResourceShortcuts {
+                id: Uuid::new_v4().to_string(),
+                name: "Cross-profile".into(),
+                config: ResourceShortcutsConfig {
+                    resource_ids: vec![outsider.id],
+                },
+            }],
+            widgets: Vec::new(),
+            ..good.clone()
+        };
+        assert!(layout_save_to_conn(&mut conn, &wrong_profile).is_err());
+
+        let dock_widget = DashboardLayout {
+            surface: "dock".into(),
+            ..good.clone()
+        };
+        assert!(validate_layout(&dock_widget).is_err());
+        let unknown_template = DashboardLayout {
+            widgets: vec![DashboardWidget {
+                template_id: Uuid::new_v4().to_string(),
+                ..good.widgets[0].clone()
+            }],
+            ..good.clone()
+        };
+        assert!(validate_layout(&unknown_template).is_err());
+        let overflow = DashboardLayout {
+            widgets: vec![DashboardWidget {
+                x: 11,
+                w: 2,
+                ..good.widgets[0].clone()
+            }],
+            ..good.clone()
+        };
+        assert!(validate_layout(&overflow).is_err());
+        let oversized = DashboardLayout {
+            widget_templates: vec![template; 21],
+            widgets: Vec::new(),
+            ..good.clone()
+        };
+        assert!(validate_layout(&oversized).is_err());
+    }
+
+    #[test]
+    fn widget_deserialization_rejects_unknown_kinds_and_config_fields() {
+        let unknown_kind = serde_json::json!({
+            "kind": "script", "id": Uuid::new_v4().to_string(),
+            "name": "unsafe", "config": {"source": "run"}
+        });
+        assert!(serde_json::from_value::<WidgetTemplate>(unknown_kind).is_err());
+        let unknown_config = serde_json::json!({
+            "kind": "resource_shortcuts", "id": Uuid::new_v4().to_string(),
+            "name": "links", "config": {
+                "resourceIds": [Uuid::new_v4().to_string()], "html": "<script/>"
+            }
+        });
+        assert!(serde_json::from_value::<WidgetTemplate>(unknown_config).is_err());
+        let malformed_old_layout = serde_json::json!({
+            "profileId": Uuid::new_v4().to_string(), "surface": "dashboard",
+            "version": 1, "cards": []
+        });
+        let old_layout: DashboardLayout = serde_json::from_value(malformed_old_layout).unwrap();
+        assert!(old_layout.widget_templates.is_empty());
+        assert!(old_layout.widgets.is_empty());
     }
 
     #[test]
@@ -11648,6 +12211,8 @@ mod tests {
         let later_resource = resource("Added later");
         persist_resource(&mut conn, &saved_resource, true, Some(&profile_id)).unwrap();
         persist_resource(&mut conn, &later_resource, true, Some(&profile_id)).unwrap();
+        let saved_template_id = Uuid::new_v4().to_string();
+        let later_template_id = Uuid::new_v4().to_string();
         let checkpoint_layout = DashboardLayout {
             profile_id: profile_id.clone(),
             surface: "dashboard".into(),
@@ -11660,6 +12225,23 @@ mod tests {
                 h: 1,
                 card_type: "compact".into(),
             }],
+
+            widget_templates: vec![WidgetTemplate::RelatedResources {
+                id: saved_template_id.clone(),
+                name: "Related at checkpoint".into(),
+                config: RelatedResourcesConfig {
+                    resource_id: saved_resource.id.clone(),
+                    limit: 4,
+                },
+            }],
+            widgets: vec![DashboardWidget {
+                id: Uuid::new_v4().to_string(),
+                template_id: saved_template_id.clone(),
+                x: 4,
+                y: 3,
+                w: 4,
+                h: 2,
+            }],
         };
         layout_save_to_conn(&mut conn, &checkpoint_layout).unwrap();
         let snapshot =
@@ -11667,6 +12249,7 @@ mod tests {
         assert_eq!(snapshot.name, "Planning");
         assert_eq!(snapshot.resource_ids.len(), 2);
         assert_eq!(snapshot.dashboard.cards[0].x, 2);
+        assert_eq!(snapshot.dashboard.widget_templates.len(), 1);
 
         let changed_layout = DashboardLayout {
             profile_id: profile_id.clone(),
@@ -11674,11 +12257,27 @@ mod tests {
             version: 1,
             cards: vec![LayoutCard {
                 resource_id: later_resource.id.clone(),
-                x: 20,
+                x: 7,
                 y: 20,
                 w: 1,
                 h: 1,
                 card_type: "icon".into(),
+            }],
+
+            widget_templates: vec![WidgetTemplate::ResourceShortcuts {
+                id: later_template_id.clone(),
+                name: "Added after checkpoint".into(),
+                config: ResourceShortcutsConfig {
+                    resource_ids: vec![later_resource.id.clone()],
+                },
+            }],
+            widgets: vec![DashboardWidget {
+                id: Uuid::new_v4().to_string(),
+                template_id: later_template_id.clone(),
+                x: 6,
+                y: 4,
+                w: 3,
+                h: 2,
             }],
         };
         layout_save_to_conn(&mut conn, &changed_layout).unwrap();
@@ -11705,6 +12304,19 @@ mod tests {
             .cards
             .iter()
             .any(|card| card.resource_id == later_resource.id));
+        assert!(layout
+            .widget_templates
+            .iter()
+            .any(|template| template.id() == saved_template_id));
+        assert!(layout
+            .widget_templates
+            .iter()
+            .any(|template| template.id() == later_template_id));
+        assert_eq!(
+            layout.widgets.len(),
+            2,
+            "snapshot restore preserves later widgets"
+        );
         let membership_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
@@ -11721,6 +12333,7 @@ mod tests {
         let profile_id = profile(&conn);
         let resource = resource("Will leave profile");
         persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let template_id = Uuid::new_v4().to_string();
         let layout = DashboardLayout {
             profile_id: profile_id.clone(),
             surface: "dashboard".into(),
@@ -11732,6 +12345,23 @@ mod tests {
                 w: 1,
                 h: 1,
                 card_type: "icon".into(),
+            }],
+
+            widget_templates: vec![WidgetTemplate::RelatedResources {
+                id: template_id.clone(),
+                name: "Formerly related".into(),
+                config: RelatedResourcesConfig {
+                    resource_id: resource.id.clone(),
+                    limit: 4,
+                },
+            }],
+            widgets: vec![DashboardWidget {
+                id: Uuid::new_v4().to_string(),
+                template_id,
+                x: 0,
+                y: 2,
+                w: 4,
+                h: 2,
             }],
         };
         layout_save_to_conn(&mut conn, &layout).unwrap();
@@ -11745,10 +12375,10 @@ mod tests {
         let restored =
             workspace_snapshot_restore_on_conn(&mut conn, &profile_id, &snapshot.id).unwrap();
         assert_eq!(restored.missing_resource_ids, vec![resource.id]);
-        assert!(layout_get_from_conn(&conn, &profile_id, "dashboard")
-            .unwrap()
-            .cards
-            .is_empty());
+        let restored_layout = layout_get_from_conn(&conn, &profile_id, "dashboard").unwrap();
+        assert!(restored_layout.cards.is_empty());
+        assert!(restored_layout.widget_templates.is_empty());
+        assert!(restored_layout.widgets.is_empty());
     }
 
     #[test]
@@ -11769,6 +12399,9 @@ mod tests {
                 h: 2,
                 card_type: "icon".into(),
             }],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         layout_save_to_conn(&mut conn, &prior).unwrap();
         let invalid = DashboardLayout {
@@ -11823,6 +12456,9 @@ mod tests {
             surface: "dashboard".into(),
             version: 1,
             cards: vec![card.clone()],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         let a_dock = DashboardLayout {
             profile_id: profile_a.clone(),
@@ -11877,6 +12513,9 @@ mod tests {
             surface: "dashboard".into(),
             version: 1,
             cards: vec![],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         layout_save_to_conn(&mut conn, &prior).unwrap();
         let invalid = DashboardLayout {
@@ -11928,6 +12567,9 @@ mod tests {
             surface: "dashboard".into(),
             version: 1,
             cards: vec![],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         layout_save_to_conn(&mut conn, &prior).unwrap();
         let oversized = DashboardLayout {
@@ -11942,6 +12584,9 @@ mod tests {
                 h: 1,
                 card_type: "x".repeat(MAX_LAYOUT_BYTES),
             }],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         assert!(serde_json::to_vec(&oversized).unwrap().len() > MAX_LAYOUT_BYTES);
         assert!(layout_save_to_conn(&mut conn, &oversized).is_err());
@@ -11971,6 +12616,9 @@ mod tests {
             surface: "dashboard".into(),
             version: 1,
             cards: vec![],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dashboard',1,?2,?3)", params![pid,serde_json::to_string(&wrong_identity).unwrap(),now_utc()]).unwrap();
         assert!(layout_get_from_conn(&conn, &pid, "dashboard").is_err());
@@ -11985,6 +12633,9 @@ mod tests {
             surface: "window".into(),
             version: 1,
             cards: vec![],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         assert!(validate_layout(&invalid).is_err());
         invalid.surface = "dock".into();
@@ -12002,6 +12653,9 @@ mod tests {
             surface: "dock".into(),
             version: 1,
             cards: vec![],
+
+            widget_templates: Vec::new(),
+            widgets: Vec::new(),
         };
         conn.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,'dock',2,?2,?3)", params![pid,serde_json::to_string(&valid).unwrap(),now_utc()]).unwrap();
         assert!(layout_get_from_conn(&conn, &valid.profile_id, "dock").is_err());

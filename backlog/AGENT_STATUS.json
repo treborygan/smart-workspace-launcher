@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T03:13:00Z",
+  "updated_at_utc": "2026-10-22T03:13:51Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "b47e916287cb569fa1dfaf9180b8e9669c90779b",
+    "head_sha": "84a9b74c7a61faa13650a8ee61690d1a7062c4a2",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 Core and UI now integrated at b47e916. Independent contract, Core and UI reviews PASS, including extended security QA for preview token replay/expiry/path binding, hostile ZIP/output cases, count/byte limits, structural Wasm caps, one compile/run, and SQLite lock boundaries. Frontend 17 files/137 tests, typecheck/build, Rust fmt, Cargo metadata, handoff and diff checks PASS. Rust app tests BLOCKED before compilation by missing GLib/GObject >=2.70; Windows GNU check BLOCKED by absent MinGW; release gate blocked. V1 blocked."
+    "review_status": "SW-021 Core and UI integrated; current branch/PR head 84a9b74. Independent contract, Core, UI and extended security reviews PASS. Frontend 17 files/137 tests, typecheck/build, Rust fmt, Cargo metadata, handoff and diff checks PASS. App Cargo tests BLOCKED before compilation by missing GLib/GObject >=2.70; no no-default-features route bypasses Tauri GTK dependencies. Windows GNU check BLOCKED by absent MinGW; release gate BLOCKED. SW-022 remains gated on SW-021 application tests. V1 BLOCKED."
   },
   "subagent_limit": 3,
   "agents": [
@@ -670,7 +670,7 @@
       "state": "OPEN",
       "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
       "base": "main",
-      "note": "Review and inline-thread APIs last refreshed 2026-10-22 03:03 UTC: both empty; independent static QA found no actionable blocker."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty; independent static QA found no actionable blocker."
     },
     {
       "number": 41,
@@ -679,7 +679,7 @@
       "state": "OPEN",
       "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
       "base": "feature/sw-014-action-sequences",
-      "note": "Review and inline-thread APIs last refreshed 2026-10-22 03:03 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty; independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during long CSV export."
     },
     {
       "number": 45,
@@ -704,9 +704,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "b47e916287cb569fa1dfaf9180b8e9669c90779b",
+      "head_sha": "84a9b74c7a61faa13650a8ee61690d1a7062c4a2",
       "base": "feature/sw-020-device-paths",
-      "note": "Draft PR includes integrated runtime and latest reviewed Core hardening. Contract/Core/UI/extended security QA pass. Frontend 137 tests/typecheck/build and Rust fmt/metadata/handoff pass. Rust app tests NOT_RUN/BLOCKED by GLib/GObject; Windows GNU check BLOCKED by MinGW. SW-021 remains in progress until an app test run; V1 blocked."
+      "note": "Open draft at 84a9b74, stacked on SW-020/PR #46. Contract/Core/UI/extended security reviews PASS. Frontend 137 tests/typecheck/build and Rust fmt/metadata/handoff pass. Rust app tests NOT_RUN/BLOCKED by missing GLib/GObject; --no-default-features does not avoid Tauri GTK dependencies. Windows GNU check BLOCKED by missing MinGW. SW-021 app-test gate remains; SW-022 gated; V1 BLOCKED."
     }
   ],
   "contract_commits": [

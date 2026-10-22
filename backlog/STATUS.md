@@ -8,8 +8,8 @@ SW-001..SW-011 are merged through PR #36; SW-013 is merged through PR #37. SW-01
 
 ## Active pull requests and review state
 
-- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs returned no submissions at 2026-10-22 02:47 UTC. Independent QA read-only review found no actionable blocker.
-- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs returned no submissions at 2026-10-22 02:47 UTC. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
+- PR #38 (SW-014) OPEN against `main`, head `fb22dff`; review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty. Independent QA read-only review found no actionable blocker.
+- PR #41 (SW-015) OPEN, stacked on #38, head `c4c8f47`; review and inline-thread APIs refreshed 2026-10-22 03:13 UTC: both empty. Independent QA read-only review found no actionable blocker; non-blocking scale concern: CSV export holds the shared DB lock while writing a potentially large unlimited-retention export.
 - PR #42 (SW-016) OPEN_DRAFT, stacked on #41/#38. Migration regression assertion is corrected for schema v10 in `d90204f`.
 - PR #43 (SW-017) OPEN_DRAFT, stacked on #42. Its branch includes SW-018 contract documents as an explicit base for the next feature.
 - PR #44 (SW-018) OPEN_DRAFT, stacked on #43. Implementation is on `feature/sw-018-discovery-import`; code head `1ec5a7a`.
@@ -25,7 +25,7 @@ SW-020 adds random per-user local device identity, device labels, approved-by-co
 
 ## SW-021 contract and implementation — issue #21
 
-The integrated SW-021 foundation adds schema v12, validated extension manifests, explicit grants, enablement and confirmed removal, with independent QA. It is registry/policy only; it does not run package code. The sandbox runtime contract was then frozen and independently QA-approved in commit `2ca5ea4`: exact `.swext` entries/size bounds; preview-bound package hashes; no Wasm imports or start sections; strict ABI and resource bounds; explicit user-only execution; capability-to-input-field schema pairing; UUID-ordered metadata within a 64 KiB serialized budget; and bounded text-only suggestions. See `docs/EXTENSION_SDK.md` and the extension schemas. Core works in `/workspace/sw021-runtime-core`; UI works in `/workspace/sw021-runtime-ui`. Their implementation is not yet integrated or verified. SW-021 remains in progress. V1 remains BLOCKED.
+SW-021 integrates schema v13 package storage, validated `.swext` review/install, explicit grants and enablement, an explicit-run Wasm sandbox, and the matching UI. Contract, Core, UI and extended security QA passed. Opaque one-use preview tokens, hostile package/output and profile tests, deterministic 64 KiB input/count truncation, Wasm structural caps, explicit compile/run, and SQLite lock boundaries are covered. Frontend typecheck, 17 files / 137 tests, production build, Rust formatting, Cargo metadata and handoff checks pass. The focused app Cargo tests are NOT_RUN/BLOCKED before crate compilation because this Debian host lacks GLib/GObject >=2.70. A read-only check confirmed `--no-default-features` does not avoid Tauri GTK dependencies; running the app-specific DB/IPC/runtime tests here would require a deliberate Core/Tauri split. Therefore SW-021 remains in progress and SW-022 remains gated. PR #47 is open draft at `84a9b74`, stacked on PR #46. V1 remains BLOCKED.
 
 ## Completed cross-platform implementation — SW-018 (issue #17)
 
@@ -51,7 +51,7 @@ The integrated SW-021 foundation adds schema v12, validated extension manifests,
 
 ## Verification and release status
 
-At 2026-10-22 03:03 UTC, PR #38 and #41 review and inline-thread APIs returned empty. Independent read-only QA found no actionable blocker; #41 has a non-blocking DB-lock duration concern during large CSV export.
+At 2026-10-22 03:13 UTC, GitHub review and inline-thread APIs returned empty for PR #38, #41, and #47. PR #47 is open, draft, and at head `84a9b74`. Independent read-only QA found no actionable blocker; #41 has a non-blocking DB-lock duration concern during large CSV export.
 
 - `npm ci --cache /tmp/swl-npm-cache` — PASS.
 - `npm run typecheck` — PASS.
@@ -70,9 +70,9 @@ Integrated SW-021 registry branch checks before runtime UI: `npm run typecheck` 
 
 ## Next executable tasks
 
-1. Continue SW-021 with a sandboxed extension runtime and permission-checked host API; do not mark issue #21 done or start dependent SW-022 until executable behavior and its tests pass.
-2. Continue tracking PR #38/#41 external review; refresh their review state and run blocked Rust tests on capable hosts.
-3. Continue SW-022..SW-025 in dependency order. Keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance.
+1. SW-021 runtime/UI implementation and independent security reviews are complete, but its app tests cannot compile here because Tauri pulls GLib/GObject/GTK. A read-only investigation confirmed `--no-default-features` does not bypass those dependencies; do not mark issue #21 done or start SW-022 until application-level tests pass.
+2. Continue tracking PR #38/#41 external reviews; latest review and inline-thread API refresh at 2026-10-22 03:13 UTC returned empty.
+3. Next action: run SW-021 focused Cargo tests on a host with GLib/GObject >=2.70, then continue SW-022..SW-025 in dependency order. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.
 
 Canonical agent state: [`AGENT_STATUS.json`](AGENT_STATUS.json). Session continuation: [`CODEX_RESUME.md`](../CODEX_RESUME.md).
 

@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DevicePathMapping, DevicePathMappingPreview, DevicePathMappingPreviewRequest, DynamicShortcut, ExtensionManifest, ExtensionPermissionUpdate, LaunchEvent, LaunchSource, LocalDeviceIdentity, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, RegisteredExtension, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DevicePathMapping, DevicePathMappingPreview, DevicePathMappingPreviewRequest, DynamicShortcut, ExtensionPackageInstallRequest, ExtensionPackagePreview, ExtensionPackagePreviewRequest, ExtensionPermissionUpdate, ExtensionRunResult, LaunchEvent, LaunchSource, LocalDeviceIdentity, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, RegisteredExtension, ResourceDuplicateRequest, ResourceImportCommitRequest, ResourceImportCommitResult, ResourceImportScanRequest, ResourceImportScanResult, ResourceMetadata, ResourcePatch, ResourceRelationship, ResourceRelocationPreview, ResourceRelocationPreviewRequest, ResourceRelocationResult, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -109,9 +109,13 @@ export const api = {
     if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
     return invokeTyped("extension_registry_list");
   },
-  async registerExtension(manifest: ExtensionManifest): Promise<RegisteredExtension> {
-    if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
-    return invokeTyped("extension_registry_register", { manifest });
+  async previewExtensionPackage(request: ExtensionPackagePreviewRequest): Promise<ExtensionPackagePreview> {
+    if (!isNative()) throw new Error("Extension package review is available in the desktop app.");
+    return invokeTyped("extension_package_preview", { request });
+  },
+  async installExtensionPackage(request: ExtensionPackageInstallRequest): Promise<RegisteredExtension> {
+    if (!isNative()) throw new Error("Extension package installation is available in the desktop app.");
+    return invokeTyped("extension_package_install", { request });
   },
   async setExtensionPermissions(update: ExtensionPermissionUpdate): Promise<RegisteredExtension> {
     if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
@@ -124,6 +128,10 @@ export const api = {
   async removeExtension(extensionId: string): Promise<void> {
     if (!isNative()) throw new Error("The extension registry is available in the desktop app.");
     return invokeTyped("extension_registry_remove", { extensionId });
+  },
+  async runExtension(extensionId: string, profileId: string): Promise<ExtensionRunResult> {
+    if (!isNative()) throw new Error("Extensions can only run in the desktop app.");
+    return invokeTyped("extension_registry_run", { extensionId, profileId });
   },
   async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
     if (isNative()) {

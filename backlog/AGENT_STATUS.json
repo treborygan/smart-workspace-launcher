@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T01:29:07Z",
+  "updated_at_utc": "2026-10-22T01:30:54Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-016-resource-graph"
+    "branch": "feature/sw-017-duplicate-relocation"
   },
   "active_pull_request": {
     "number": 42,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
     "state": "OPEN_DRAFT",
-    "head_sha": "5576a8f",
+    "head_sha": "c7630fc",
     "base": "feature/sw-015-usage-retention",
-    "review_status": "independent SW-016 QA passed on implementation head da34ebb; PR opened as draft because backend Rust regression tests cannot execute without GLib >=2.70; stacked behind SW-015 #41 and SW-014 #38"
+    "review_status": "SW-016 independent QA passed on implementation; awaiting external review; Rust tests blocked by missing GLib. PR #38/#41 dependency reviews remain pending."
   },
   "subagent_limit": 3,
   "agents": [
@@ -135,6 +135,39 @@
       "commit": null,
       "pr": 42,
       "task": "Independent QA passed on implementation head da34ebb: no blockers; backend Rust tests remain blocked before crate compilation by missing GLib."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-017 backend",
+      "branch": "feature/sw-017-duplicate-relocation",
+      "commit": null,
+      "pr": null,
+      "task": "Implement safe profile-local resource duplication and preview-bound path relocation with transactional validation/tests."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-017 UI",
+      "branch": "feature/sw-017-duplicate-relocation",
+      "commit": null,
+      "pr": null,
+      "task": "Implement typed duplicate and path relocation preview/confirm UI with tests/accessibility."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-017 independent QA",
+      "branch": "feature/sw-017-duplicate-relocation",
+      "commit": null,
+      "pr": null,
+      "task": "Independently review SW-017 profile scope, path matching, preview staleness, rollback, and no filesystem side effects."
     }
   ],
   "milestones": {
@@ -146,45 +179,29 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T01:25:21Z",
+    "at_utc": "2026-10-22T01:30:54Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64 host; Windows GNU target installed but MinGW compiler absent; GLib >=2.70 development files absent.",
     "results": [
       {
-        "command": "npm run typecheck && npm test -- --run && npm run frontend:build",
-        "result": "PASS on SW-016 implementation head da34ebb: typecheck; 13 files/97 tests; production build. Existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS."
+        "command": "npm run typecheck",
+        "result": "PASS on frozen SW-017 contract commit bff3cdd."
       },
       {
         "command": "git diff --check",
-        "result": "PASS."
+        "result": "PASS on SW-017 contract commit."
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS; schema/catalog/fixture consistency only, no application runtime proof."
+        "result": "PASS at SW-016 checkpoint; no compiled app/runtime/Windows tests."
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib resource_relationships_are_profile_scoped_undirected_and_unique -- --nocapture",
-        "result": "BLOCKED before application compilation because pkg-config cannot find GLib >=2.70 / glib-2.0.pc; SW-016 Rust regressions are authored but NOT RUN."
-      },
-      {
-        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED before application check because x86_64-w64-mingw32-gcc is unavailable."
-      },
-      {
-        "command": "Independent SW-016 QA",
-        "result": "PASS on implementation head da34ebb; no blocking findings. Reviewed profile isolation, edge validation, restore atomicity/non-deletion, missing references, graph cap, keyboard flow, and minimum contrast 4.72:1."
-      },
-      {
-        "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: real Windows 11 x64 acceptance and package evidence unavailable."
+        "command": "SW-016 verification",
+        "result": "PASS frontend typecheck, 13 files/97 tests, build, cargo fmt, diff check and handoff verifier; independent QA pass. Rust tests blocked by missing GLib; Windows target check blocked by missing MinGW."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Track reviews for SW-014 PR #38 and SW-015 PR #41 (both OPEN, no reviews/inline threads as of 2026-10-22); do not merge without reviewed dependency-order approval. SW-016 implementation is in draft PR #42 on feature/sw-016-resource-graph based on feature/sw-015-usage-retention; its native Rust tests are blocked by missing GLib. PR #39 was closed as superseded by #41. Continue SW-017..SW-025 cross-platform in dependency order. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Implement SW-017 on feature/sw-017-duplicate-relocation from frozen contract bff3cdd. Core/UI/QA are active on disjoint paths. SW-016 draft PR #42 remains open; SW-014 #38 and SW-015 #41 remain OPEN with no reviews/inline threads on 2026-10-22; PR #39 was closed as superseded. V1 remains BLOCKED without real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -269,7 +286,7 @@
       "issue": "SW-016",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
       "state": "OPEN_DRAFT",
-      "head_sha": "5576a8f",
+      "head_sha": "c7630fc",
       "base": "feature/sw-015-usage-retention",
       "note": "Independent QA passed; draft because native Rust backend tests are blocked by missing GLib >=2.70. Stacked on #41/#38."
     }

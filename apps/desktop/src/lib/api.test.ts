@@ -385,11 +385,22 @@ describe("duplicate and relocation API", () => {
     await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace\\..\\private", destinationPrefix: "D:\\Archive" })).rejects.toThrow("cannot contain . or ..");
   });
 
+  it("rejects equal or ancestor-overlapping source and destination prefixes", async () => {
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Work", destinationPrefix: "c:\\work\\Archive" })).rejects.toThrow("non-overlapping");
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Work\\Archive", destinationPrefix: "C:\\Work" })).rejects.toThrow("non-overlapping");
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Work", destinationPrefix: "C:\\Work" })).rejects.toThrow("non-overlapping");
+  });
+
+  it("matches the backend resource selection limit", async () => {
+    await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace", destinationPrefix: "D:\\Archive", resourceIds: Array.from({ length: 5001 }, (_, index) => `r${index}`) })).rejects.toThrow("1 and 5,000 resources");
+  });
+
   it("rejects changed targets and malformed prefixes without applying a partial relocation", async () => {
     const preview = await api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "C:\\Workspace", destinationPrefix: "D:\\Archive" });
     const resource = (await api.resources("p1")).find((item) => item.id === "a1")!;
     await api.update(resource.id, { targets: resource.targets.map((target) => ({ ...target, canonicalUri: "C:\\Moved\\Design review" })) });
     await expect(api.commitResourceRelocation(preview)).rejects.toThrow("Resources changed after the preview");
+    expect(Object.keys(localStorage).filter((key) => key.startsWith("swl-relocation-preview-")).length).toBe(0);
     expect((await api.resources("p1")).find((item) => item.id === "a2")?.targets[0].canonicalUri).toBe("C:\\Workspace\\Q3 Planning.xlsx");
     await expect(api.previewResourceRelocation({ profileId: "p1", sourcePrefix: "https://example.com", destinationPrefix: "D:\\Archive" })).rejects.toThrow("not a URL");
   });

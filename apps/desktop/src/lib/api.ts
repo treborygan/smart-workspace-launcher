@@ -39,6 +39,20 @@ function normalizeRelocationPath(path: string) {
   return { value: trimmed, separator, windows };
 }
 
+function relocationPrefixesOverlap(source: ReturnType<typeof normalizeRelocationPath>, destination: ReturnType<typeof normalizeRelocationPath>) {
+  if (source.windows !== destination.windows) return false;
+  const fold = (value: string) => source.windows ? value.toLocaleLowerCase("en-US") : value;
+  const isSameOrAncestor = (parent: string, child: string) => {
+    const normalizedParent = fold(parent);
+    const normalizedChild = fold(child);
+    return normalizedChild === normalizedParent
+      || (normalizedParent.endsWith(source.separator)
+        ? normalizedChild.startsWith(normalizedParent)
+        : normalizedChild.startsWith(`${normalizedParent}${source.separator}`));
+  };
+  return isSameOrAncestor(source.value, destination.value) || isSameOrAncestor(destination.value, source.value);
+}
+
 function replacePathPrefix(targetPath: string, sourcePrefix: string, destinationPrefix: string): string | null {
   const source = normalizeRelocationPath(sourcePrefix);
   const destination = normalizeRelocationPath(destinationPrefix);
@@ -182,11 +196,8 @@ export const api = {
     if (isNative()) return invokeTyped("resource_relocation_preview", { request });
     const source = normalizeRelocationPath(request.sourcePrefix);
     const destination = normalizeRelocationPath(request.destinationPrefix);
-    const equalPrefix = source.windows
-      ? source.value.toLocaleLowerCase("en-US") === destination.value.toLocaleLowerCase("en-US")
-      : source.value === destination.value;
-    if (equalPrefix) throw new Error("Choose a different destination path.");
-    if (request.resourceIds && (request.resourceIds.length === 0 || request.resourceIds.length > 1000)) throw new Error("Select between 1 and 1,000 resources, or clear the selection to include all matches.");
+    if (relocationPrefixesOverlap(source, destination)) throw new Error("Source and destination paths must be separate, non-overlapping paths.");
+    if (request.resourceIds && (request.resourceIds.length === 0 || request.resourceIds.length > 5000)) throw new Error("Select between 1 and 5,000 resources, or clear the selection to include all matches.");
     const selectedIds = request.resourceIds ? new Set(request.resourceIds) : undefined;
     const resources = await api.resources(request.profileId);
     if (selectedIds && resources.filter((resource) => selectedIds.has(resource.id)).length !== selectedIds.size) throw new Error("One or more selected resources are not assigned to this profile.");
@@ -213,6 +224,7 @@ export const api = {
     let stored: ResourceRelocationPreview | null = null;
     try { stored = JSON.parse(localStorage.getItem(previewKey) || "null") as ResourceRelocationPreview | null; } catch { /* expired/corrupt preview */ }
     if (!stored || JSON.stringify(stored) !== JSON.stringify(preview)) throw new Error("This relocation preview is no longer valid. Preview the changes again.");
+    localStorage.removeItem(previewKey);
     const current = await api.previewResourceRelocation({ profileId: preview.profileId, sourcePrefix: preview.sourcePrefix, destinationPrefix: preview.destinationPrefix, ...(preview.resourceIds ? { resourceIds: preview.resourceIds } : {}) });
     localStorage.removeItem(`swl-relocation-preview-${current.previewToken}`);
     if (!sameRelocationChanges(current, preview)) throw new Error("Resources changed after the preview. Review a new preview before applying relocation.");
@@ -235,7 +247,6 @@ export const api = {
       return changedResourceIds.has(resource.id) ? { ...resource, targets, updatedUtc: new Date().toISOString() } : resource;
     });
     writeDemo(next);
-    localStorage.removeItem(previewKey);
     return { updatedTargetCount: preview.changes.length, updatedResourceIds: [...changedResourceIds].sort() };
   },
   async remove(id: string, profileId?: string): Promise<void> {

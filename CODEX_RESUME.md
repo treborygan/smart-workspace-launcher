@@ -1,26 +1,42 @@
 # Resume Smart Workspace Launcher implementation
 
-## Current checkpoint — 2026-10-22 03:13 UTC
+## Current checkpoint — 2026-10-22 03:33 UTC
 
-Repository: `treborygan/smart-workspace-launcher`; worktree `/workspace/sw020-core`; branch `feature/sw-021-permissioned-extensions`; HEAD `84a9b74c7a61faa13650a8ee61690d1a7062c4a2` (pushed). Canonical status is `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. Current host is Debian 13 x86_64, not a Windows acceptance environment. No PowerShell, MinGW, WebView2 or real Windows 11 x64 is available. V1/SW-012 is BLOCKED.
+Repository `treborygan/smart-workspace-launcher`; coordinator `/workspace/sw020-core`; branch `feature/sw-021-permissioned-extensions`, code head `d5344b4241a19f5d0632478ab9a9d36124f4624d` (pushed). Canonical status is `backlog/AGENT_STATUS.json` and `backlog/STATUS.md`. PR #47 is open draft, stacked on PR #46/SW-020. Host is Debian 13 x86_64; no real Windows 11 x64, PowerShell, or MinGW. V1/SW-012 is BLOCKED.
 
-## PR review tracking
+## SW-014 / SW-015 review tracking
 
-- PR #38 / SW-014: open against `main`; latest GitHub review + inline-thread API refresh 2026-10-22 03:13 UTC returned no reviews or threads. Prior independent static QA found no actionable blocker.
-- PR #41 / SW-015: open stacked on #38; same API refresh returned no reviews or threads. Prior independent static QA found no actionable blocker; non-blocking concern: shared DB mutex may be held during long CSV export.
-- PR #47 / SW-021: open draft at current head `84a9b74`, stacked on PR #46 / SW-020. GitHub review/thread APIs returned empty. PR body has current scope, evidence and blockers.
+Latest connected GitHub review + inline-thread API refresh for PR #38 (SW-014) and #41 (SW-015) at 2026-10-22 03:13 UTC returned no reviews or threads. Prior independent static QA found no actionable blocker. PR #41 retains a non-blocking concern that long CSV export may hold the shared database mutex. Do not merge stacked PRs ahead of dependency order.
 
-## SW-021 gate
+## SW-021 progress and native test setup
 
-The runtime, package checks and UI are integrated and independent contract/Core/UI/security reviews pass. Frontend typecheck, 17 files / 137 tests, production build, Rust format, Cargo metadata, handoff check and diff check passed. The Cargo extension tests remain NOT_RUN/BLOCKED before application compilation because GLib/GObject >=2.70 development files are missing. A read-only investigation confirmed that `--no-default-features` still reaches Tauri GTK system dependencies; testing these app-specific DB/command/runtime paths here would require a deliberate Core/Tauri split, not a flag tweak. Windows GNU check is blocked by missing MinGW. Do not mark SW-021 complete or start dependent SW-022 until focused application Rust tests pass on a capable host.
+The permissioned Wasm runtime/UI are integrated. Native app tests could not start until the host lacked GLib/GObject, so Debian Tauri dependencies were downloaded/extracted under `/tmp/swl-sysroot` using the Docker CLI. `pkg-config` confirms GLib/GObject 2.84.4, GTK 3.24.49, WebKitGTK 2.54.0 and AppIndicator 0.5.94. For Rust commands set:
 
-SW-021 runtime hardening includes opaque one-use five-minute path/digest-bound preview tokens, hostile ZIP/output/pointer/profile coverage, byte/count truncation, Wasm structural caps, explicit compile/run and no SQLite mutex during parsing or guest execution. PR #47 documents detailed test commands and results.
+- `PKG_CONFIG_SYSROOT_DIR=/tmp/swl-sysroot`
+- `PKG_CONFIG_LIBDIR=/tmp/swl-sysroot/usr/lib/x86_64-linux-gnu/pkgconfig:/tmp/swl-sysroot/usr/lib/pkgconfig:/tmp/swl-sysroot/usr/share/pkgconfig`
+- `LD_LIBRARY_PATH=/tmp/swl-sysroot/usr/lib/x86_64-linux-gnu:/tmp/swl-sysroot/lib/x86_64-linux-gnu:/tmp/swl-sysroot/usr/lib`
+- prepend `/tmp/swl-sysroot/usr/bin` to PATH; `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0` to stay within disk budget.
+
+On coordinator code head `d5344b4`:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
+- `git diff --check` — PASS.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` — PASS, 13/13.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib` — PASS, 2/2 on Linux.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — FAIL, 90 passed / 25 failed. The app test target compiles now. Full output: `/tmp/sw021-full-integrated.log`.
+
+Full-suite triage: most failures are bad/nonportable fixtures (invalid `calc.exe` URL fixtures, Windows path fixtures, search events missing profile IDs); other cases need semantic review. Potential product defects include workspace sequence unknown-handoff recovery and stop-at-first-failure; relocation expectation needs canonical trailing-separator verification. SW-022 stays gated until these failures are fixed/classified and the full suite is acceptable. SW-018 Windows reparse checks are restored on capability/no-follow metadata; independent QA PASS. The cfg(windows) junction test is NOT_RUN here.
+
+Core suite remediation is active in isolated worktree `/workspace/sw021-suite-fixes`, branch `feature/sw021-suite-fixes`, based on d5344b4. Root owns integration/status. No cross-agent edits to shared contracts/status files. Review its changes independently, integrate only in dependency order, rerun focused and full tests, then update PR #47 and canonical status.
+
+## PR #47
+
+PR body was updated after pushing d5344b4 with exact focused/full test results, remaining failures, and Windows blockers. Keep draft. Latest independent review/thread check for #47 was empty. `gh pr view`/`gh api` CLI requests return Forbidden; connected GitHub app tools work.
 
 ## Next actions
 
-1. Provide/use a Linux host with GLib/GObject >=2.70 and run `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib`; record exact result.
-2. If it passes, complete SW-021 status and proceed with SW-022 after SW-020/SW-021 dependency checks. Keep each feature stacked and reviewed.
-3. Continue refreshing PR #38/#41 external reviews; do not merge the stack out of order.
-4. Keep Windows V1 blocked until real Windows 11 x64 acceptance; no EXE/READY claim or release without it.
+1. Finish `/workspace/sw021-suite-fixes` full-suite remediation, preserving capability-relative no-follow/reparse safety; run independent review.
+2. Push/reconcile fixes to PR #47 and update `backlog/AGENT_STATUS.json`, `backlog/STATUS.md`, and this file. SW-022 follows only after dependencies and Rust test gate.
+3. Keep Windows V1 blocked until real Windows 11 x64 acceptance, tested portable package and release evidence. No EXE/READY claim.
 
-No GitHub Actions were added. Latest review refresh used the connected GitHub review and thread APIs; local `gh pr view` GraphQL and `gh api` REST calls returned `Forbidden` in this runtime.
+No GitHub Actions were added. No schedule/background continuation is active.

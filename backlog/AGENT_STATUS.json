@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T03:13:51Z",
+  "updated_at_utc": "2026-10-22T03:33:53Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "84a9b74c7a61faa13650a8ee61690d1a7062c4a2",
+    "head_sha": "d5344b4241a19f5d0632478ab9a9d36124f4624d",
     "base": "feature/sw-020-device-paths",
-    "review_status": "SW-021 Core and UI integrated; current branch/PR head 84a9b74. Independent contract, Core, UI and extended security reviews PASS. Frontend 17 files/137 tests, typecheck/build, Rust fmt, Cargo metadata, handoff and diff checks PASS. App Cargo tests BLOCKED before compilation by missing GLib/GObject >=2.70; no no-default-features route bypasses Tauri GTK dependencies. Windows GNU check BLOCKED by absent MinGW; release gate BLOCKED. SW-022 remains gated on SW-021 application tests. V1 BLOCKED."
+    "review_status": "SW-021 runtime/UI integrated. Native Debian sysroot now permits application tests. Focused extension tests PASS 13/13; directory scanner tests PASS 2/2; formatting/diff PASS. Full Rust library suite compiles but FAILS 90 passed / 25 failed across older fixtures/semantics; independent triage found invalid Windows/archive fixtures plus unresolved sequence recovery/stop and relocation checks. Current PR code head d5344b4 has independent security QA PASS for capability-relative Windows reparse/junction rejection; Windows-only test NOT_RUN. SW-022 gated until full suite/behavior triage. V1 BLOCKED."
   },
   "subagent_limit": 3,
   "agents": [
@@ -388,6 +388,17 @@
       "commit": null,
       "pr": 47,
       "task": "Initial extended pass found missing structural complexity caps and app-wide DB lock held during package parse/run. Remediation commit d23d008 reviewed independently PASS; Core parsing/execution now occurs outside DB lock with explicit Wasm caps."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "ACTIVE",
+      "issue": "SW-021 integration test suite",
+      "branch": "feature/sw021-suite-fixes",
+      "commit": null,
+      "pr": 47,
+      "task": "Resolve/triage full Rust suite (90 passed/25 failed); fix valid fixtures and review sequence/relocation behavior, preserving SW-018 no-follow/reparse security."
     }
   ],
   "milestones": {
@@ -399,181 +410,53 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T03:12:00Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
+    "at_utc": "2026-10-22T03:33:00Z",
+    "environment": "Debian 13 x86_64, Rust 1.99.1 stable, Tauri prerequisites from Debian trixie extracted under /tmp/swl-sysroot; PKG_CONFIG_SYSROOT_DIR and LD_LIBRARY_PATH pointed there. No Windows 11 x64 or MinGW.",
     "results": [
       {
-        "command": "npm ci --cache /tmp/swl-npm-cache",
-        "result": "PASS on integrated PR #46 branch head 2216bd6."
-      },
-      {
-        "command": "npm run typecheck",
-        "result": "PASS on integrated SW-021 coordinator head `6073856`."
-      },
-      {
-        "command": "npm test -- --run",
-        "result": "PASS, 17 files / 132 tests on integrated SW-021 coordinator head `6073856`."
-      },
-      {
-        "command": "npm run frontend:build",
-        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS on integrated SW-021 branch."
+        "result": "PASS after native test compile fixes and Windows reparse-point fix."
       },
       {
         "command": "git diff --check",
-        "result": "PASS on integrated SW-021 branch."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS including extension manifest schema/fixture consistency; not app runtime proof."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib",
-        "result": "BLOCKED before project compilation because glib-2.0.pc / GLib >=2.70 development files are missing (exit 101); Rust tests authored but NOT_RUN."
-      },
-      {
-        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED during bundled SQLite build because x86_64-w64-mingw32-gcc is absent (exit 101)."
-      },
-      {
-        "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED; NOT READY: BLOCKED (exit 2)."
-      },
-      {
-        "command": "Independent SW-020 UI/Core review",
-        "result": "PASS after fixes for preview staleness, delete confirmation focus, and Unicode case-insensitive path matching; no remaining static blocker. No Windows certification."
-      },
-      {
-        "command": "PR #38/#41 review and inline-thread APIs",
-        "result": "EMPTY for both PRs at 2026-10-22 02:14 UTC; independent read-only QA found no actionable blocker; no comments or review requests sent."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_registry --lib",
-        "result": "BLOCKED before application compilation: glib-2.0.pc / GLib >=2.70 development files missing (exit 101); authored Rust tests NOT_RUN."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS on frozen SW-021 runtime contract commit 2ca5ea4; validates JSON schemas and valid fixtures but is not runtime proof."
-      },
-      {
-        "command": "git diff --check",
-        "result": "PASS on frozen SW-021 runtime contract commit 2ca5ea4."
-      },
-      {
-        "command": "npm run typecheck",
-        "result": "PASS after SW-021 runtime UI integration at 4041757."
-      },
-      {
-        "command": "npm test -- --run",
-        "result": "PASS, 17 files / 137 tests after SW-021 runtime UI integration at 4041757."
-      },
-      {
-        "command": "npm run frontend:build",
-        "result": "PASS after SW-021 runtime UI integration; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "git diff --check",
-        "result": "PASS after SW-021 runtime UI integration at 4041757."
-      },
-      {
-        "command": "Independent SW-021 UI review",
-        "result": "PASS; UI branch ef67dfd reviewed for stale preview/install tokens, permissions, profile result scope, inert text output, accessible errors/focus and tests."
-      },
-      {
-        "command": "Independent SW-021 Core review on b8a48ff",
-        "result": "BLOCKED pending fixes for P2: install preview token is derivable from public digest, hostile ZIP/output regression coverage is incomplete, and byte budget can be exceeded after setting truncated=true. Core is remediating; no integration yet."
-      },
-      {
-        "command": "npm run typecheck",
-        "result": "PASS on integrated SW-021 runtime branch."
-      },
-      {
-        "command": "npm test -- --run",
-        "result": "PASS, 17 files / 137 tests on integrated SW-021 runtime branch."
-      },
-      {
-        "command": "npm run frontend:build",
-        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS on integrated SW-021 runtime branch."
-      },
-      {
-        "command": "cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1",
-        "result": "PASS on integrated SW-021 runtime branch."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS schema/fixture checks only; no compiled app/runtime proof."
+        "result": "PASS on integrated local head d5344b4."
       },
       {
         "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
-        "result": "BLOCKED before project compilation: glib-2.0.pc and gobject-2.0.pc >=2.70 absent, PKG_CONFIG_PATH unset (exit 101); authored Rust test matrix NOT_RUN."
+        "result": "PASS, 13 passed, 0 failed. Application Rust test target compiled and executed."
       },
       {
-        "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: NOT READY: BLOCKED (exit 2)."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib",
+        "result": "PASS, 2 passed, 0 failed on Linux. Windows junction regression is cfg(windows) and NOT_RUN."
       },
       {
-        "command": "Independent SW-021 Core remediation review",
-        "result": "PASS after opaque five-minute one-time path/digest preview tokens, adversarial package/output/pointer/profile tests, and exact byte/count metadata truncation tests. Rust app tests remain unrun due GLib/GObject."
-      },
-      {
-        "command": "Independent SW-021 UI review",
-        "result": "PASS; preview/install token freshness, default-disabled grants, explicit run, profile-scoped inert text output, accessibility and errors reviewed."
-      },
-      {
-        "command": "Independent extended SW-021 security review",
-        "result": "P2 blockers found: add Wasm structural complexity bounds beyond module byte size and do not hold app-wide SQLite mutex during package parsing/validation, compilation, guest execution or output parsing. Core remediation active; not ready to merge."
-      },
-      {
-        "command": "npm run typecheck",
-        "result": "PASS on integrated Core/UI SW-021 head b47e916."
-      },
-      {
-        "command": "npm test -- --run",
-        "result": "PASS, 17 files / 137 tests on integrated Core/UI SW-021 head b47e916."
-      },
-      {
-        "command": "npm run frontend:build",
-        "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS on integrated SW-021 head."
-      },
-      {
-        "command": "cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1",
-        "result": "PASS on integrated SW-021 head."
-      },
-      {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS schema/fixture consistency only; no compiled app/runtime proof."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
-        "result": "BLOCKED before app crate compilation: glib-2.0.pc and gobject-2.0.pc >=2.70 are missing and PKG_CONFIG_PATH is unset (exit 101); authored Rust tests NOT_RUN."
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "FAIL, 90 passed / 25 failed. Full target compiles. Failures include path/archive fixtures, profile imports, launch/search behavior, relocation expectation, and sequence recovery/stop behavior. Independent triage: several fixture defects and sequence/relocation behavior unresolved; do not call suite green. Full output /tmp/sw021-full-integrated.log."
       },
       {
         "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED while compiling bundled SQLite: x86_64-w64-mingw32-gcc is missing (exit 101). No Windows runtime acceptance."
+        "result": "BLOCKED: x86_64-w64-mingw32-gcc unavailable; Windows-only reparse test not compiled/run."
+      },
+      {
+        "command": "Independent contract/Core/UI/security review",
+        "result": "PASS for SW-021 runtime and d0f0160 reparse handling; reviewer says Windows junction test still requires real Windows execution."
+      },
+      {
+        "command": "PR #38/#41 GitHub review and inline-thread APIs",
+        "result": "EMPTY for both at 2026-10-22 03:13 UTC; independent static QA found no actionable blocker. PR #41 CSV export shared DB-lock duration remains non-blocking."
+      },
+      {
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS, handoff/schema/fixture consistency only; no compiled/runtime proof."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: NOT READY: BLOCKED (exit 2)."
-      },
-      {
-        "command": "Independent SW-021 extended Core security QA",
-        "result": "PASS on d23d008: structural caps, no tables/tags/unknown sections, one Wasmi compile/run, no DB lock during package validation or guest execution; previous token, ZIP, outputs and truncation fixes retained. Native tests blocked by GLib/GObject."
+        "result": "BLOCKED / NOT READY (exit 2). V1 remains blocked."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "SW-021 code is integrated and reviewed, but keep issue/PR in progress until Rust application tests can run on a supported host. Current host blocks Cargo before crate compile for missing GLib/GObject; Windows GNU check lacks MinGW. Keep SW-022/SW-023/SW-024 gated on SW-021 completion. Latest PR #38/#41 review/thread APIs at 2026-10-22 03:03 UTC returned empty; independent QA has no actionable blocker; #41 lock-duration concern remains non-blocking. V1 stays BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Fix or accurately classify full Rust suite failures (90 pass/25 fail); focused SW-021 13 tests and scanner 2 tests pass. Core is working in isolated worktree feature/sw021-suite-fixes from d5344b4. Keep SW-022 gated until full suite and sequence recovery/relocation behavior are resolved. PR #38/#41 review/thread APIs last refreshed 2026-10-22 03:13 UTC returned empty. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -704,9 +587,9 @@
       "issue": "SW-021",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
       "state": "OPEN_DRAFT",
-      "head_sha": "84a9b74c7a61faa13650a8ee61690d1a7062c4a2",
+      "head_sha": "d5344b4241a19f5d0632478ab9a9d36124f4624d",
       "base": "feature/sw-020-device-paths",
-      "note": "Open draft at 84a9b74, stacked on SW-020/PR #46. Contract/Core/UI/extended security reviews PASS. Frontend 137 tests/typecheck/build and Rust fmt/metadata/handoff pass. Rust app tests NOT_RUN/BLOCKED by missing GLib/GObject; --no-default-features does not avoid Tauri GTK dependencies. Windows GNU check BLOCKED by missing MinGW. SW-021 app-test gate remains; SW-022 gated; V1 BLOCKED."
+      "note": "Open draft stacked on SW-020/PR #46. Current code head d5344b4. SW-021 focused tests PASS 13/13; scanner PASS 2/2; full Rust library suite compiles but FAILS 90/25. Contract/Core/UI/security QA PASS including Windows reparse fix. Full suite remediation active; SW-022 gated. Windows junction test NOT_RUN; V1 BLOCKED."
     }
   ],
   "contract_commits": [

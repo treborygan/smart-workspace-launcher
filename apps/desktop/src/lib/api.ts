@@ -1,5 +1,5 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
-import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult } from "@sw/contracts";
+import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, ResourceRelationship, SmartCollection, UsageExportResult, UsageFilter, UsageQuery, UsageSettings, WorkspaceSequence, WorkspaceSequenceRunResult, WorkspaceSnapshot, WorkspaceSnapshotRestoreResult } from "@sw/contracts";
 import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
@@ -117,6 +117,7 @@ export const api = {
   async remove(id: string, profileId?: string): Promise<void> {
     if (isNative()) { await invokeTyped("resource_delete", { id }); await notifyWorkspaceChanged(profileId); return; }
     writeDemo(readDemo().filter((r) => r.id !== id));
+    if (profileId) localStorage.setItem(`swl-resource-relationships-${profileId}`, JSON.stringify((await api.resourceRelationships(profileId)).filter((edge) => edge.sourceResourceId !== id && edge.targetResourceId !== id)));
   },
   async launch(id: string, source: LaunchSource = "dashboard", profileId?: string, targetId?: string): Promise<LaunchResult> {
     if (isNative()) { const result = await invokeTyped("resource_launch", { request: { requestId: crypto.randomUUID(), resourceId: id, source, profileId, ...(targetId ? { targetId } : {}) } }); if (result.status !== "failed") await notifyWorkspaceChanged(profileId); return result; }
@@ -224,6 +225,50 @@ export const api = {
   async deleteWorkspaceSequence(profileId: string, id: string): Promise<void> {
     if (isNative()) { await invokeTyped("workspace_sequence_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
     localStorage.setItem(`swl-workspace-sequences-${profileId}`, JSON.stringify((await api.workspaceSequences(profileId)).filter((item) => item.id !== id)));
+  },
+  async resourceRelationships(profileId: string): Promise<ResourceRelationship[]> {
+    if (isNative()) return invokeTyped("resource_relationship_list", { profileId });
+    try { return JSON.parse(localStorage.getItem(`swl-resource-relationships-${profileId}`) || "[]") as ResourceRelationship[]; } catch { return []; }
+  },
+  async saveResourceRelationship(relationship: ResourceRelationship): Promise<ResourceRelationship> {
+    if (isNative()) { const saved = await invokeTyped("resource_relationship_save", { relationship }); await notifyWorkspaceChanged(relationship.profileId); return saved; }
+    const current = await api.resourceRelationships(relationship.profileId);
+    const samePair = (item: ResourceRelationship) => (item.sourceResourceId === relationship.sourceResourceId && item.targetResourceId === relationship.targetResourceId) || (item.sourceResourceId === relationship.targetResourceId && item.targetResourceId === relationship.sourceResourceId);
+    if (current.some((item) => item.id !== relationship.id && samePair(item))) throw new Error("These resources are already linked.");
+    const next = current.some((item) => item.id === relationship.id) ? current.map((item) => item.id === relationship.id ? relationship : item) : [...current, relationship];
+    localStorage.setItem(`swl-resource-relationships-${relationship.profileId}`, JSON.stringify(next)); return relationship;
+  },
+  async deleteResourceRelationship(profileId: string, id: string): Promise<void> {
+    if (isNative()) { await invokeTyped("resource_relationship_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
+    localStorage.setItem(`swl-resource-relationships-${profileId}`, JSON.stringify((await api.resourceRelationships(profileId)).filter((item) => item.id !== id)));
+  },
+  async workspaceSnapshots(profileId: string): Promise<WorkspaceSnapshot[]> {
+    if (isNative()) return invokeTyped("workspace_snapshot_list", { profileId });
+    try { return JSON.parse(localStorage.getItem(`swl-workspace-snapshots-${profileId}`) || "[]") as WorkspaceSnapshot[]; } catch { return []; }
+  },
+  async createWorkspaceSnapshot(profileId: string, name: string): Promise<WorkspaceSnapshot> {
+    if (isNative()) { const snapshot = await invokeTyped("workspace_snapshot_create", { profileId, name }); await notifyWorkspaceChanged(profileId); return snapshot; }
+    const normalizedName = name.trim();
+    if (!normalizedName || normalizedName.length > 100) throw new Error("Snapshot name must contain 1 to 100 characters.");
+    const [resources, dashboard, dock, snapshots] = await Promise.all([api.resources(profileId), api.layout(profileId), api.layout(profileId, "dock"), api.workspaceSnapshots(profileId)]);
+    if (snapshots.length >= 100) throw new Error("A profile can keep up to 100 workspace snapshots.");
+    if (snapshots.some((item) => item.name.toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) throw new Error("A snapshot with this name already exists.");
+    const blank = (surface: DashboardLayout["surface"]): DashboardLayout => ({ profileId, surface, version: 1, cards: [] });
+    const snapshot: WorkspaceSnapshot = { id: crypto.randomUUID(), profileId, name: normalizedName, createdUtc: new Date().toISOString(), resourceIds: resources.map((item) => item.id), dashboard: dashboard || blank("dashboard"), dock: dock || blank("dock") };
+    localStorage.setItem(`swl-workspace-snapshots-${profileId}`, JSON.stringify([...snapshots, snapshot])); return snapshot;
+  },
+  async deleteWorkspaceSnapshot(profileId: string, id: string): Promise<void> {
+    if (isNative()) { await invokeTyped("workspace_snapshot_delete", { profileId, id }); await notifyWorkspaceChanged(profileId); return; }
+    localStorage.setItem(`swl-workspace-snapshots-${profileId}`, JSON.stringify((await api.workspaceSnapshots(profileId)).filter((item) => item.id !== id)));
+  },
+  async restoreWorkspaceSnapshot(profileId: string, id: string): Promise<WorkspaceSnapshotRestoreResult> {
+    if (isNative()) { const result = await invokeTyped("workspace_snapshot_restore", { profileId, id }); await notifyWorkspaceChanged(profileId); return result; }
+    const snapshot = (await api.workspaceSnapshots(profileId)).find((item) => item.id === id);
+    if (!snapshot) throw new Error("Workspace snapshot was not found.");
+    const ids = new Set((await api.resources(profileId)).map((item) => item.id));
+    const restore = (layout: DashboardLayout) => ({ ...layout, cards: layout.cards.filter((card) => ids.has(card.resourceId)) });
+    await Promise.all([api.saveLayout(restore(snapshot.dashboard)), api.saveLayout(restore(snapshot.dock))]);
+    return { snapshotId: id, restoredLayouts: 2, missingResourceIds: snapshot.resourceIds.filter((resourceId) => !ids.has(resourceId)) };
   },
   async runWorkspaceSequence(profileId: string, id: string, requestId: string = crypto.randomUUID()): Promise<WorkspaceSequenceRunResult> {
     if (isNative()) return invokeTyped("workspace_sequence_run", { profileId, id, requestId });

@@ -196,6 +196,10 @@ const MAX_SMART_COLLECTIONS_PER_PROFILE: i64 = 100;
 const MAX_DYNAMIC_SHORTCUTS_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SEQUENCES_PER_PROFILE: i64 = 100;
 const MAX_WORKSPACE_SEQUENCE_STEPS: usize = 20;
+const MAX_RESOURCE_RELATIONSHIPS_PER_PROFILE: i64 = 500;
+const MAX_WORKSPACE_SNAPSHOTS_PER_PROFILE: i64 = 100;
+const MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS: usize = 5_000;
+const MAX_WORKSPACE_SNAPSHOT_BYTES: usize = 1_048_576;
 const PROFILE_ARCHIVE_MAX_COMPRESSED: u64 = 32 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_TOTAL: u64 = 128 * 1024 * 1024;
 const PROFILE_ARCHIVE_MAX_ENTRY: u64 = 32 * 1024 * 1024;
@@ -2763,6 +2767,36 @@ pub struct DashboardLayout {
     pub cards: Vec<LayoutCard>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceRelationship {
+    pub id: String,
+    pub profile_id: String,
+    pub source_resource_id: String,
+    pub target_resource_id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceSnapshot {
+    pub id: String,
+    pub profile_id: String,
+    pub name: String,
+    pub created_utc: String,
+    pub resource_ids: Vec<String>,
+    pub dashboard: DashboardLayout,
+    pub dock: DashboardLayout,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceSnapshotRestoreResult {
+    pub snapshot_id: String,
+    pub restored_layouts: usize,
+    pub missing_resource_ids: Vec<String>,
+}
+
 pub struct AppState(pub Arc<Mutex<Connection>>);
 
 pub struct HotkeyStatusState(pub Mutex<QuickLaunchHotkeyStatus>);
@@ -3198,6 +3232,8 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute("INSERT OR IGNORE INTO launch_request_guard(request_id,intent_hash,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms) SELECT request_id,'legacy:'||request_id,resource_id,target_id,profile_id,source,status,launched_at_utc,error_code,duration_ms FROM launch_events",[])?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (8,'sw015-usage-settings-request-guard-v1',?1)",[now_utc()])?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (9,'sw015-request-guard-path-free-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS resource_relationships (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, source_resource_id TEXT NOT NULL, target_resource_id TEXT NOT NULL, label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 80), CHECK(source_resource_id < target_resource_id), UNIQUE(profile_id,source_resource_id,target_resource_id), FOREIGN KEY(profile_id,source_resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE, FOREIGN KEY(profile_id,target_resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_resource_relationships_profile ON resource_relationships(profile_id,source_resource_id,target_resource_id); CREATE TABLE IF NOT EXISTS workspace_snapshots (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), created_utc TEXT NOT NULL, snapshot_json TEXT NOT NULL CHECK(length(snapshot_json) <= 1048576), UNIQUE(profile_id,name COLLATE NOCASE)); CREATE INDEX IF NOT EXISTS idx_workspace_snapshots_profile_time ON workspace_snapshots(profile_id,created_utc DESC,id); CREATE TRIGGER IF NOT EXISTS enforce_workspace_snapshot_limit BEFORE INSERT ON workspace_snapshots WHEN (SELECT COUNT(*) FROM workspace_snapshots WHERE profile_id=NEW.profile_id) >= 100 BEGIN SELECT RAISE(ABORT,'workspace snapshot limit reached'); END;")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (10,'sw016-resource-graph-workspace-snapshots-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -3932,12 +3968,12 @@ fn search_resources(
 
 const MAX_LAYOUT_BYTES: usize = 1_048_576;
 
-fn valid_uuid(value: &str) -> bool {
+fn is_valid_uuid(value: &str) -> bool {
     Uuid::parse_str(value).is_ok()
 }
 
 fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
-    if !valid_uuid(&layout.profile_id) {
+    if !is_valid_uuid(&layout.profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if layout.version != 1 || !matches!(layout.surface.as_str(), "dashboard" | "dock") {
@@ -3950,7 +3986,7 @@ fn validate_layout(layout: &DashboardLayout) -> Result<(), AppError> {
     }
     let mut ids = std::collections::HashSet::with_capacity(layout.cards.len());
     for card in &layout.cards {
-        if !valid_uuid(&card.resource_id)
+        if !is_valid_uuid(&card.resource_id)
             || !ids.insert(&card.resource_id)
             || card.x < 0
             || card.x > 11
@@ -3979,7 +4015,7 @@ fn layout_get_from_conn(
     profile_id: &str,
     surface: &str,
 ) -> Result<DashboardLayout, AppError> {
-    if !valid_uuid(profile_id) {
+    if !is_valid_uuid(profile_id) {
         return Err(AppError::Invalid("profileId must be a UUID".into()));
     }
     if !matches!(surface, "dashboard" | "dock") {
@@ -4089,6 +4125,467 @@ fn layout_save(
 ) -> Result<DashboardLayout, AppError> {
     let mut conn = lock(&state)?;
     layout_save_to_conn(&mut conn, &layout)
+}
+
+fn resource_relationship_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<ResourceRelationship>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare("SELECT id,profile_id,source_resource_id,target_resource_id,label FROM resource_relationships WHERE profile_id=?1 ORDER BY label COLLATE NOCASE,id")?;
+    let relationships = stmt
+        .query_map([profile_id], |row| {
+            Ok(ResourceRelationship {
+                id: row.get(0)?,
+                profile_id: row.get(1)?,
+                source_resource_id: row.get(2)?,
+                target_resource_id: row.get(3)?,
+                label: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(relationships)
+}
+
+fn resource_relationship_save_on_conn(
+    conn: &mut Connection,
+    mut relationship: ResourceRelationship,
+) -> Result<ResourceRelationship, AppError> {
+    valid_uuid(&relationship.id, "relationship id")?;
+    valid_uuid(&relationship.profile_id, "profile id")?;
+    valid_uuid(&relationship.source_resource_id, "source resource id")?;
+    valid_uuid(&relationship.target_resource_id, "target resource id")?;
+    relationship.label = relationship.label.trim().to_owned();
+    if relationship.source_resource_id == relationship.target_resource_id {
+        return Err(AppError::Invalid(
+            "a resource cannot be related to itself".into(),
+        ));
+    }
+    if relationship.label.is_empty() || relationship.label.chars().count() > 80 {
+        return Err(AppError::Invalid(
+            "relationship label must contain 1 to 80 characters".into(),
+        ));
+    }
+    // Edges are undirected, so canonical ordering makes reversed inputs identical.
+    if relationship.source_resource_id > relationship.target_resource_id {
+        std::mem::swap(
+            &mut relationship.source_resource_id,
+            &mut relationship.target_resource_id,
+        );
+    }
+    let tx = conn.transaction()?;
+    let profile_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [&relationship.profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !profile_exists {
+        return Err(AppError::NotFound);
+    }
+    for resource_id in [
+        &relationship.source_resource_id,
+        &relationship.target_resource_id,
+    ] {
+        let member: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_resources WHERE profile_id=?1 AND resource_id=?2)",
+            params![relationship.profile_id, resource_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )?;
+        if !member {
+            return Err(AppError::Invalid(
+                "both related resources must belong to the profile".into(),
+            ));
+        }
+    }
+    let existing_id: Option<(String, String, String)> = tx
+        .query_row(
+            "SELECT profile_id,source_resource_id,target_resource_id FROM resource_relationships WHERE id=?1",
+            [&relationship.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if existing_id
+        .as_ref()
+        .is_some_and(|(profile, source, target)| {
+            profile != &relationship.profile_id
+                || source != &relationship.source_resource_id
+                || target != &relationship.target_resource_id
+        })
+    {
+        return Err(AppError::NotFound);
+    }
+    let duplicate_pair: Option<String> = tx
+        .query_row(
+            "SELECT id FROM resource_relationships WHERE profile_id=?1 AND source_resource_id=?2 AND target_resource_id=?3",
+            params![relationship.profile_id, relationship.source_resource_id, relationship.target_resource_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if duplicate_pair
+        .as_deref()
+        .is_some_and(|id| id != relationship.id)
+    {
+        return Err(AppError::Invalid(
+            "this resource pair already has a relationship".into(),
+        ));
+    }
+    if existing_id.is_none() {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM resource_relationships WHERE profile_id=?1",
+            [&relationship.profile_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_RESOURCE_RELATIONSHIPS_PER_PROFILE {
+            return Err(AppError::Invalid(
+                "profile has reached its resource relationship limit".into(),
+            ));
+        }
+        let entity_collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 UNION ALL SELECT 1 FROM resources WHERE id=?1 UNION ALL SELECT 1 FROM resource_targets WHERE id=?1 UNION ALL SELECT 1 FROM smart_collections WHERE id=?1 UNION ALL SELECT 1 FROM dynamic_shortcuts WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequences WHERE id=?1 UNION ALL SELECT 1 FROM workspace_sequence_steps WHERE id=?1 UNION ALL SELECT 1 FROM workspace_snapshots WHERE id=?1)", [&relationship.id], |row| row.get::<_, i64>(0).map(|value| value != 0))?;
+        if entity_collision {
+            return Err(AppError::Invalid("relationship ID is already used".into()));
+        }
+    }
+    tx.execute("INSERT INTO resource_relationships(id,profile_id,source_resource_id,target_resource_id,label) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET label=excluded.label", params![relationship.id, relationship.profile_id, relationship.source_resource_id, relationship.target_resource_id, relationship.label])?;
+    tx.commit()?;
+    Ok(relationship)
+}
+
+fn resource_relationship_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "relationship id")?;
+    if conn.execute(
+        "DELETE FROM resource_relationships WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )? == 0
+    {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resource_relationship_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<ResourceRelationship>, AppError> {
+    let conn = lock(&state)?;
+    resource_relationship_list_on_conn(&conn, &profile_id)
+}
+
+#[tauri::command]
+fn resource_relationship_save(
+    state: State<'_, AppState>,
+    relationship: ResourceRelationship,
+) -> Result<ResourceRelationship, AppError> {
+    let mut conn = lock(&state)?;
+    resource_relationship_save_on_conn(&mut conn, relationship)
+}
+
+#[tauri::command]
+fn resource_relationship_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    resource_relationship_delete_on_conn(&conn, &profile_id, &id)
+}
+
+fn workspace_snapshot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceSnapshot> {
+    let json: String = row.get(4)?;
+    serde_json::from_str(&json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
+    })
+}
+
+fn workspace_snapshot_list_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<WorkspaceSnapshot>, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let mut stmt = conn.prepare("SELECT id,profile_id,name,created_utc,snapshot_json FROM workspace_snapshots WHERE profile_id=?1 ORDER BY created_utc DESC,id")?;
+    let snapshots = stmt
+        .query_map([profile_id], workspace_snapshot_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    for snapshot in &snapshots {
+        if snapshot.profile_id != profile_id
+            || !is_valid_uuid(&snapshot.id)
+            || snapshot.resource_ids.len() > MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS
+        {
+            return Err(AppError::Invalid(
+                "stored workspace snapshot identity or limits are invalid".into(),
+            ));
+        }
+        validate_layout(&snapshot.dashboard)?;
+        validate_layout(&snapshot.dock)?;
+        if snapshot.dashboard.profile_id != profile_id
+            || snapshot.dashboard.surface != "dashboard"
+            || snapshot.dock.profile_id != profile_id
+            || snapshot.dock.surface != "dock"
+        {
+            return Err(AppError::Invalid(
+                "stored workspace snapshot layouts do not match profile and surface".into(),
+            ));
+        }
+    }
+    Ok(snapshots)
+}
+
+fn workspace_snapshot_create_on_conn(
+    conn: &mut Connection,
+    profile_id: &str,
+    name: &str,
+) -> Result<WorkspaceSnapshot, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err(AppError::Invalid(
+            "snapshot name must contain 1 to 100 characters".into(),
+        ));
+    }
+    let tx = conn.transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1)",
+        [profile_id],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    let count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM workspace_snapshots WHERE profile_id=?1",
+        [profile_id],
+        |row| row.get(0),
+    )?;
+    if count >= MAX_WORKSPACE_SNAPSHOTS_PER_PROFILE {
+        return Err(AppError::Invalid(
+            "profile has reached its workspace snapshot limit".into(),
+        ));
+    }
+    let name_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workspace_snapshots WHERE profile_id=?1 AND name=?2 COLLATE NOCASE)",
+        params![profile_id, name],
+        |row| row.get::<_, i64>(0).map(|value| value != 0),
+    )?;
+    if name_exists {
+        return Err(AppError::Invalid(
+            "workspace snapshot name already exists in this profile".into(),
+        ));
+    }
+    let id = Uuid::new_v4().to_string();
+    let created_utc = now_utc();
+    let mut resource_stmt = tx.prepare(
+        "SELECT resource_id FROM profile_resources WHERE profile_id=?1 ORDER BY resource_id",
+    )?;
+    let resource_ids = resource_stmt
+        .query_map([profile_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(resource_stmt);
+    if resource_ids.len() > MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS {
+        return Err(AppError::Invalid(
+            "workspace snapshot contains too many resources".into(),
+        ));
+    }
+    let snapshot = WorkspaceSnapshot {
+        id,
+        profile_id: profile_id.to_owned(),
+        name: name.to_owned(),
+        created_utc,
+        resource_ids,
+        dashboard: layout_get_from_conn(&tx, profile_id, "dashboard")?,
+        dock: layout_get_from_conn(&tx, profile_id, "dock")?,
+    };
+    let json = serde_json::to_string(&snapshot)?;
+    if json.len() > MAX_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(AppError::Invalid("workspace snapshot exceeds 1 MiB".into()));
+    }
+    tx.execute("INSERT INTO workspace_snapshots(id,profile_id,name,created_utc,snapshot_json) VALUES (?1,?2,?3,?4,?5)", params![snapshot.id,snapshot.profile_id,snapshot.name,snapshot.created_utc,json])?;
+    tx.commit()?;
+    Ok(snapshot)
+}
+
+fn workspace_snapshot_delete_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<(), AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "snapshot id")?;
+    if conn.execute(
+        "DELETE FROM workspace_snapshots WHERE id=?1 AND profile_id=?2",
+        params![id, profile_id],
+    )? == 0
+    {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+fn workspace_snapshot_restore_on_conn(
+    conn: &mut Connection,
+    profile_id: &str,
+    id: &str,
+) -> Result<WorkspaceSnapshotRestoreResult, AppError> {
+    valid_uuid(profile_id, "profile id")?;
+    valid_uuid(id, "snapshot id")?;
+    let tx = conn.transaction()?;
+    let stored: Option<String> = tx
+        .query_row(
+            "SELECT snapshot_json FROM workspace_snapshots WHERE id=?1 AND profile_id=?2",
+            params![id, profile_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let json = stored.ok_or(AppError::NotFound)?;
+    if json.len() > MAX_WORKSPACE_SNAPSHOT_BYTES {
+        return Err(AppError::Invalid("stored snapshot exceeds 1 MiB".into()));
+    }
+    let snapshot: WorkspaceSnapshot = serde_json::from_str(&json)?;
+    if snapshot.id != id
+        || snapshot.profile_id != profile_id
+        || snapshot.resource_ids.len() > MAX_WORKSPACE_SNAPSHOT_RESOURCE_IDS
+    {
+        return Err(AppError::Invalid(
+            "stored workspace snapshot identity or limits are invalid".into(),
+        ));
+    }
+    validate_layout(&snapshot.dashboard)?;
+    validate_layout(&snapshot.dock)?;
+    if snapshot.dashboard.profile_id != profile_id
+        || snapshot.dashboard.surface != "dashboard"
+        || snapshot.dock.profile_id != profile_id
+        || snapshot.dock.surface != "dock"
+    {
+        return Err(AppError::Invalid(
+            "stored workspace snapshot layouts do not match profile and surface".into(),
+        ));
+    }
+    let mut current_stmt =
+        tx.prepare("SELECT resource_id FROM profile_resources WHERE profile_id=?1")?;
+    let current = current_stmt
+        .query_map([profile_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    drop(current_stmt);
+    let mut missing = std::collections::BTreeSet::new();
+    for resource_id in &snapshot.resource_ids {
+        valid_uuid(resource_id, "snapshot resource id")?;
+        if !current.contains(resource_id) {
+            missing.insert(resource_id.clone());
+        }
+    }
+    for resource_id in snapshot
+        .dashboard
+        .cards
+        .iter()
+        .chain(snapshot.dock.cards.iter())
+        .map(|card| &card.resource_id)
+    {
+        if !current.contains(resource_id) {
+            missing.insert(resource_id.clone());
+        }
+    }
+    let mut restore_layout = |saved: &DashboardLayout| -> Result<(), AppError> {
+        let existing = layout_get_from_conn(&tx, profile_id, &saved.surface)?;
+        let saved_ids = saved
+            .cards
+            .iter()
+            .map(|card| card.resource_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let mut cards = saved
+            .cards
+            .iter()
+            .filter(|card| current.contains(&card.resource_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        // Preserve workspace cards added since the checkpoint; saved positions win on overlaps.
+        cards.extend(
+            existing
+                .cards
+                .into_iter()
+                .filter(|card| !saved_ids.contains(card.resource_id.as_str())),
+        );
+        let merged = DashboardLayout {
+            profile_id: profile_id.to_owned(),
+            surface: saved.surface.clone(),
+            version: saved.version,
+            cards,
+        };
+        let serialized = serde_json::to_string(&merged)?;
+        if serialized.len() > MAX_LAYOUT_BYTES {
+            return Err(AppError::Invalid("restored layout exceeds 1 MiB".into()));
+        }
+        validate_layout(&merged)?;
+        tx.execute("INSERT INTO layouts(profile_id,surface,version,layout_json,updated_utc) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(profile_id,surface) DO UPDATE SET version=excluded.version,layout_json=excluded.layout_json,updated_utc=excluded.updated_utc", params![profile_id,merged.surface,merged.version,serialized,now_utc()])?;
+        Ok(())
+    };
+    restore_layout(&snapshot.dashboard)?;
+    restore_layout(&snapshot.dock)?;
+    drop(restore_layout);
+    tx.commit()?;
+    Ok(WorkspaceSnapshotRestoreResult {
+        snapshot_id: id.to_owned(),
+        restored_layouts: 2,
+        missing_resource_ids: missing.into_iter().collect(),
+    })
+}
+
+#[tauri::command]
+fn workspace_snapshot_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<WorkspaceSnapshot>, AppError> {
+    let conn = lock(&state)?;
+    workspace_snapshot_list_on_conn(&conn, &profile_id)
+}
+
+#[tauri::command]
+fn workspace_snapshot_create(
+    state: State<'_, AppState>,
+    profile_id: String,
+    name: String,
+) -> Result<WorkspaceSnapshot, AppError> {
+    let mut conn = lock(&state)?;
+    workspace_snapshot_create_on_conn(&mut conn, &profile_id, &name)
+}
+
+#[tauri::command]
+fn workspace_snapshot_delete(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = lock(&state)?;
+    workspace_snapshot_delete_on_conn(&conn, &profile_id, &id)
+}
+
+#[tauri::command]
+fn workspace_snapshot_restore(
+    state: State<'_, AppState>,
+    profile_id: String,
+    id: String,
+) -> Result<WorkspaceSnapshotRestoreResult, AppError> {
+    let mut conn = lock(&state)?;
+    workspace_snapshot_restore_on_conn(&mut conn, &profile_id, &id)
 }
 
 #[tauri::command]
@@ -6334,6 +6831,13 @@ pub fn run() {
             workspace_sequence_save,
             workspace_sequence_delete,
             workspace_sequence_run,
+            resource_relationship_list,
+            resource_relationship_save,
+            resource_relationship_delete,
+            workspace_snapshot_list,
+            workspace_snapshot_create,
+            workspace_snapshot_delete,
+            workspace_snapshot_restore,
             profile_export,
             profile_import_preview,
             profile_import_commit,
@@ -9135,6 +9639,203 @@ mod tests {
     }
 
     #[test]
+    fn resource_relationships_are_profile_scoped_undirected_and_unique() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let other_profile_id = Uuid::new_v4().to_string();
+        conn.execute("INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Other','system','{}',?2,?2)", params![other_profile_id, now_utc()]).unwrap();
+        let first = resource("First");
+        let second = resource("Second");
+        persist_resource(&mut conn, &first, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &second, true, Some(&profile_id)).unwrap();
+
+        let relationship_id = Uuid::new_v4().to_string();
+        let saved = resource_relationship_save_on_conn(
+            &mut conn,
+            ResourceRelationship {
+                id: relationship_id.clone(),
+                profile_id: profile_id.clone(),
+                source_resource_id: second.id.clone(),
+                target_resource_id: first.id.clone(),
+                label: "  supports  ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.label, "supports");
+        assert!(saved.source_resource_id < saved.target_resource_id);
+        assert_eq!(
+            resource_relationship_list_on_conn(&conn, &profile_id).unwrap(),
+            vec![saved.clone()]
+        );
+        assert!(resource_relationship_list_on_conn(&conn, &other_profile_id)
+            .unwrap()
+            .is_empty());
+
+        let duplicate = ResourceRelationship {
+            id: Uuid::new_v4().to_string(),
+            profile_id: profile_id.clone(),
+            source_resource_id: first.id.clone(),
+            target_resource_id: second.id.clone(),
+            label: "duplicate pair".into(),
+        };
+        assert!(resource_relationship_save_on_conn(&mut conn, duplicate).is_err());
+        let mut updated = saved.clone();
+        updated.label = "documents".into();
+        assert_eq!(
+            resource_relationship_save_on_conn(&mut conn, updated)
+                .unwrap()
+                .label,
+            "documents"
+        );
+        assert_eq!(
+            resource_relationship_list_on_conn(&conn, &profile_id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        assert!(resource_relationship_save_on_conn(
+            &mut conn,
+            ResourceRelationship {
+                id: Uuid::new_v4().to_string(),
+                profile_id: profile_id.clone(),
+                source_resource_id: first.id.clone(),
+                target_resource_id: first.id.clone(),
+                label: "self".into(),
+            }
+        )
+        .is_err());
+        let outsider = resource("Outside");
+        persist_resource(&mut conn, &outsider, true, Some(&other_profile_id)).unwrap();
+        assert!(resource_relationship_save_on_conn(
+            &mut conn,
+            ResourceRelationship {
+                id: Uuid::new_v4().to_string(),
+                profile_id: profile_id.clone(),
+                source_resource_id: first.id.clone(),
+                target_resource_id: outsider.id.clone(),
+                label: "cross profile".into(),
+            }
+        )
+        .is_err());
+        resource_relationship_delete_on_conn(&conn, &profile_id, &relationship_id).unwrap();
+        assert!(resource_relationship_list_on_conn(&conn, &profile_id)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn workspace_snapshots_restore_layouts_without_removing_new_cards_or_memberships() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let saved_resource = resource("At checkpoint");
+        let later_resource = resource("Added later");
+        persist_resource(&mut conn, &saved_resource, true, Some(&profile_id)).unwrap();
+        persist_resource(&mut conn, &later_resource, true, Some(&profile_id)).unwrap();
+        let checkpoint_layout = DashboardLayout {
+            profile_id: profile_id.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: saved_resource.id.clone(),
+                x: 2,
+                y: 3,
+                w: 2,
+                h: 1,
+                card_type: "compact".into(),
+            }],
+        };
+        layout_save_to_conn(&mut conn, &checkpoint_layout).unwrap();
+        let snapshot =
+            workspace_snapshot_create_on_conn(&mut conn, &profile_id, "  Planning  ").unwrap();
+        assert_eq!(snapshot.name, "Planning");
+        assert_eq!(snapshot.resource_ids.len(), 2);
+        assert_eq!(snapshot.dashboard.cards[0].x, 2);
+
+        let changed_layout = DashboardLayout {
+            profile_id: profile_id.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: later_resource.id.clone(),
+                x: 20,
+                y: 20,
+                w: 1,
+                h: 1,
+                card_type: "icon".into(),
+            }],
+        };
+        layout_save_to_conn(&mut conn, &changed_layout).unwrap();
+        let restored =
+            workspace_snapshot_restore_on_conn(&mut conn, &profile_id, &snapshot.id).unwrap();
+        assert_eq!(restored.restored_layouts, 2);
+        assert!(restored.missing_resource_ids.is_empty());
+        let layout = layout_get_from_conn(&conn, &profile_id, "dashboard").unwrap();
+        assert_eq!(
+            layout.cards.len(),
+            2,
+            "restore retains resources added after checkpoint"
+        );
+        let restored_card = layout
+            .cards
+            .iter()
+            .find(|card| card.resource_id == saved_resource.id)
+            .unwrap();
+        assert_eq!(
+            restored_card.x, 2,
+            "snapshot positions win for resources it captured"
+        );
+        assert!(layout
+            .cards
+            .iter()
+            .any(|card| card.resource_id == later_resource.id));
+        let membership_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_resources WHERE profile_id=?1",
+                [&profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(membership_count, 2);
+    }
+
+    #[test]
+    fn workspace_snapshot_restore_reports_removed_profile_resources() {
+        let mut conn = database();
+        let profile_id = profile(&conn);
+        let resource = resource("Will leave profile");
+        persist_resource(&mut conn, &resource, true, Some(&profile_id)).unwrap();
+        let layout = DashboardLayout {
+            profile_id: profile_id.clone(),
+            surface: "dashboard".into(),
+            version: 1,
+            cards: vec![LayoutCard {
+                resource_id: resource.id.clone(),
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                card_type: "icon".into(),
+            }],
+        };
+        layout_save_to_conn(&mut conn, &layout).unwrap();
+        let snapshot =
+            workspace_snapshot_create_on_conn(&mut conn, &profile_id, "Before removal").unwrap();
+        conn.execute(
+            "DELETE FROM profile_resources WHERE profile_id=?1 AND resource_id=?2",
+            params![profile_id, resource.id],
+        )
+        .unwrap();
+        let restored =
+            workspace_snapshot_restore_on_conn(&mut conn, &profile_id, &snapshot.id).unwrap();
+        assert_eq!(restored.missing_resource_ids, vec![resource.id]);
+        assert!(layout_get_from_conn(&conn, &profile_id, "dashboard")
+            .unwrap()
+            .cards
+            .is_empty());
+    }
+
+    #[test]
     fn invalid_layout_save_does_not_overwrite_prior_row() {
         let mut conn = database();
         let pid = profile(&conn);
@@ -9542,7 +10243,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 10);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -9554,6 +10255,18 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(shortcuts_exist, 1);
+        let relationship_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='resource_relationships'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(relationship_table, 1);
+        let snapshots_table: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_snapshots'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(snapshots_table, 1);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",

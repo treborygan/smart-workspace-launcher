@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-21T22:24:21Z",
+  "updated_at_utc": "2026-10-22T01:29:07Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-015-usage-retention"
+    "branch": "feature/sw-016-resource-graph"
   },
   "active_pull_request": {
-    "number": 41,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
-    "state": "OPEN",
-    "head_sha": "1367caf",
-    "base": "feature/sw-014-action-sequences",
-    "review_status": "independent QA passed; GitHub review pending; stacked behind PR #38"
+    "number": 42,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
+    "state": "OPEN_DRAFT",
+    "head_sha": "5576a8f",
+    "base": "feature/sw-015-usage-retention",
+    "review_status": "independent SW-016 QA passed on implementation head da34ebb; PR opened as draft because backend Rust regression tests cannot execute without GLib >=2.70; stacked behind SW-015 #41 and SW-014 #38"
   },
   "subagent_limit": 3,
   "agents": [
@@ -102,6 +102,39 @@
       "commit": null,
       "pr": null,
       "task": "Independent UI and backend review passed after pagination/profile-switch and privacy corrections; no remaining implementation blockers. Rust execution remains blocked by missing GLib."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-016 backend",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": "77751e5",
+      "pr": 42,
+      "task": "Implemented profile-scoped undirected resource relationships, bounded named workspace snapshots, atomic non-destructive restore with missing-resource reporting, focused Rust regressions; corrected duplicate valid_uuid declarations."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-016 frontend",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": "892234c",
+      "pr": 42,
+      "task": "Implemented typed API, graph/snapshot controls, Explorer linking, 17-node neighborhood cap, accessible keyboard flow; coordinator contrast fixes in da34ebb."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-016 independent QA",
+      "branch": "feature/sw-016-resource-graph",
+      "commit": null,
+      "pr": 42,
+      "task": "Independent QA passed on implementation head da34ebb: no blockers; backend Rust tests remain blocked before crate compilation by missing GLib."
     }
   ],
   "milestones": {
@@ -113,41 +146,45 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-21T22:24:00Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; Linux and Windows GNU Rust targets installed; no PowerShell, Windows 11 host, or MinGW; GLib >=2.70 development files absent.",
+    "at_utc": "2026-10-22T01:25:21Z",
+    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell or real Windows 11 x64 host; Windows GNU target installed but MinGW compiler absent; GLib >=2.70 development files absent.",
     "results": [
       {
-        "command": "npm ci --cache /tmp/swl-npm-cache",
-        "result": "PASS on integration worktree."
-      },
-      {
-        "command": "npm run typecheck && npm test -- --run && npm run frontend:build && git diff --check",
-        "result": "PASS after integrated SW-015 UI fixes: typecheck; 12 files/88 tests; production frontend build; diff check. Existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+        "command": "npm run typecheck && npm test -- --run && npm run frontend:build",
+        "result": "PASS on SW-016 implementation head da34ebb: typecheck; 13 files/97 tests; production build. Existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
       },
       {
         "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
         "result": "PASS."
       },
       {
-        "command": "python scripts/verify_handoff.py",
-        "result": "PASS; handoff, catalog, schema and fixture checks only; no runtime verification."
+        "command": "git diff --check",
+        "result": "PASS."
       },
       {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib usage",
-        "result": "BLOCKED before application compilation because pkg-config cannot find glib-2.0 >=2.70 / glib-2.0.pc."
+        "command": "python scripts/verify_handoff.py",
+        "result": "PASS; schema/catalog/fixture consistency only, no application runtime proof."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib resource_relationships_are_profile_scoped_undirected_and_unique -- --nocapture",
+        "result": "BLOCKED before application compilation because pkg-config cannot find GLib >=2.70 / glib-2.0.pc; SW-016 Rust regressions are authored but NOT RUN."
+      },
+      {
+        "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
+        "result": "BLOCKED before application check because x86_64-w64-mingw32-gcc is unavailable."
+      },
+      {
+        "command": "Independent SW-016 QA",
+        "result": "PASS on implementation head da34ebb; no blocking findings. Reviewed profile isolation, edge validation, restore atomicity/non-deletion, missing references, graph cap, keyboard flow, and minimum contrast 4.72:1."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED: real Windows 11 x64 acceptance and portable package evidence unavailable."
-      },
-      {
-        "command": "Independent SW-015 frontend/backend QA",
-        "result": "PASS on integrated head b4288c2; no remaining blockers. In-progress sequence snapshots remain for crash-safe recovery. Rust tests remain NOT_RUN due GLib >=2.70 build dependency blocker."
+        "result": "BLOCKED: real Windows 11 x64 acceptance and package evidence unavailable."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "PAUSED per user request. One-time continuation is scheduled in 2.5 hours; resume from CODEX_RESUME.md/backlog/AGENT_STATUS.json. On resume, close superseded draft PR #39, track GitHub reviews for PR #38 and stacked SW-015 PR #41, then continue SW-016..SW-025 cross-platform. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
+  "next_action": "Track reviews for SW-014 PR #38 and SW-015 PR #41 (both OPEN, no reviews/inline threads as of 2026-10-22); do not merge without reviewed dependency-order approval. SW-016 implementation is in draft PR #42 on feature/sw-016-resource-graph based on feature/sw-015-usage-retention; its native Rust tests are blocked by missing GLib. PR #39 was closed as superseded by #41. Continue SW-017..SW-025 cross-platform in dependency order. V1 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -206,25 +243,35 @@
       "issue": "SW-014",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
       "state": "OPEN",
-      "head_sha": "fb22dff"
+      "head_sha": "fb22dff",
+      "note": "SW-014 implementation; GitHub review check 2026-10-22 found no submitted reviews or inline threads."
     },
     {
       "number": 39,
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/39",
-      "state": "OPEN_DRAFT_SUPERSEDED",
+      "state": "CLOSED_SUPERSEDED",
       "head_sha": "8e797d2",
       "base": "feature/sw-015-usage-retention",
-      "note": "Backend-only draft; superseded by integrated PR #41. Left open during user pause; close on resume."
+      "note": "Closed 2026-10-22 as superseded by integrated PR #41; no code was merged."
     },
     {
       "number": 41,
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
       "state": "OPEN",
-      "head_sha": "1367caf",
+      "head_sha": "c4c8f47",
       "base": "feature/sw-014-action-sequences",
-      "note": "Integrated frontend/backend implementation; independent QA passed. GitHub review pending and stacked on PR #38."
+      "note": "Integrated SW-015 implementation; GitHub review check 2026-10-22 found no submitted reviews or inline threads; stacked on #38."
+    },
+    {
+      "number": 42,
+      "issue": "SW-016",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/42",
+      "state": "OPEN_DRAFT",
+      "head_sha": "5576a8f",
+      "base": "feature/sw-015-usage-retention",
+      "note": "Independent QA passed; draft because native Rust backend tests are blocked by missing GLib >=2.70. Stacked on #41/#38."
     }
   ]
 }

@@ -122,6 +122,32 @@ export interface WorkspaceSequenceRunResult {
   steps: WorkspaceSequenceStepResult[];
 }
 
+/** A profile-local undirected edge between two resources in the same profile. */
+export interface ResourceRelationship {
+  id: string;
+  profileId: string;
+  sourceResourceId: string;
+  targetResourceId: string;
+  label: string;
+}
+
+/** Non-destructive checkpoint of a profile's dashboard and dock arrangements. */
+export interface WorkspaceSnapshot {
+  id: string;
+  profileId: string;
+  name: string;
+  createdUtc: string;
+  resourceIds: string[];
+  dashboard: DashboardLayout;
+  dock: DashboardLayout;
+}
+
+export interface WorkspaceSnapshotRestoreResult {
+  snapshotId: string;
+  restoredLayouts: number;
+  missingResourceIds: string[];
+}
+
 export interface LaunchRequest {
   requestId: string;
   resourceId: string;
@@ -323,6 +349,13 @@ export interface CommandMap {
   workspace_sequence_save: { args: { sequence: WorkspaceSequence }; result: WorkspaceSequence };
   workspace_sequence_delete: { args: { profileId: string; id: string }; result: void };
   workspace_sequence_run: { args: { profileId: string; id: string; requestId: string }; result: WorkspaceSequenceRunResult };
+  resource_relationship_list: { args: { profileId: string }; result: ResourceRelationship[] };
+  resource_relationship_save: { args: { relationship: ResourceRelationship }; result: ResourceRelationship };
+  resource_relationship_delete: { args: { profileId: string; id: string }; result: void };
+  workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };
+  workspace_snapshot_create: { args: { profileId: string; name: string }; result: WorkspaceSnapshot };
+  workspace_snapshot_delete: { args: { profileId: string; id: string }; result: void };
+  workspace_snapshot_restore: { args: { profileId: string; id: string }; result: WorkspaceSnapshotRestoreResult };
   profile_switch: { args: { profileId: string }; result: Profile };
   profile_export: { args: { profileId: string; outputPath: string; includeHistory?: boolean }; result: ProfileExportResult };
   profile_import_preview: { args: { packagePath: string; targetProfileId?: string }; result: ProfileImportPreview };

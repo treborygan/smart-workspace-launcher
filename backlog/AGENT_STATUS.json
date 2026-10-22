@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:48:00Z",
+  "updated_at_utc": "2026-10-22T02:52:00Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -13,9 +13,9 @@
     "number": 47,
     "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "2ca5ea46b4f7d96385a67b5c67281597aaac33d2",
+    "head_sha": "4041757a46815df8162e54db8f1db89c37655673",
     "base": "feature/sw-020-device-paths",
-    "review_status": "Runtime contract frozen and independently QA-approved in commit 2ca5ea4 (invocation schema enforces capability/data pairing; result controls rejected; deterministic 64 KiB metadata truncation, no imports, no start section, fuel/memory/stack/recursion limits). Runtime implementation is in progress on isolated Core/UI worktrees; PR #47 remains an incomplete draft. Handoff verification passes. Core Rust compile/testing is blocked by missing GLib/GObject; Windows unavailable. V1 blocked."
+    "review_status": "Frozen sandbox runtime contract in 2ca5ea4; frontend package review/install/run flow integrated in 4041757 and independently QA PASS. Frontend typecheck, all 137 tests, production build and diff check pass. Core v13 storage and Wasmi runtime implementation still active in isolated worktree; does not yet run in integrated app. Rust test execution blocked before project compilation by missing GLib/GObject. V1 blocked."
   },
   "subagent_limit": 3,
   "agents": [
@@ -371,12 +371,12 @@
       "role": "ui",
       "model": "gpt-6-luna",
       "effort": "medium",
-      "state": "ACTIVE",
+      "state": "COMPLETE",
       "issue": "SW-021 package/runtime UI",
       "branch": "feature/sw-021-runtime-ui",
-      "commit": null,
+      "commit": "ef67dfd",
       "pr": 47,
-      "task": "Implement typed package preview/install, grant/enable and explicit run/suggestion UX in isolated worktree /workspace/sw021-runtime-ui."
+      "task": "Implemented package preview/install/permissions/enable/explicit-run UI; independent UI QA PASS. Targeted 46 tests and full 137 frontend tests/typecheck/build/diff checks pass."
     }
   ],
   "milestones": {
@@ -388,7 +388,7 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:47:00Z",
+    "at_utc": "2026-10-22T02:52:00Z",
     "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
     "results": [
       {
@@ -450,11 +450,31 @@
       {
         "command": "git diff --check",
         "result": "PASS on frozen SW-021 runtime contract commit 2ca5ea4."
+      },
+      {
+        "command": "npm run typecheck",
+        "result": "PASS after SW-021 runtime UI integration at 4041757."
+      },
+      {
+        "command": "npm test -- --run",
+        "result": "PASS, 17 files / 137 tests after SW-021 runtime UI integration at 4041757."
+      },
+      {
+        "command": "npm run frontend:build",
+        "result": "PASS after SW-021 runtime UI integration; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
+      },
+      {
+        "command": "git diff --check",
+        "result": "PASS after SW-021 runtime UI integration at 4041757."
+      },
+      {
+        "command": "Independent SW-021 UI review",
+        "result": "PASS; UI branch ef67dfd reviewed for stale preview/install tokens, permissions, profile result scope, inert text output, accessible errors/focus and tests."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "Implement and independently review the SW-021 package preview/install and explicit Wasm run path in /workspace/sw021-runtime-core and corresponding UI in /workspace/sw021-runtime-ui, then integrate, test and update draft PR #47. Latest review APIs at 2026-10-22 02:47 UTC: PR #38 and #41 have no reviews or inline threads. Continue in dependency order; keep V1/SW-012 BLOCKED until actual Windows 11 x64 acceptance.",
+  "next_action": "Finish Core sandbox implementation in /workspace/sw021-runtime-core, inspect its security-critical diff, integrate only after Core static checks, then run independent Core QA and full cross-platform tests. Latest review APIs at 02:47 UTC: PR #38/#41 review and inline threads empty. Keep V1 blocked until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,

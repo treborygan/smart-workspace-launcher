@@ -62,6 +62,7 @@
   },
   "bundle": {
     "active": true,
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "targets": ["nsis"],
     "category": "Productivity",
     "shortDescription": "A local-first launcher for work resources",

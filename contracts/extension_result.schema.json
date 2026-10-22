@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Smart Workspace Launcher extension run result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["suggestions"],
+  "properties": {
+    "suggestions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "reason", "resourceIds"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^(?!.*[\\u0000-\\u001F\\u007F])(?=.*\\S).+$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^(?!.*[\\u0000-\\u001F\\u007F])(?=.*\\S).+$" },
+          "resourceIds": {
+            "type": "array",
+            "maxItems": 12,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

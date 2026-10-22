@@ -12,8 +12,9 @@ required=[
 "backlog/ROADMAP.md","backlog/STATUS.md","backlog/AGENT_STATUS.json",
 "backlog/issues.json","releases/v1/readiness.json"]
 required += [".codex/agents/"+r+".toml" for r in ["core","ui","qa","research","release"]]
-required += ["contracts/"+f+".schema.json" for f in ["manifest","profile","resources","layouts"]]
-required += ["fixtures/valid/"+f+".json" for f in ["manifest","profile","resources","layouts"]]
+required += ["contracts/"+f+".schema.json" for f in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]]
+required += ["fixtures/valid/"+f+".json" for f in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]]
+required += ["fixtures/invalid/extension_invocation_missing_grant_data.json","fixtures/invalid/extension_invocation_ungranted_data.json","fixtures/invalid/extension_result_control.json"]
 required += ["fixtures/valid/example.swprofile","fixtures/invalid/bad_archive.zip"]
 missing=[p for p in required if not (root/p).is_file()]
 if missing:
@@ -31,11 +32,14 @@ try:
  from jsonschema import Draft202012Validator,FormatChecker
 except ImportError:
  print("FAIL: pip install -r requirements-handoff.txt");sys.exit(1)
-for name in ["manifest","profile","resources","layouts"]:
+for name in ["manifest","profile","resources","layouts","extension_manifest","extension_invocation","extension_result"]:
  schema=j("contracts/"+name+".schema.json")
  validator=Draft202012Validator(schema,format_checker=FormatChecker())
  obj=j("fixtures/valid/"+name+".json")
  errors=list(validator.iter_errors(obj))
  assert not errors,(name,errors)
+for name,path in [("extension_invocation","fixtures/invalid/extension_invocation_missing_grant_data.json"),("extension_invocation","fixtures/invalid/extension_invocation_ungranted_data.json"),("extension_result","fixtures/invalid/extension_result_control.json")]:
+ validator=Draft202012Validator(j("contracts/"+name+".schema.json"),format_checker=FormatChecker())
+ assert list(validator.iter_errors(j(path))),(path,"expected invalid fixture rejection")
 print("PASS: handoff file presence, 25 issue catalog, models, valid schemas and safe fixtures")
 print("NOTE: no compiled app or Windows runtime tests have been executed")

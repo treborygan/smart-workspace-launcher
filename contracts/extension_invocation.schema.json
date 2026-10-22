@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Smart Workspace Launcher extension invocation input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sdkVersion", "grantedCapabilities"],
+  "properties": {
+    "sdkVersion": { "const": "1.0.0" },
+    "grantedCapabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["resource_metadata.read", "workspace_summary.read"] }
+    },
+    "resourceMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resources", "truncated"],
+      "properties": {
+        "resources": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "displayName", "resourceType", "category", "tags", "favorite"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "displayName": { "type": "string", "maxLength": 240 },
+              "resourceType": { "type": "string", "maxLength": 32 },
+              "category": { "type": ["string", "null"], "maxLength": 80 },
+              "tags": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 80 } },
+              "favorite": { "type": "boolean" }
+            }
+          }
+        },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "workspaceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resourceCount", "favoriteCount"],
+      "properties": {
+        "resourceCount": { "type": "integer", "minimum": 0 },
+        "favoriteCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "grantedCapabilities": { "contains": { "const": "resource_metadata.read" } } } },
+      "then": { "required": ["resourceMetadata"] },
+      "else": { "not": { "required": ["resourceMetadata"] } }
+    },
+    {
+      "if": { "properties": { "grantedCapabilities": { "contains": { "const": "workspace_summary.read" } } } },
+      "then": { "required": ["workspaceSummary"] },
+      "else": { "not": { "required": ["workspaceSummary"] } }
+    }
+  ]
+}

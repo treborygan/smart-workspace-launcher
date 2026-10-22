@@ -463,6 +463,87 @@ export interface ProfileExportResult {
   historyEventCount: number;
 }
 
+/** Closed read-only data capabilities supplied to sandbox modules on explicit invocation. */
+export type ExtensionCapability = "resource_metadata.read" | "workspace_summary.read";
+
+export interface ExtensionManifest {
+  id: string;
+  name: string;
+  version: string;
+  sdkVersion: string;
+  description: string;
+  requestedCapabilities: ExtensionCapability[];
+}
+
+export interface RegisteredExtension extends ExtensionManifest {
+  grantedCapabilities: ExtensionCapability[];
+  enabled: boolean;
+  installedUtc: string;
+  moduleSha256: string | null;
+}
+
+export interface ExtensionPermissionUpdate {
+  extensionId: string;
+  manifestVersion: string;
+  grantedCapabilities: ExtensionCapability[];
+}
+
+export interface ExtensionPackagePreviewRequest {
+  packagePath: string;
+}
+
+export interface ExtensionPackagePreview {
+  manifest: ExtensionManifest;
+  packageSha256: string;
+  moduleSha256: string;
+  moduleSizeBytes: number;
+  previewToken: string;
+}
+
+export interface ExtensionPackageInstallRequest {
+  packagePath: string;
+  packageSha256: string;
+  previewToken: string;
+}
+
+export interface ExtensionResourceSummary {
+  id: string;
+  displayName: string;
+  resourceType: string;
+  category: string | null;
+  tags: string[];
+  favorite: boolean;
+}
+
+export interface ExtensionResourceMetadataInput {
+  resources: ExtensionResourceSummary[];
+  truncated: boolean;
+}
+
+export interface ExtensionWorkspaceSummaryInput {
+  resourceCount: number;
+  favoriteCount: number;
+}
+
+/** Exact capability/data pairing passed to a module for one explicit run. */
+export interface ExtensionInvocationInput {
+  sdkVersion: "1.0.0";
+  grantedCapabilities: ExtensionCapability[];
+  resourceMetadata?: ExtensionResourceMetadataInput;
+  workspaceSummary?: ExtensionWorkspaceSummaryInput;
+}
+
+export interface ExtensionSuggestion {
+  title: string;
+  reason: string;
+  resourceIds: string[];
+}
+
+export interface ExtensionRunResult {
+  extensionId: string;
+  suggestions: ExtensionSuggestion[];
+}
+
 export interface CommandMap {
   resource_list: { args: { profileId?: string }; result: Resource[] };
   resource_create: { args: { resource: ResourceInput }; result: Resource };
@@ -496,6 +577,13 @@ export interface CommandMap {
   device_path_mapping_preview: { args: { request: DevicePathMappingPreviewRequest }; result: DevicePathMappingPreview };
   device_path_mapping_commit: { args: { preview: DevicePathMappingPreview }; result: DevicePathMapping };
   device_path_mapping_delete: { args: { id: string }; result: void };
+  extension_registry_list: { args?: undefined; result: RegisteredExtension[] };
+  extension_package_preview: { args: { request: ExtensionPackagePreviewRequest }; result: ExtensionPackagePreview };
+  extension_package_install: { args: { request: ExtensionPackageInstallRequest }; result: RegisteredExtension };
+  extension_registry_permissions_set: { args: { update: ExtensionPermissionUpdate }; result: RegisteredExtension };
+  extension_registry_enabled_set: { args: { extensionId: string; enabled: boolean }; result: RegisteredExtension };
+  extension_registry_remove: { args: { extensionId: string }; result: void };
+  extension_registry_run: { args: { extensionId: string; profileId: string }; result: ExtensionRunResult };
   resource_import_scan: { args: { request: ResourceImportScanRequest }; result: ResourceImportScanResult };
   resource_import_commit: { args: { request: ResourceImportCommitRequest }; result: ResourceImportCommitResult };
   workspace_snapshot_list: { args: { profileId: string }; result: WorkspaceSnapshot[] };

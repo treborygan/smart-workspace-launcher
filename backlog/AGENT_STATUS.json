@@ -1,21 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T02:31:00Z",
+  "updated_at_utc": "2026-10-22T03:40:30Z",
   "overall_status": "IMPLEMENTATION_IN_PROGRESS",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "ACTIVE",
-    "branch": "feature/sw-020-device-paths"
+    "branch": "feature/sw-021-permissioned-extensions"
   },
   "active_pull_request": {
-    "number": 46,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
+    "number": 47,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
     "state": "OPEN_DRAFT",
-    "head_sha": "2216bd66798f6977f3bd453014dc01ca93b1d59b",
-    "base": "feature/sw-019-widget-templates",
-    "review_status": "Integrated Core/UI/docs pushed. Independent UI and Core QA passed after P1/P2 fixes. Frontend tests/typecheck/build pass (126 tests). Rust tests blocked before compile by GLib; Windows GNU check blocked by MinGW. No Windows acceptance."
+    "head_sha": "87a022c8a986611128eb96c06a7971432e58f288",
+    "base": "feature/sw-020-device-paths",
+    "review_status": "PR #47 code head 8aa19f8; full Rust library suite PASS 116/116 on Debian 13/sysroot; focused extension 13/13 and directory scanner 2/2; frontend typecheck, 17 files/137 tests and build PASS; independent QA passed purge/replay fix. Windows-only junction NOT_RUN; V1 BLOCKED. SW-022 contract research found missing provider/encryption/conflict/data-selection decisions; freeze contract before implementation."
   },
   "subagent_limit": 3,
   "agents": [
@@ -300,6 +300,127 @@
       "commit": null,
       "pr": 46,
       "task": "Initial P1/P2 UI findings fixed and re-reviewed; Core Unicode path P2 fixed and re-reviewed with no remaining blocker. Rust tests remain not run due missing GLib; no Windows certification."
+    },
+    {
+      "role": "research",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "state": "COMPLETE",
+      "issue": "SW-021 architecture seam research",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Read-only review confirmed no executable extension registry exists; recommended manifest/grant registry with no code execution, no native loading, default deny and backend validation. See agent report in session."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 contract security review",
+      "branch": "feature/sw-021-permissioned-extensions",
+      "commit": "d7d33cf",
+      "pr": null,
+      "task": "Read-only contract/Core/UI QA passed after fixed schema-invalid fixture ID. Core validation, default-off storage, capability subsets, inert runtime disclosure, accessible controls and confirmation states reviewed. Rust execution blocked by missing GLib."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 backend registry",
+      "branch": "feature/sw-021-core",
+      "commit": "01d16f7",
+      "pr": null,
+      "task": "Added v12 extension_registry table, strict backend manifest validation, list/register/permission/enable/remove commands and Rust regressions. Fixed test fixture ID per QA. fmt/diff pass; cargo test blocked before project compile by absent GLib."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 registry UI",
+      "branch": "feature/sw-021-ui",
+      "commit": "fa89c60",
+      "pr": null,
+      "task": "Added typed APIs, accessible extension registry UI, metadata manifest registration, explicit grants/enabled state, confirmed removal and explicit inert-grant/no-runtime disclosure. Six focused and integrated UI tests pass."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 sandbox runtime contract review",
+      "branch": null,
+      "commit": null,
+      "pr": 47,
+      "task": "Independent review of invocation capability/data pairing, output control rules, deterministic 64 KiB budget, no imports/start, and resource bounds; PASS."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 sandbox package and runtime implementation",
+      "branch": "feature/sw-021-runtime-core",
+      "commit": "d23d008",
+      "pr": 47,
+      "task": "Integrated Core runtime v13 with structural Wasm limits, empty import/no-start/no-table policy, explicit-run-only one-time Wasmi compile, and mutex-free package parse/guest execution. Adversarial package/runtime tests authored. Independent extended security QA PASS; app tests remain unrun due GLib/GObject."
+    },
+    {
+      "role": "ui",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 package/runtime UI",
+      "branch": "feature/sw-021-runtime-ui",
+      "commit": "ef67dfd",
+      "pr": 47,
+      "task": "Implemented package preview/install/permissions/enable/explicit-run UI; independent UI QA PASS. Targeted 46 tests and full 137 frontend tests/typecheck/build/diff checks pass."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 extended sandbox resource-exhaustion review",
+      "branch": null,
+      "commit": null,
+      "pr": 47,
+      "task": "Initial extended pass found missing structural complexity caps and app-wide DB lock held during package parse/run. Remediation commit d23d008 reviewed independently PASS; Core parsing/execution now occurs outside DB lock with explicit Wasm caps."
+    },
+    {
+      "role": "core",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 integration test suite",
+      "branch": "feature/sw021-suite-fixes",
+      "commit": "d8949ee",
+      "pr": 47,
+      "task": "Repaired Rust fixture/recovery/relocation tests while preserving no-follow/reparse protections. Commits 6768729 and d8949ee; full library suite 116/116, extension 13/13, scanner 2/2 PASS on Debian 13/sysroot; independent QA passed history-purge fix. Windows not run."
+    },
+    {
+      "role": "qa",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "state": "COMPLETE",
+      "issue": "SW-021 launch-history purge replay regression",
+      "branch": "feature/sw021-suite-fixes",
+      "commit": "d8949ee",
+      "pr": 47,
+      "task": "Independent review passed: replay updates a matching pending history row only, marks the guard unknown/failed and never re-inserts purged/missing history. Test coverage gap (existing pending event update path) is modest/non-blocking; reviewer build could not run due transient disk exhaustion; coordinator reran full suite PASS 116/116."
+    },
+    {
+      "role": "research",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "state": "COMPLETE",
+      "issue": "SW-022 selective sync contract gap",
+      "branch": null,
+      "commit": null,
+      "pr": null,
+      "task": "Read-only research found provider/protocol, encryption, conflicts/deletion, selected entities, compatibility and local-only data undefined. Repository mandates opt-in and prohibits live SQLite/WAL sync; contract must be frozen before implementation."
     }
   ],
   "milestones": {
@@ -311,28 +432,36 @@
   "v1_gate": "BLOCKED",
   "v1_notice_sent": false,
   "last_test_run": {
-    "at_utc": "2026-10-22T02:31:00Z",
-    "environment": "Debian 13 x86_64; Node 24.19.0/npm 11.9.0; Rust 1.99.1 stable; no PowerShell/Windows 11 x64/MinGW; GLib/GObject >=2.70 development files absent.",
+    "at_utc": "2026-10-22T03:40:30Z",
+    "environment": "Debian 13 x86_64, Rust 1.99.1 stable. Tauri prerequisites extracted under /tmp/swl-sysroot; Cargo pkg-config/sysroot/library paths pointed there. Not Windows; no PowerShell or MinGW.",
     "results": [
       {
-        "command": "npm ci --cache /tmp/swl-npm-cache",
-        "result": "PASS on integrated PR #46 branch head 2216bd6."
+        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
+        "result": "PASS on integrated head 8aa19f8."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
+        "result": "PASS, 116 passed, 0 failed. Includes replay-after-purge no-resurrection regression."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib",
+        "result": "PASS, 13 passed, 0 failed."
+      },
+      {
+        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib",
+        "result": "PASS, 2 passed, 0 failed on Linux. Windows cfg(windows) junction test NOT_RUN."
       },
       {
         "command": "npm run typecheck",
-        "result": "PASS on integrated PR #46 branch head 2216bd6."
+        "result": "PASS."
       },
       {
         "command": "npm test -- --run",
-        "result": "PASS, 16 files / 126 tests on integrated PR #46 branch head 2216bd6."
+        "result": "PASS, 17 files, 137 tests."
       },
       {
         "command": "npm run frontend:build",
         "result": "PASS; existing nonfatal Vite INEFFECTIVE_DYNAMIC_IMPORT warning."
-      },
-      {
-        "command": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-        "result": "PASS."
       },
       {
         "command": "git diff --check",
@@ -340,32 +469,28 @@
       },
       {
         "command": "python scripts/verify_handoff.py",
-        "result": "PASS issue/catalog/schema/fixture consistency only; reports that no compiled app or Windows runtime tests executed."
-      },
-      {
-        "command": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib",
-        "result": "BLOCKED before project compilation because glib-2.0.pc / GLib >=2.70 development files are missing (exit 101); Rust tests authored but NOT_RUN."
+        "result": "PASS handoff/catalog/schema/fixture consistency only; no runtime or Windows proof."
       },
       {
         "command": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-gnu --lib",
-        "result": "BLOCKED during bundled SQLite build because x86_64-w64-mingw32-gcc is absent (exit 101)."
+        "result": "BLOCKED because x86_64-w64-mingw32-gcc is unavailable; Windows-specific test not compiled."
       },
       {
         "command": "python scripts/check_release_gate.py",
-        "result": "BLOCKED; NOT READY: BLOCKED (exit 2)."
+        "result": "BLOCKED / NOT READY (exit 2), expected without Windows release evidence."
       },
       {
-        "command": "Independent SW-020 UI/Core review",
-        "result": "PASS after fixes for preview staleness, delete confirmation focus, and Unicode case-insensitive path matching; no remaining static blocker. No Windows certification."
+        "command": "GitHub review and inline-thread APIs for PR #38/#41",
+        "result": "EMPTY at 2026-10-22 03:39 UTC; both PRs remain open/mergeable. Independent QA found no blocker; PR #41 CSV DB-lock concern remains non-blocking."
       },
       {
-        "command": "PR #38/#41 review and inline-thread APIs",
-        "result": "EMPTY for both PRs at 2026-10-22 02:14 UTC; independent read-only QA found no actionable blocker; no comments or review requests sent."
+        "command": "Independent QA of d8949ee1fc9d87e5ef2608d4d38bf8f74f44be93",
+        "result": "PASS, code review found purge behavior and anti-replay guard correct. Reviewer focused test attempt could not run due no space; coordinator full suite passed 116/116."
       }
     ]
   },
   "windows_verification": "NOT_AVAILABLE",
-  "next_action": "SW-020 is implemented and independently QA-passed on draft PR #46 (head 2216bd6, stacked after SW-019/#45). Integrated frontend checks pass (126 tests), formatting/handoff pass; Rust test compilation is blocked before app code by missing GLib/GObject development files, Windows GNU cross-check by missing MinGW, and real Windows 11 acceptance is unavailable. Continue SW-021 issue #21 in dependency order on a branch stacked after #46; keep V1/SW-012 BLOCKED until real Windows 11 x64 acceptance. PR #38/#41 review/thread APIs were empty at 2026-10-22 02:14 UTC; recheck later.",
+  "next_action": "SW-021 cross-platform test gate passed and code head 8aa19f8 is pushed to PR #47; full Rust library suite 116/116, focused extension 13/13, scanner 2/2, frontend typecheck/137 tests/build PASS. PR #38/#41 review/thread APIs refreshed 2026-10-22 03:39 UTC returned empty; both remain open/mergeable and PR #41 has a non-blocking CSV mutex concern. SW-022 issue lacks provider/protocol, encryption, conflict/deletion, data-selection and local-only data rules; freeze a security-reviewed contract before implementation. V1/SW-012 remains BLOCKED until real Windows 11 x64 acceptance.",
   "recent_merges": [
     {
       "number": 32,
@@ -420,14 +545,6 @@
   ],
   "open_pull_requests": [
     {
-      "number": 38,
-      "issue": "SW-014",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
-      "state": "OPEN",
-      "head_sha": "fb22dff",
-      "note": "SW-014 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
-    },
-    {
       "number": 39,
       "issue": "SW-015",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/39",
@@ -435,15 +552,6 @@
       "head_sha": "8e797d2",
       "base": "feature/sw-015-usage-retention",
       "note": "Closed as superseded; no code merged."
-    },
-    {
-      "number": 41,
-      "issue": "SW-015",
-      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
-      "state": "OPEN",
-      "head_sha": "c4c8f47",
-      "base": "feature/sw-014-action-sequences",
-      "note": "Integrated SW-015 implementation; review and inline-thread APIs returned empty on 2026-10-22 01:58 UTC; stacked on #38. GitHub review and inline-thread APIs still empty at 2026-10-22 02:01 UTC; independent QA read-only review found no actionable blocker."
     },
     {
       "number": 42,
@@ -473,13 +581,49 @@
       "note": "Implementation/independent QA complete; tests/Windows limitations and medium root/.lnk race documented."
     },
     {
+      "number": 38,
+      "issue": "SW-014",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/38",
+      "state": "OPEN",
+      "head_sha": "fb22dff5201418f53d0c8dfa9c1f5a463d0a365c",
+      "base": "main",
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:39 UTC: both empty; PR open/mergeable. Independent static QA found no actionable blocker."
+    },
+    {
+      "number": 41,
+      "issue": "SW-015",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/41",
+      "state": "OPEN",
+      "head_sha": "c4c8f4726677855ed7074f95f4e0853aa3488494",
+      "base": "feature/sw-014-action-sequences",
+      "note": "Review and inline-thread APIs refreshed 2026-10-22 03:39 UTC: both empty; PR open/mergeable. Independent static QA found no actionable blocker. Non-blocking shared DB mutex may be held during very large CSV export."
+    },
+    {
+      "number": 45,
+      "issue": "SW-019",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/45",
+      "state": "OPEN_DRAFT",
+      "head_sha": "9a984e514923e3b21db4c32723b48291aa8dc931",
+      "base": "feature/sw-018-discovery-import",
+      "note": "Implementation and independent QA complete; Rust tests blocked before compile by missing GLib/GObject; no Windows acceptance."
+    },
+    {
       "number": 46,
       "issue": "SW-020",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/46",
       "state": "OPEN_DRAFT",
-      "head_sha": "2216bd6",
+      "head_sha": "3a12ab7f4a2250acd38b3f9d11699eccc3681438",
       "base": "feature/sw-019-widget-templates",
-      "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode-path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by missing GLib; Windows GNU check blocked by MinGW; no real Windows acceptance."
+      "note": "Integrated Core/UI/docs PR. Independent QA passes after preview/focus and Unicode path fixes. Frontend 126 tests/typecheck/build pass. Rust tests blocked by GLib; Windows GNU check by MinGW; no real Windows acceptance."
+    },
+    {
+      "number": 47,
+      "issue": "SW-021",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/47",
+      "state": "OPEN_DRAFT",
+      "head_sha": "87a022c8a986611128eb96c06a7971432e58f288",
+      "base": "feature/sw-020-device-paths",
+      "note": "Open draft at code head 8aa19f8, stacked on SW-020/PR #46. Rust full suite PASS 116/116; extension 13/13; scanner 2/2 Linux; frontend typecheck, 137 tests, build, formatting, diff/handoff PASS. Independent QA passed purge/replay fix; Windows junction NOT_RUN. SW-022 contract incomplete; V1 BLOCKED."
     }
   ],
   "contract_commits": [
@@ -492,6 +636,26 @@
       "issue": "SW-020",
       "sha": "9b905cd8998ed81c92ad684e9cc1e3ef9103d86a",
       "scope": "Clarified local identity outside portable bundle and supported Windows drive/UNC forms."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "2ca5ea46b4f7d96385a67b5c67281597aaac33d2",
+      "scope": "Frozen Wasm package/runtime ABI, input/output schemas, capability-to-data validation, deterministic 64 KiB metadata bounds, no-import/no-start policy and stack/recursion/fuel/memory limits; independent contract QA PASS."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "2084637",
+      "scope": "Integrated Core v13 Wasm package preview/install/run path with imports/start/ABI/memory checks, permission-paired bounded data, runtime limits and output/profile validation."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "cd95f5d",
+      "scope": "Opaque one-time five-minute path/digest-bound preview tokens; expanded hostile package/output/pointer/profile/truncation tests; updated SDK/decision token contract."
+    },
+    {
+      "issue": "SW-021",
+      "sha": "71eded8",
+      "scope": "Additional count-cap truncation and changed-package token replay regression tests; final independent QA PASS."
     }
   ]
 }

@@ -1,19 +1,45 @@
 # Resume Smart Workspace Launcher implementation
 
-## Checkpoint — 2026-10-22 02:31 UTC
+## Current checkpoint — 2026-10-22 03:40 UTC
 
-Continue implementation, not another plan or browser mock. Repository: `treborygan/smart-workspace-launcher`. Canonical state is `backlog/AGENT_STATUS.json`; readable progress is `backlog/STATUS.md`. Active branch/worktree `/workspace/sw020-core`, `feature/sw-020-device-paths`; draft PR #46 is open against `feature/sw-019-widget-templates`, integrated head `2216bd66798f6977f3bd453014dc01ca93b1d59b`. PR #45 SW-019 remains open draft at `9a984e5`. SW-020 contract commits are `583f95f` and `9b905cd`; Core implementation `2dd0a4b`, Unicode fix `3a9f0d4`, UI `43af2e7` + fix `441ed32`, model docs integrated at `2216bd6`.
+Repository: `treborygan/smart-workspace-launcher`. Coordinator: `/workspace/sw020-core`, branch `feature/sw-021-permissioned-extensions`, code head `8aa19f809e52de2feeed457cd936ff4fe99c9172`; latest status commit `87a022c8a986611128eb96c06a7971432e58f288`; PR #47 is open draft, stacked on PR #46/SW-020. Host: Debian 13 x86_64. No real Windows 11 x64, PowerShell, or MinGW is available. V1/SW-012 remains BLOCKED. No Windows EXE, portable package, release, or READY notice is claimed.
 
-## Current implementation
+## Review tracking
 
-SW-020 implements local random device identity in per-user app-local settings, label editing, preview/approve/list/delete for local path mappings, migration v11, and launch-only path substitution. Profile archives omit local mappings. Mappings are bounded to 100 rules and 5,000 affected targets/preview, accept absolute Windows drive-letter and UNC paths, match path components Unicode case-insensitively, and use most-specific prefix precedence. Canonical targets, args, working directories and history stay unchanged. Independent UI and Core QA passed after fixing preview/input staleness, delete keyboard focus and Unicode comparisons.
+Connected GitHub review-submission and inline-thread API refresh at 2026-10-22 03:39 UTC returned empty arrays for PR #38/SW-014 and PR #41/SW-015. Both are open and mergeable. Independent static QA found no actionable blocker. PR #41 retains a non-blocking concern that large CSV exports can hold the shared DB mutex. PR bodies have the refresh recorded. Stacked PRs must remain in dependency order.
 
-Integrated verification on PR #46 head 2216bd6: `npm ci --cache /tmp/swl-npm-cache`, `npm run typecheck`, `npm test -- --run` (16 files / 126 tests), `npm run frontend:build` (pass with existing nonfatal Vite warning), `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`, `git diff --check` and `python scripts/verify_handoff.py` pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml device_mapping --lib` is BLOCKED before app compile because GLib/GObject >=2.70 dev files are missing. Windows GNU check is BLOCKED because MinGW is missing. Release-gate script returns `NOT READY: BLOCKED` exit 2. No Windows 11 x64 acceptance; V1/SW-012 remains BLOCKED.
+## SW-021 status
 
-## PR review tracking
+SW-021 Rust test suite remediation is integrated at commits `c330b85` and `8aa19f8`; the latter prevents launch replay from recreating purged history and retains the anti-replay guard. Independent QA passed the fix. On Debian 13 with the extracted Tauri dependencies under `/tmp/swl-sysroot`:
 
-PR #38 (SW-014) and #41 (SW-015) are open; connected GitHub review and inline-thread APIs returned empty for both at 02:14 UTC 2026-10-22. Independent read-only QA found no actionable blocker; SW-015 has a non-blocking concern that CSV export holds the shared DB lock through potentially large exports. Refresh review state as work continues. Do not merge stacked changes before review and dependency order. PR #46 is draft and updated with exact tests/limitations. No GitHub Actions added.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check` — PASS.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — PASS, 116/116.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml extension_ --lib` — PASS, 13/13.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml resource_import_directory_scan_ --lib` — PASS, 2/2 on Linux. Windows `cfg(windows)` junction test is NOT_RUN.
+- `npm run typecheck` — PASS.
+- `npm test -- --run` — PASS, 17 files / 137 tests.
+- `npm run frontend:build` — PASS with existing nonfatal `INEFFECTIVE_DYNAMIC_IMPORT` warning.
+- `git diff --check` and `python scripts/verify_handoff.py` — PASS; handoff validation is not runtime/Windows proof.
+- `python scripts/check_release_gate.py` — BLOCKED / NOT READY (exit 2).
+- Windows GNU cross-check — BLOCKED because MinGW is absent.
 
-## Next work
+The sysroot variables used for Cargo checks are documented below. Inactive worktree Cargo target directories were removed only as disposable build outputs to restore free disk space.
 
-Continue SW-021 issue #21 after this SW-020 PR, on a new feature branch stacked after #46. Read all local instructions and freeze a safe typed capability contract first. Then proceed through SW-025 in dependency order. Keep status/PR descriptions updated with issue IDs, commits, exact commands/results, risks and next tasks. Never claim Windows proof; publish V1 only after real Windows 11 x64 acceptance and release gates.
+## SW-022 handoff
+
+Read-only contract research found no approved, concrete selective-sync contract. The issue and roadmap name the feature/dependencies but omit provider/protocol, encryption, conflict/deletion rules, selectable data, compatibility and local-only data handling. Constraints in `docs/SECURITY.md`, `docs/ARCHITECTURE.md`, `docs/DATA_MODEL.md`: opt-in/disabled by default, no automatic private-cloud connection, no live SQLite/WAL sync, and installation-local device identity/mappings stay out of profile archives. Freeze the security/data contract before assigning implementation. SW-022 remains gated pending that contract; this is a requirements gap, not a Windows blocker.
+
+## Next actions
+
+1. Choose/freeze the smallest secure SW-022 selective-sync contract consistent with repository constraints, then implement/test it on feature branches and review independently.
+2. Continue eligible roadmap work in dependency order and keep issue/PR/status evidence current.
+3. Keep SW-012/V1 blocked until real Windows 11 x64 acceptance and a tested portable package.
+
+No schedule or background continuation is active; resume only when this chat/session is active.
+
+## Cargo sysroot setup
+
+- `PKG_CONFIG_SYSROOT_DIR=/tmp/swl-sysroot`
+- `PKG_CONFIG_LIBDIR=/tmp/swl-sysroot/usr/lib/x86_64-linux-gnu/pkgconfig:/tmp/swl-sysroot/usr/lib/pkgconfig:/tmp/swl-sysroot/usr/share/pkgconfig`
+- `LD_LIBRARY_PATH=/tmp/swl-sysroot/usr/lib/x86_64-linux-gnu:/tmp/swl-sysroot/lib/x86_64-linux-gnu:/tmp/swl-sysroot/usr/lib`
+- Prepend `/tmp/swl-sysroot/usr/bin` to `PATH`; set `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`.

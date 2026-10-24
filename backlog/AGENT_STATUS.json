@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-24T13:16:51Z",
+  "updated_at_utc": "2026-10-24T13:18:57Z",
   "overall_status": "LOCAL_WINDOWS_ACCEPTANCE_PARTIAL_TRAY_LIFECYCLE_FIX_PR_PENDING_V1_BLOCKED",
   "coordinator": {
     "model": "gpt-6-luna",
@@ -255,6 +255,14 @@
       "url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/40096989462",
       "runner": "windows-2025 x64",
       "scope": "Automated tests only; not Windows 11 interactive acceptance"
+    },
+    "portable_package": {
+      "path": "releases/local/smart-workspace-launcher-v0.1.0-sw012-pr50-win-x64-portable.zip",
+      "qualification": "LOCAL_UNVERIFIED_NOT_RELEASE",
+      "zip_sha256": "58ec7ee229c448b2009ec5572c2b99cd88c97a1e153781407e499c1308d417b4",
+      "exe_sha256": "90F966A2CE41A3EE1A6711B1DB5DED59DDDD01F34AE522DBB30EDBCD54E47DA4",
+      "contents_extraction": "PASS",
+      "fresh_launch": "NOT_RUN"
     }
   }
 }

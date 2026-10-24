@@ -106,6 +106,19 @@ describe("layout API", () => {
   });
 });
 
+describe("app window close behavior API", () => {
+  it("reads and sets the app-global close behavior through the exact native commands", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeTyped.mockResolvedValueOnce("hide_to_tray").mockResolvedValueOnce("exit");
+
+    expect(await api.getWindowCloseBehavior()).toBe("hide_to_tray");
+    expect(invokeTyped).toHaveBeenNthCalledWith(1, "app_window_close_behavior_get");
+    expect(await api.setWindowCloseBehavior("exit")).toBe("exit");
+    expect(invokeTyped).toHaveBeenNthCalledWith(2, "app_window_close_behavior_set", { behavior: "exit" });
+    expect(localStorage.length).toBe(0);
+  });
+});
+
 describe("profile theme API", () => {
   it("persists native theme updates through the typed command and broadcasts profile state", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });

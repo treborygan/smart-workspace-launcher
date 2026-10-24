@@ -148,6 +148,14 @@ pub struct Profile {
     pub updated_utc: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowCloseBehavior {
+    #[default]
+    HideToTray,
+    Exit,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfileThemeInput {
@@ -2346,6 +2354,77 @@ pub struct AppState(pub Arc<Mutex<Connection>>);
 
 pub struct HotkeyStatusState(pub Mutex<QuickLaunchHotkeyStatus>);
 pub struct ActiveProfileState(pub Mutex<String>);
+pub struct AppWindowCloseBehaviorState(pub Mutex<WindowCloseBehavior>);
+
+const APP_WINDOW_CLOSE_BEHAVIOR_KEY: &str = "windowCloseBehavior";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowCloseAction {
+    HideToTray,
+    Exit,
+    AllowClose,
+}
+
+fn window_close_action(label: &str, behavior: WindowCloseBehavior) -> WindowCloseAction {
+    if !matches!(label, "main" | "quick-launch" | "dock") {
+        return WindowCloseAction::AllowClose;
+    }
+    match behavior {
+        WindowCloseBehavior::HideToTray => WindowCloseAction::HideToTray,
+        WindowCloseBehavior::Exit => WindowCloseAction::Exit,
+    }
+}
+
+fn app_window_close_behavior_from_conn(conn: &Connection) -> Result<WindowCloseBehavior, AppError> {
+    let value_json: Option<String> = conn
+        .query_row(
+            "SELECT value_json FROM app_settings WHERE key=?1",
+            [APP_WINDOW_CLOSE_BEHAVIOR_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    value_json
+        .map(|value| serde_json::from_str(&value).map_err(AppError::from))
+        .unwrap_or(Ok(WindowCloseBehavior::default()))
+}
+
+fn set_app_window_close_behavior_on_conn(
+    conn: &mut Connection,
+    behavior: WindowCloseBehavior,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO app_settings(key,value_json,updated_utc) VALUES (?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_utc=excluded.updated_utc",
+        params![
+            APP_WINDOW_CLOSE_BEHAVIOR_KEY,
+            serde_json::to_string(&behavior)?,
+            now_utc()
+        ],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+fn app_window_close_behavior_get(
+    state: State<'_, AppState>,
+) -> Result<WindowCloseBehavior, AppError> {
+    let conn = lock(&state)?;
+    app_window_close_behavior_from_conn(&conn)
+}
+
+#[tauri::command]
+fn app_window_close_behavior_set(
+    state: State<'_, AppState>,
+    active_behavior: State<'_, AppWindowCloseBehaviorState>,
+    behavior: WindowCloseBehavior,
+) -> Result<WindowCloseBehavior, AppError> {
+    let mut conn = lock(&state)?;
+    set_app_window_close_behavior_on_conn(&mut conn, behavior)?;
+    *active_behavior
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = behavior;
+    Ok(behavior)
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2458,6 +2537,110 @@ fn toggle_quick_launch(app: &tauri::AppHandle) {
         let _ = window.set_focus();
         let _ = window.emit("quick-launch-toggle", ());
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayAction {
+    ToggleDashboard,
+    ToggleQuickLaunch,
+    ToggleDock,
+    Quit,
+}
+
+fn tray_action_from_menu_id(id: &str) -> Option<TrayAction> {
+    match id {
+        "toggle-dashboard" => Some(TrayAction::ToggleDashboard),
+        "toggle-quick-launch" => Some(TrayAction::ToggleQuickLaunch),
+        "toggle-dock" => Some(TrayAction::ToggleDock),
+        "quit" => Some(TrayAction::Quit),
+        _ => None,
+    }
+}
+
+fn show_app_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        if window.show().is_ok() {
+            let _ = window.set_focus();
+        }
+    }
+}
+
+fn toggle_app_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            show_app_window(app, label);
+        }
+    }
+}
+
+fn handle_tray_action(app: &tauri::AppHandle, action: TrayAction) {
+    match action {
+        TrayAction::ToggleDashboard => toggle_app_window(app, "main"),
+        TrayAction::ToggleQuickLaunch => toggle_quick_launch(app),
+        TrayAction::ToggleDock => toggle_app_window(app, "dock"),
+        TrayAction::Quit => app.exit(0),
+    }
+}
+
+fn build_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::{
+        image::Image,
+        menu::{Menu, MenuItem},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    };
+
+    let dashboard = MenuItem::with_id(
+        app,
+        "toggle-dashboard",
+        "Toggle Dashboard",
+        true,
+        None::<&str>,
+    )?;
+    let quick_launch = MenuItem::with_id(
+        app,
+        "toggle-quick-launch",
+        "Toggle Quick Launch",
+        true,
+        None::<&str>,
+    )?;
+    let dock = MenuItem::with_id(app, "toggle-dock", "Toggle Dock", true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        "Quit Smart Workspace Launcher",
+        true,
+        None::<&str>,
+    )?;
+    let menu = Menu::with_items(app, &[&dashboard, &quick_launch, &dock, &quit])?;
+    let icon = Image::from_bytes(include_bytes!("../icons/icon.ico"))?;
+
+    TrayIconBuilder::new()
+        .icon(icon)
+        .tooltip("Smart Workspace Launcher")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            if let Some(action) = tray_action_from_menu_id(event.id().as_ref()) {
+                handle_tray_action(app, action);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                toggle_app_window(tray.app_handle(), "main");
+            }
+        })
+        .build(app)?;
+    Ok(())
 }
 
 fn profile_settings(
@@ -2766,6 +2949,8 @@ fn migrate_database(conn: &Connection) -> Result<(), AppError> {
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (5,'sw013-profile-smart-collections-v1',?1)",[now_utc()])?;
     conn.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_resource_id ON resource_targets(resource_id,id); CREATE TABLE IF NOT EXISTS dynamic_shortcuts (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 100), resource_id TEXT NOT NULL, target_id TEXT, created_utc TEXT NOT NULL, updated_utc TEXT NOT NULL, UNIQUE(profile_id,name COLLATE NOCASE), FOREIGN KEY(profile_id,resource_id) REFERENCES profile_resources(profile_id,resource_id) ON DELETE CASCADE, FOREIGN KEY(resource_id,target_id) REFERENCES resource_targets(resource_id,id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS idx_dynamic_shortcuts_profile_name ON dynamic_shortcuts(profile_id,name COLLATE NOCASE); CREATE TRIGGER IF NOT EXISTS prevent_deactivating_dynamic_shortcut_target BEFORE UPDATE OF active ON resource_targets WHEN OLD.active=1 AND NEW.active=0 AND EXISTS(SELECT 1 FROM dynamic_shortcuts WHERE resource_id=OLD.resource_id AND target_id=OLD.id) BEGIN SELECT RAISE(ABORT,'target is referenced by a dynamic shortcut'); END;")?;
     conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (6,'sw013-dynamic-shortcuts-v1',?1)",[now_utc()])?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_utc TEXT NOT NULL);")?;
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version,checksum,applied_utc) VALUES (7,'sw012-app-settings-v1',?1)",[now_utc()])?;
     Ok(())
 }
 
@@ -4962,6 +5147,9 @@ fn launch_target(_app: &tauri::AppHandle, _target: &ResourceTarget) -> Result<()
 
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_app_window(app, "main");
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -4973,8 +5161,11 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            build_tray_icon(app)?;
             let path = app.path().app_local_data_dir()?.join("launcher.sqlite3");
             let conn = open_database(&path).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let close_behavior = app_window_close_behavior_from_conn(&conn)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
             let default_id =
                 default_profile_id(&conn).map_err(|e| std::io::Error::other(e.to_string()))?;
             let desired = profile_shortcut(&conn, &default_id).unwrap_or_else(|error| {
@@ -4982,6 +5173,7 @@ pub fn run() {
                 QUICK_LAUNCH_HOTKEY_SPEC.into()
             });
             app.manage(AppState(Arc::new(Mutex::new(conn))));
+            app.manage(AppWindowCloseBehaviorState(Mutex::new(close_behavior)));
             let status = match normalize_shortcut(&desired) {
                 Ok(requested) => switch_hotkey(
                     &requested,
@@ -5038,8 +5230,32 @@ pub fn run() {
             quick_launch_hotkey_status,
             quick_launch_hotkey_set,
             analytics_query,
-            analytics_summary
-        ]);
+            analytics_summary,
+            app_window_close_behavior_get,
+            app_window_close_behavior_set
+        ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let behavior = window
+                    .app_handle()
+                    .try_state::<AppWindowCloseBehaviorState>()
+                    .map(|state| {
+                        *state
+                            .0
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    })
+                    .unwrap_or_default();
+                match window_close_action(window.label(), behavior) {
+                    WindowCloseAction::HideToTray => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    WindowCloseAction::Exit => window.app_handle().exit(0),
+                    WindowCloseAction::AllowClose => {}
+                }
+            }
+        });
 
     let app = builder
         .build(tauri::generate_context!())
@@ -7489,7 +7705,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         let table_exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='smart_collections'",
             [],
@@ -7501,6 +7717,14 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(shortcuts_exist, 1);
+        let app_settings_exist: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_settings'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(app_settings_exist, 1);
         let default_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles WHERE name='Default'",
@@ -7557,6 +7781,97 @@ mod tests {
             )
             .unwrap();
         assert_eq!(message_column, 1);
+    }
+
+    #[test]
+    fn tray_lifecycle_routes_known_menu_items_only() {
+        assert_eq!(
+            tray_action_from_menu_id("toggle-dashboard"),
+            Some(TrayAction::ToggleDashboard)
+        );
+        assert_eq!(
+            tray_action_from_menu_id("toggle-quick-launch"),
+            Some(TrayAction::ToggleQuickLaunch)
+        );
+        assert_eq!(
+            tray_action_from_menu_id("toggle-dock"),
+            Some(TrayAction::ToggleDock)
+        );
+        assert_eq!(tray_action_from_menu_id("quit"), Some(TrayAction::Quit));
+        assert_eq!(tray_action_from_menu_id("unknown"), None);
+    }
+
+    #[test]
+    fn app_close_policy_applies_to_managed_windows_without_affecting_other_windows() {
+        for label in ["main", "quick-launch", "dock"] {
+            assert_eq!(
+                window_close_action(label, WindowCloseBehavior::HideToTray),
+                WindowCloseAction::HideToTray
+            );
+            assert_eq!(
+                window_close_action(label, WindowCloseBehavior::Exit),
+                WindowCloseAction::Exit
+            );
+        }
+        assert_eq!(
+            window_close_action("settings", WindowCloseBehavior::Exit),
+            WindowCloseAction::AllowClose
+        );
+    }
+
+    #[test]
+    fn app_close_policy_is_persisted_globally_and_defaults_to_hide_to_tray() {
+        let mut conn = database();
+        let profile_id: String = conn
+            .query_row("SELECT id FROM profiles WHERE name='Default'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            app_window_close_behavior_from_conn(&conn).unwrap(),
+            WindowCloseBehavior::HideToTray
+        );
+
+        set_app_window_close_behavior_on_conn(&mut conn, WindowCloseBehavior::Exit).unwrap();
+        assert_eq!(
+            app_window_close_behavior_from_conn(&conn).unwrap(),
+            WindowCloseBehavior::Exit
+        );
+        let profile_settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM profiles WHERE id=?1",
+                [&profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(profile_settings, "{}");
+
+        let second_profile_id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO profiles(id,name,theme_id,settings_json,created_utc,updated_utc) VALUES (?1,'Personal','system','{}',?2,?2)",
+            params![second_profile_id, now_utc()],
+        )
+        .unwrap();
+        assert_eq!(
+            app_window_close_behavior_from_conn(&conn).unwrap(),
+            WindowCloseBehavior::Exit
+        );
+        let second_profile_settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM profiles WHERE id=?1",
+                [&second_profile_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_profile_settings, "{}");
+    }
+
+    #[test]
+    fn tray_icon_asset_is_decodable() {
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.ico"))
+            .expect("tray icon must decode from the app icon asset");
+        assert!(icon.width() > 0);
+        assert!(icon.height() > 0);
     }
 
     fn sample_target() -> ResourceTarget {

@@ -1,6 +1,6 @@
 import { emitTyped, invokeTyped, listenTyped } from "@sw/contracts";
 import type { AnalyticsSummary, AppEventMap, DashboardLayout, DynamicShortcut, LaunchEvent, LaunchSource, ProfileExportResult, ProfileImportPreview, ProfileImportResult, ProfileImportStrategy, ProfileThemeInput, QuickLaunchHotkeyStatus, ResourceMetadata, ResourcePatch, SmartCollection } from "@sw/contracts";
-import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget } from "./contracts";
+import type { LaunchResult, Profile, Resource, ResourceDraft, ResourceTarget, WindowCloseBehavior } from "./contracts";
 
 const STORAGE_KEY = "swl-ui-demo-resources-v1";
 const isNative = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -27,6 +27,14 @@ function readDemo(): Resource[] {
 function writeDemo(resources: Resource[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(resources)); }
 
 export const api = {
+  async getWindowCloseBehavior(): Promise<WindowCloseBehavior> {
+    if (isNative()) return invokeTyped("app_window_close_behavior_get");
+    return "hide_to_tray";
+  },
+  async setWindowCloseBehavior(behavior: WindowCloseBehavior): Promise<WindowCloseBehavior> {
+    if (isNative()) return invokeTyped("app_window_close_behavior_set", { behavior });
+    return behavior;
+  },
   async setProfileTheme(profileId: string, theme: ProfileThemeInput): Promise<Profile> {
     if (isNative()) {
       const updated = await invokeTyped("profile_theme_set", { profileId, theme });

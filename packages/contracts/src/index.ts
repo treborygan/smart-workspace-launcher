@@ -150,6 +150,9 @@ export interface QuickLaunchHotkeyStatus {
   errorCode?: string;
 }
 
+/** App-wide behavior when any launcher window is closed. */
+export type WindowCloseBehavior = "hide_to_tray" | "exit";
+
 export interface SearchRequest {
   query: string;
   profileId?: string;
@@ -266,6 +269,8 @@ export interface CommandMap {
   layout_save: { args: { layout: DashboardLayout }; result: DashboardLayout };
   quick_launch_hotkey_status: { args?: undefined; result: QuickLaunchHotkeyStatus };
   quick_launch_hotkey_set: { args: { profileId: string; shortcut: string }; result: QuickLaunchHotkeyStatus };
+  app_window_close_behavior_get: { args?: undefined; result: WindowCloseBehavior };
+  app_window_close_behavior_set: { args: { behavior: WindowCloseBehavior }; result: WindowCloseBehavior };
   analytics_query: { args: { profileId?: string; limit?: number }; result: LaunchEvent[] };
   analytics_summary: { args: { profileId?: string; sinceUtc?: string }; result: AnalyticsSummary };
 }

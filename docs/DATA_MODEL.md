@@ -4,6 +4,7 @@ SQLite canonical entities:
 - resources(id UUID PK, type, display_name, description, icon, default_action, created_utc, updated_utc)
 - resource_targets(id UUID PK, resource_id FK, kind, canonical_uri/path, device_selector, priority, arguments_json, working_directory, active)
 - profiles(id UUID PK, name, theme_id, settings_json, created_utc, updated_utc)
+- app_settings(key PK, value_json, updated_utc) for local application-wide preferences that are not profile data
 - profile_resources(profile_id FK, resource_id FK, group_id, favorite, sort_position, overrides_json)
 - groups(id UUID PK, profile_id FK, parent_id, name, ordering)
 - tags(id UUID PK, name), resource_tags(resource_id, tag_id)
@@ -15,6 +16,8 @@ SQLite canonical entities:
 - schema_migrations(version PK, checksum, applied_utc)
 
 All timestamps UTC in storage, localized for display. One request ID leads to one persistent launch event, with updates to that event if lifecycle has multiple outcomes. Missing resource/target is still a failed launch attempt if valid resource ID supplied.
+
+Application window-close behavior is stored in `app_settings` and applies across profiles. The current `windowCloseBehavior` value is `hide_to_tray` or `exit`; an absent value defaults to `hide_to_tray`. App settings are local and are not included in `.swprofile` exports.
 
 Resource IDs never derive from paths, file size or name. A resource can belong to many profiles, multiple targets and groups; no per-profile re-creation required. Cascades and deletion/retention are explicit. Launch statistics must not overstate Windows Shell handoff as document load success.
 

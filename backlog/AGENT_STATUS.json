@@ -1,14 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-22T04:47:00Z",
-  "overall_status": "IMPLEMENTATION_IN_PROGRESS_WINDOWS_PREVIEW_BUILT_V1_BLOCKED",
+  "updated_at_utc": "2026-10-24T13:18:57Z",
+  "overall_status": "LOCAL_WINDOWS_ACCEPTANCE_PARTIAL_TRAY_LIFECYCLE_FIX_PR_PENDING_V1_BLOCKED",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "SESSION_NOT_VERIFIED_AT_GITHUB_DOC_SNAPSHOT"
   },
-  "active_pull_request": null,
+  "active_pull_request": {
+    "number": 50,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/50",
+    "issue": 11,
+    "branch": "feature/sw-012-tray-window-lifecycle",
+    "commit": "81718f9",
+    "state": "OPEN"
+  },
   "subagent_limit": 3,
   "agents": [
     {
@@ -104,8 +111,8 @@
       }
     ]
   },
-  "windows_verification": "HOSTED_WINDOWS_SERVER_CI_BUILD_PASSED; WINDOWS_11_INTERACTIVE_NOT_RUN",
-  "next_action": "Run native Windows 11 standard-user W-001..W-014 on verified portable preview; keep V1 BLOCKED until release gate complete. Separately review open advanced PRs #38/#41-47.",
+  "windows_verification": "LOCAL_WINDOWS_11_ACCEPTANCE_PARTIAL; W007_REMEDIATION_IMPLEMENTED_AND_BUILT_BUT_INTERACTIVE_NOT_RUN; STANDARD_USER_AND_MULTI_MONITOR_BLOCKED",
+  "next_action": "Review and merge focused SW-012 tray lifecycle PR only after CI/review; complete W-001..W-014 packaged runtime acceptance on a dedicated standard-user Windows 11 account with required hardware before V1 release.",
   "recent_merges": [
     {
       "number": 32,
@@ -226,5 +233,36 @@
       "qualification": "UNSIGNED_PREVIEW_NOT_V1_READY"
     },
     "note": "GitHub observations only; agent sessions and native Windows 11 test runs are not inferred."
+  },
+  "local_windows_acceptance": {
+    "date": "2026-10-24",
+    "host": "Windows 11 Pro x64",
+    "source_revision": "7bde33659112c3bb62143f389d4a9f00fabd760c",
+    "case_results": "W-001/W-003 PASS; W-002/W-004/W-006/W-009/W-014 PARTIAL; W-005/W-010/W-012/W-013 NOT_RUN; W-007 FAIL on tested preview source audit; W-008/W-011 BLOCKED",
+    "user_constraints": "No standard account available; single display only",
+    "release_gate": "BLOCKED"
+  },
+  "local_branch_verification": {
+    "branch": "feature/sw-012-tray-window-lifecycle",
+    "automated": "scripts/verify.ps1 PASS: frontend 82, Python 11, Rust 67, lint/typecheck/handoff/fmt",
+    "build": "npm run build PASS: x64 EXE and NSIS",
+    "sha256": "EB35D23A9B9181DD21A8A3953AF312A3AF5BB4FC13E92B0A184FD4D84B78615F",
+    "interactive_w007": "NOT_RUN",
+    "qa": "No blocking code issue; interactive coverage outstanding",
+    "hosted_ci": {
+      "result": "PASS",
+      "run_id": 40096989462,
+      "url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/40096989462",
+      "runner": "windows-2025 x64",
+      "scope": "Automated tests only; not Windows 11 interactive acceptance"
+    },
+    "portable_package": {
+      "path": "releases/local/smart-workspace-launcher-v0.1.0-sw012-pr50-win-x64-portable.zip",
+      "qualification": "LOCAL_UNVERIFIED_NOT_RELEASE",
+      "zip_sha256": "58ec7ee229c448b2009ec5572c2b99cd88c97a1e153781407e499c1308d417b4",
+      "exe_sha256": "90F966A2CE41A3EE1A6711B1DB5DED59DDDD01F34AE522DBB30EDBCD54E47DA4",
+      "contents_extraction": "PASS",
+      "fresh_launch": "NOT_RUN"
+    }
   }
 }

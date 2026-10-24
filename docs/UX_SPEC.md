@@ -3,6 +3,8 @@
 ## Dashboard
 12-column adaptive drag-and-drop grid with persistent layout positions, keyboard alternative to rearrangement, resizable widgets/card widths and heights, edit-mode undo/cancel/save, responsive overflow and focus retention. Side navigation for profiles/categories/favorites/analytics; Inspector panel on selection; search toolbar. Card variants: compact, standard, detail, group and widget. Configurable click/double-click action, context menu, size, icon, theme and content; never make destructive action default.
 
+The app-wide close behavior is selectable: `Hide to tray` hides a launcher window and keeps the process and other windows available; `Exit` terminates the launcher process when a launcher window receives a close request. The default is `Hide to tray`. This preference is local to the app, independent of profiles, and is not included in profile exports.
+
 ## Quick Launch
 Opens through configurable global hotkey, defaults suggested Alt+Space with conflict detection; should warm-open within 150ms goal. Focus search immediately, escape closes, arrow keys navigate, Enter launches, modifier/context action permits copy path, locate, edit and open-with. Filters include @profile, type:excel, #tag, >command, is:missing. Fuzzy ranking balanced across exact match, prefix, aliases, favorites, usage and recency; user may disable personalized ranking.
 

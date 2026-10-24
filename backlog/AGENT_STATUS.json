@@ -1,14 +1,21 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-24T13:09:40Z",
+  "updated_at_utc": "2026-10-24T13:10:15Z",
   "overall_status": "LOCAL_WINDOWS_ACCEPTANCE_PARTIAL_TRAY_LIFECYCLE_FIX_PR_PENDING_V1_BLOCKED",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "SESSION_NOT_VERIFIED_AT_GITHUB_DOC_SNAPSHOT"
   },
-  "active_pull_request": null,
+  "active_pull_request": {
+    "number": 50,
+    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/50",
+    "issue": 11,
+    "branch": "feature/sw-012-tray-window-lifecycle",
+    "commit": "81718f9",
+    "state": "OPEN"
+  },
   "subagent_limit": 3,
   "agents": [
     {

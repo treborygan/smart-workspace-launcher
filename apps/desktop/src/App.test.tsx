@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile, Resource } from "./lib/contracts";
 
 const { api, windowState } = vi.hoisted(() => ({
-  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
+  api: { resources: vi.fn(), profiles: vi.fn(), smartCollections: vi.fn(), saveSmartCollection: vi.fn(), deleteSmartCollection: vi.fn(), dynamicShortcuts: vi.fn(), saveDynamicShortcut: vi.fn(), deleteDynamicShortcut: vi.fn(), layout: vi.fn(), saveLayout: vi.fn(), search: vi.fn(), onQuickLaunchToggle: vi.fn(), onQuickLaunchHotkeyStatus: vi.fn(), onWorkspaceStateChanged: vi.fn(), quickLaunchHotkeyStatus: vi.fn(), setQuickLaunchHotkey: vi.fn(), setWindowCloseBehavior: vi.fn(), getWindowCloseBehavior: vi.fn(), setProfileTheme: vi.fn(), switchProfile: vi.fn(), hideCurrentWindow: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), launch: vi.fn(), inspect: vi.fn(), analyticsSummary: vi.fn(), analyticsEvents: vi.fn(), isNativeApp: vi.fn() },
   windowState: { label: "quick-launch" },
 }));
 vi.mock("./lib/api", () => ({ api }));
@@ -24,6 +24,7 @@ let root: Root;
 let host: HTMLDivElement;
 
 beforeEach(() => {
+  api.getWindowCloseBehavior.mockResolvedValue("hide_to_tray"); api.setWindowCloseBehavior.mockImplementation(async (behavior: string) => behavior);
   api.inspect.mockResolvedValue([]); api.analyticsSummary.mockResolvedValue({ totalLaunches: 0, bySource: {}, byStatus: {} }); api.analyticsEvents.mockResolvedValue([]); api.isNativeApp.mockReturnValue(false); api.smartCollections.mockResolvedValue([]); api.saveSmartCollection.mockImplementation(async (collection) => collection); api.deleteSmartCollection.mockResolvedValue(undefined); api.dynamicShortcuts.mockResolvedValue([]); api.saveDynamicShortcut.mockImplementation(async (shortcut) => shortcut); api.deleteDynamicShortcut.mockResolvedValue(undefined);
   api.setProfileTheme.mockImplementation(async (id: string, theme: { mode: string; accent: string; density: string }) => ({ ...profiles.find((profile) => profile.id === id)!, themeId: theme.mode, settingsJson: JSON.stringify({ ...JSON.parse(profiles.find((profile) => profile.id === id)!.settingsJson), accent: theme.accent, density: theme.density }) }));
   localStorage.clear(); api.resources.mockResolvedValue(resources); api.profiles.mockResolvedValue(profiles); api.layout.mockResolvedValue(null); api.saveLayout.mockImplementation(async (layout) => layout);
@@ -142,6 +143,19 @@ describe("workspace dashboard", () => {
     await act(async () => { host.querySelector<HTMLFormElement>(".shortcut-settings")!.requestSubmit(); await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(api.setQuickLaunchHotkey).toHaveBeenCalledWith("p1", "Ctrl+Shift+Space");
     expect(host.textContent).toContain("Quick Launch shortcut set to Ctrl+Shift+Space");
+  });
+
+  it("exposes the app-wide close behavior from Settings", async () => {
+    api.getWindowCloseBehavior.mockResolvedValue("hide_to_tray");
+    api.setWindowCloseBehavior.mockResolvedValue("exit");
+    await act(async () => { root.render(createElement(App)); await new Promise((resolve) => setTimeout(resolve, 15)); });
+    const settings = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Settings"))!;
+    await act(async () => { settings.click(); await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(host.querySelector('fieldset legend')?.textContent).toBe("When closing a launcher window");
+    const exit = host.querySelector<HTMLInputElement>('input[name="window-close-behavior"][value="exit"]')!;
+    await act(async () => { exit.click(); await Promise.resolve(); });
+    expect(api.setWindowCloseBehavior).toHaveBeenCalledWith("exit");
+    expect(exit.checked).toBe(true);
   });
 
   it("saves light/dark/system mode, custom accent and density to the active profile", async () => {

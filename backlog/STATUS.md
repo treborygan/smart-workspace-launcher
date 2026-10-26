@@ -40,11 +40,28 @@ The following PRs were open at the verified snapshot. An open PR does not mean a
 
 ## Next executable steps
 
-1. Execute the **actual Windows 11 x64 interactive acceptance suite W-001–W-014** using the GitHub Actions preview package on a standard-user installation. Capture reproducible, redacted evidence of Shell default handlers, global hotkeys, tray, Dock, multi-monitor/DPI, local profiles, offline use and a freshly extracted executable.
-2. If failures arise, repair them in focused GitHub PRs and rerun Windows CI/build plus affected Windows 11 tests.
-3. Only after all V1 criteria pass, publish a permanent tagged GitHub release with verified checksum, release notes and the user-facing V1 READY notice.
-4. Continue reviewing/merging advanced SW-014–SW-025 changes in dependency order; do not confuse V1 readiness with V1.1–V2 completion.
+1. Merge reviewed SW-012 PR #50 after its current-head Windows CI check passes; the tray/window-lifecycle runtime remains unverified.
+2. Keep `releases/v1/readiness.json` BLOCKED and the local acceptance disposition FINALIZED PARTIAL WITH LIMITATIONS. Do not send a V1-ready notice or publish a V1 release.
+3. Proceed with non-release roadmap work. Reopen the outstanding W-001–W-014 GUI cases only on a Windows 11 standard-user setup with the required display hardware and interactive input capability.
 
 Useful references: [Windows CI and preview instructions](../docs/CI_WINDOWS.md) · [Release gate](../docs/NOTIFICATIONS_AND_RELEASE_GATES.md) · [Codex resume](../CODEX_RESUME.md) · [Roadmap](ROADMAP.md).
 
 For activity/agent session state, see [AGENT_STATUS.json](AGENT_STATUS.json), which separates historical agent task records from observed GitHub facts.
+
+## 2026-10-24 local Windows acceptance update
+
+Reviewed the current repository documents, issue #11, existing source and acceptance matrix. The local Windows 11 Pro x64 pass on `main` recorded in local-only acceptance report is **PARTIAL; V1 remains BLOCKED**. The user confirmed no dedicated standard account is available and only one display is available. W-001 and W-003 passed; W-002, W-004, W-006, W-009 and W-014 were partial; W-005, W-010, W-012 and W-013 were not run; W-008 and W-011 are blocked. W-007 failed the tested preview's read-only tray/lifecycle source audit. Computer Use later refused further input after repeated out-of-window coordinates; no alternate UI driver was used.
+
+To address W-007's source finding, branch `feature/sw-012-tray-window-lifecycle` adds a native tray menu, single-instance dashboard focus, and a local app-wide close preference (`Hide to tray` or `Exit`), with SQLite persistence and accessible Settings controls. Final local automated verification on this branch passed: `scripts/verify.ps1` (frontend 82/82, Python 11/11, Rust 67/67, plus lint/typecheck, handoff and formatting); `npm run build` produced the x64 executable and NSIS installer. The rebuilt EXE SHA256 is `EB35D23A9B9181DD21A8A3953AF312A3AF5BB4FC13E92B0A184FD4D84B78615F`. Build and source tests do not exercise tray callbacks, close/hide behavior or single-instance behavior interactively; W-007 therefore remains unverified on this branch. No new packaged GUI acceptance was run after this source change.
+
+The current host remains a filtered administrator account, not a standard account; no second monitor is attached. DPI beyond 100%, fresh portable extraction under standard-user permissions, alternate hotkey registration, missing-path behavior, local-profile restart persistence, search/tag/analytics UI, and offline behavior remain unverified. Do not publish V1 or mark readiness PASS. Continue with a real Windows 11 standard-user account, second monitor, and interactive W-001–W-014 completion.
+
+The PR head's hosted Windows CI check passed on Windows Server 2025 x64: [run 40096989462](https://github.com/treborygan/smart-workspace-launcher/actions/runs/40096989462). This is automated verification only; it is not Windows 11 interactive acceptance.
+
+A fresh local portable ZIP was built from PR #50 and extracted successfully: `releases/local/smart-workspace-launcher-v0.1.0-sw012-pr50-win-x64-portable.zip`; SHA256 `58ec7ee229c448b2009ec5572c2b99cd88c97a1e153781407e499c1308d417b4`; extracted EXE SHA256 `90F966A2CE41A3EE1A6711B1DB5DED59DDDD01F34AE522DBB30EDBCD54E47DA4`. It is a local, unverified artifact, not a release. No fresh-extracted launch or tray interaction was run because standard-user and native UI acceptance gates remain unavailable.
+
+## 2026-10-26 Windows acceptance closeout
+
+The local acceptance run is **FINALIZED PARTIAL WITH LIMITATIONS** at the user's direction after confirming that the account and display constraints will not change. This is a final disposition for the evidence collected, not a V1 acceptance pass. The local Windows 11 run recorded W-001 and W-003 PASS; W-002, W-004, W-006, W-009 and W-014 PARTIAL; W-005, W-010, W-012 and W-013 NOT_RUN; W-008 and W-011 BLOCKED; and W-007 failed the tested preview's source audit. PR #50 implements the identified tray/window-lifecycle gap, but the PR package was not exercised interactively, so W-007 remains NOT_RUN for that build.
+
+The PR's local test suite and hosted Windows CI passed. A local preview ZIP was checksum-verified and freshly extracted. Neither action verifies Windows GUI behavior. The user confirmed no dedicated standard-user account and only one display are available. `releases/v1/readiness.json` remains BLOCKED; no V1 release or ready notification is authorized by these results. Detailed case evidence is in the local workspace acceptance report and is intentionally not included in the public repository.

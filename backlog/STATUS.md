@@ -40,7 +40,7 @@ The following PRs were open at the verified snapshot. An open PR does not mean a
 
 ## Next executable steps
 
-1. Merge reviewed SW-012 PR #50 after its current-head Windows CI check passes; the tray/window-lifecycle runtime remains unverified.
+1. SW-012 PR #50 merged as `f87477e`; post-merge Windows CI and the unverified preview build both passed. The tray/window-lifecycle runtime remains unverified.
 2. Keep `releases/v1/readiness.json` BLOCKED and the local acceptance disposition FINALIZED PARTIAL WITH LIMITATIONS. Do not send a V1-ready notice or publish a V1 release.
 3. Proceed with non-release roadmap work. Reopen the outstanding W-001–W-014 GUI cases only on a Windows 11 standard-user setup with the required display hardware and interactive input capability.
 
@@ -65,3 +65,6 @@ A fresh local portable ZIP was built from PR #50 and extracted successfully: `re
 The local acceptance run is **FINALIZED PARTIAL WITH LIMITATIONS** at the user's direction after confirming that the account and display constraints will not change. This is a final disposition for the evidence collected, not a V1 acceptance pass. The local Windows 11 run recorded W-001 and W-003 PASS; W-002, W-004, W-006, W-009 and W-014 PARTIAL; W-005, W-010, W-012 and W-013 NOT_RUN; W-008 and W-011 BLOCKED; and W-007 failed the tested preview's source audit. PR #50 implements the identified tray/window-lifecycle gap, but the PR package was not exercised interactively, so W-007 remains NOT_RUN for that build.
 
 The PR's local test suite and hosted Windows CI passed. A local preview ZIP was checksum-verified and freshly extracted. Neither action verifies Windows GUI behavior. The user confirmed no dedicated standard-user account and only one display are available. `releases/v1/readiness.json` remains BLOCKED; no V1 release or ready notification is authorized by these results. Detailed case evidence is in the local workspace acceptance report and is intentionally not included in the public repository.
+
+
+Post-merge evidence: [Windows CI run 40275439537](https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439537) and [unverified preview build 40275439538](https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439538) passed on hosted Windows Server 2025 x64. The build artifact is a preview only; these runs do not qualify Windows 11 GUI acceptance.

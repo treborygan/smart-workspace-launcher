@@ -1,21 +1,14 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-26T05:36:56Z",
+  "updated_at_utc": "2026-10-26T05:48:33Z",
   "overall_status": "WINDOWS_ACCEPTANCE_FINALIZED_PARTIAL_V1_BLOCKED",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
     "state": "SESSION_NOT_VERIFIED_AT_GITHUB_DOC_SNAPSHOT"
   },
-  "active_pull_request": {
-    "number": 50,
-    "url": "https://github.com/treborygan/smart-workspace-launcher/pull/50",
-    "issue": 11,
-    "branch": "feature/sw-012-tray-window-lifecycle",
-    "commit": "81718f9",
-    "state": "OPEN"
-  },
+  "active_pull_request": null,
   "subagent_limit": 3,
   "agents": [
     {
@@ -111,9 +104,14 @@
       }
     ]
   },
-  "windows_verification": "FINALIZED_PARTIAL_WITH_LIMITATIONS; W007_REMEDIATION_IMPLEMENTED_BUT_INTERACTIVE_NOT_RUN; STANDARD_USER_AND_MULTI_MONITOR_UNAVAILABLE",
-  "next_action": "Merge reviewed SW-012 PR #50 after required checks; preserve V1 BLOCKED and continue non-release roadmap work without claiming Windows 11 acceptance.",
+  "windows_verification": "FINALIZED_PARTIAL_WITH_LIMITATIONS; SW012_MERGED; WINDOWS_11_INTERACTIVE_ACCEPTANCE_INCOMPLETE",
+  "next_action": "Proceed with non-release roadmap work; keep V1 BLOCKED and do not issue V1-ready notice until W-001..W-014 are verified on a qualified Windows 11 standard-user system.",
   "recent_merges": [
+    {
+      "scope": "SW-012 tray/window lifecycle fix; acceptance disposition finalized partial; V1 remains blocked",
+      "sha": "f87477e439b48bddf3974d37440c51ed9b889f8e",
+      "number": 50
+    },
     {
       "number": 32,
       "sha": "078f5160254cd81533230c9392f092a2dc6a0a5b",
@@ -243,7 +241,13 @@
     "release_gate": "BLOCKED",
     "final_disposition": "FINALIZED_PARTIAL_WITH_LIMITATIONS per user instruction; not accepted for V1",
     "finalized_date": "2026-10-26",
-    "current_branch_package": "Built, checksum-verified and extracted; launch and interactive lifecycle NOT_RUN"
+    "current_branch_package": "Built, checksum-verified and extracted; launch and interactive lifecycle NOT_RUN",
+    "remediation_pr": {
+      "number": 50,
+      "state": "MERGED",
+      "merge_commit": "f87477e439b48bddf3974d37440c51ed9b889f8e",
+      "url": "https://github.com/treborygan/smart-workspace-launcher/pull/50"
+    }
   },
   "local_branch_verification": {
     "branch": "feature/sw-012-tray-window-lifecycle",
@@ -266,6 +270,21 @@
       "exe_sha256": "90F966A2CE41A3EE1A6711B1DB5DED59DDDD01F34AE522DBB30EDBCD54E47DA4",
       "contents_extraction": "PASS",
       "fresh_launch": "NOT_RUN"
+    }
+  },
+  "post_merge_verification": {
+    "main_sha": "f87477e439b48bddf3974d37440c51ed9b889f8e",
+    "ci": {
+      "result": "PASS",
+      "run_id": 40275439537,
+      "url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439537",
+      "scope": "Hosted Windows Server 2025 x64 automated tests"
+    },
+    "preview_build": {
+      "result": "PASS",
+      "run_id": 40275439538,
+      "url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439538",
+      "qualification": "UNVERIFIED_PREVIEW_ONLY"
     }
   }
 }

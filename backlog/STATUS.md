@@ -41,7 +41,7 @@ The following PRs were open at the verified snapshot. An open PR does not mean a
 ## Next executable steps
 
 1. SW-012 PR #50 merged as `f87477e`; post-merge Windows CI and the unverified preview build both passed. The tray/window-lifecycle runtime remains unverified.
-2. Keep `releases/v1/readiness.json` BLOCKED and the local acceptance disposition FINALIZED PARTIAL WITH LIMITATIONS. Do not send a V1-ready notice or publish a V1 release.
+2. Keep `releases/v1/readiness.json` WAIVED_NOT_CERTIFIED and the local acceptance disposition FINALIZED PARTIAL WITH USER WAIVERS. Do not send a V1-ready notice or publish a V1 release.
 3. Proceed with non-release roadmap work. Reopen the outstanding W-001–W-014 GUI cases only on a Windows 11 standard-user setup with the required display hardware and interactive input capability.
 
 Useful references: [Windows CI and preview instructions](../docs/CI_WINDOWS.md) · [Release gate](../docs/NOTIFICATIONS_AND_RELEASE_GATES.md) · [Codex resume](../CODEX_RESUME.md) · [Roadmap](ROADMAP.md).
@@ -50,7 +50,7 @@ For activity/agent session state, see [AGENT_STATUS.json](AGENT_STATUS.json), wh
 
 ## 2026-10-24 local Windows acceptance update
 
-Reviewed the current repository documents, issue #11, existing source and acceptance matrix. The local Windows 11 Pro x64 pass on `main` recorded in local-only acceptance report is **PARTIAL; V1 remains BLOCKED**. The user confirmed no dedicated standard account is available and only one display is available. W-001 and W-003 passed; W-002, W-004, W-006, W-009 and W-014 were partial; W-005, W-010, W-012 and W-013 were not run; W-008 and W-011 are blocked. W-007 failed the tested preview's read-only tray/lifecycle source audit. Computer Use later refused further input after repeated out-of-window coordinates; no alternate UI driver was used.
+Reviewed the current repository documents, issue #11, existing source and acceptance matrix. The local Windows 11 Pro x64 pass on `main` was **PARTIAL; V1 was not certified**. At that initial record, W-008/W-011 were marked blocked; the 2026-10-26 owner disposition below supersedes those labels. The user confirmed no dedicated standard account is available and only one display is available. W-001 and W-003 passed; W-002, W-004, W-006, W-009 and W-014 were partial; W-005, W-010, W-012 and W-013 were not run; W-008 and W-011 are blocked. W-007 failed the tested preview's read-only tray/lifecycle source audit. Computer Use later refused further input after repeated out-of-window coordinates; no alternate UI driver was used.
 
 To address W-007's source finding, branch `feature/sw-012-tray-window-lifecycle` adds a native tray menu, single-instance dashboard focus, and a local app-wide close preference (`Hide to tray` or `Exit`), with SQLite persistence and accessible Settings controls. Final local automated verification on this branch passed: `scripts/verify.ps1` (frontend 82/82, Python 11/11, Rust 67/67, plus lint/typecheck, handoff and formatting); `npm run build` produced the x64 executable and NSIS installer. The rebuilt EXE SHA256 is `EB35D23A9B9181DD21A8A3953AF312A3AF5BB4FC13E92B0A184FD4D84B78615F`. Build and source tests do not exercise tray callbacks, close/hide behavior or single-instance behavior interactively; W-007 therefore remains unverified on this branch. No new packaged GUI acceptance was run after this source change.
 
@@ -62,9 +62,14 @@ A fresh local portable ZIP was built from PR #50 and extracted successfully: `re
 
 ## 2026-10-26 Windows acceptance closeout
 
-The local acceptance run is **FINALIZED PARTIAL WITH LIMITATIONS** at the user's direction after confirming that the account and display constraints will not change. This is a final disposition for the evidence collected, not a V1 acceptance pass. The local Windows 11 run recorded W-001 and W-003 PASS; W-002, W-004, W-006, W-009 and W-014 PARTIAL; W-005, W-010, W-012 and W-013 NOT_RUN; W-008 and W-011 BLOCKED; and W-007 failed the tested preview's source audit. PR #50 implements the identified tray/window-lifecycle gap, but the PR package was not exercised interactively, so W-007 remains NOT_RUN for that build.
+The local acceptance run is **FINALIZED PARTIAL WITH USER WAIVERS** at the user's direction after confirming that the account and display constraints will not change. This is a final disposition for the evidence collected, not a V1 acceptance pass. The local Windows 11 run recorded W-001 and W-003 PASS; W-002, W-004, W-006, W-009 and W-014 PARTIAL; W-005, W-010, W-012 and W-013 NOT_RUN; W-008 and W-011 WAIVED BY USER / NOT_RUN; and W-007 failed the tested preview's source audit. PR #50 implements the identified tray/window-lifecycle gap, but the PR package was not exercised interactively, so W-007 remains NOT_RUN for that build.
 
-The PR's local test suite and hosted Windows CI passed. A local preview ZIP was checksum-verified and freshly extracted. Neither action verifies Windows GUI behavior. The user confirmed no dedicated standard-user account and only one display are available. `releases/v1/readiness.json` remains BLOCKED; no V1 release or ready notification is authorized by these results. Detailed case evidence is in the local workspace acceptance report and is intentionally not included in the public repository.
+The PR's local test suite and hosted Windows CI passed. A local preview ZIP was checksum-verified and freshly extracted. Neither action verifies Windows GUI behavior. The user confirmed no dedicated standard-user account and only one display are available. `releases/v1/readiness.json` is WAIVED_NOT_CERTIFIED; no V1 release or ready notification is authorized by these results. Detailed case evidence is in the local workspace acceptance report and is intentionally not included in the public repository.
 
 
 Post-merge evidence: [Windows CI run 40275439537](https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439537) and [unverified preview build 40275439538](https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439538) passed on hosted Windows Server 2025 x64. The build artifact is a preview only; these runs do not qualify Windows 11 GUI acceptance.
+
+
+## User disposition for W-008 and W-011
+
+At the user's direction, the unavailable single-display and standard-user cases no longer carry a BLOCKED label. Both are recorded **WAIVED BY USER / NOT_RUN**; this is not runtime evidence. The overall V1 readiness gate is WAIVED_NOT_CERTIFIED because other required W-cases remain partial or unrun. The owner waiver changes the disposition label; it does not create test evidence or authorize release.

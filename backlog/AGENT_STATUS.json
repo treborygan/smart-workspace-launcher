@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "treborygan/smart-workspace-launcher",
-  "updated_at_utc": "2026-10-26T05:48:33Z",
-  "overall_status": "WINDOWS_ACCEPTANCE_FINALIZED_PARTIAL_V1_BLOCKED",
+  "updated_at_utc": "2026-10-26T05:53:59Z",
+  "overall_status": "WINDOWS_ACCEPTANCE_FINALIZED_PARTIAL_WITH_USER_WAIVERS_V1_NOT_CERTIFIED",
   "coordinator": {
     "model": "gpt-6-luna",
     "reasoning_effort": "medium",
@@ -64,12 +64,12 @@
     }
   ],
   "milestones": {
-    "V1.0": "IMPLEMENTED_PREVIEW_BUILT_WINDOWS_11_ACCEPTANCE_BLOCKED",
+    "V1.0": "ACCEPTANCE_FINALIZED_PARTIAL_WITH_USER_WAIVERS_NOT_CERTIFIED",
     "V1.1": "SW_013_MERGED_SW_014_TO_016_OPEN_PRS",
     "V1.2": "SW_017_TO_020_OPEN_PRS",
     "V2.0": "SW_021_OPEN_PR_FURTHER_ITEMS_PENDING"
   },
-  "v1_gate": "BLOCKED",
+  "v1_gate": "WAIVED_NOT_CERTIFIED",
   "v1_notice_sent": false,
   "last_test_run": {
     "at_utc": "2026-10-22T04:47:00Z",
@@ -104,8 +104,8 @@
       }
     ]
   },
-  "windows_verification": "FINALIZED_PARTIAL_WITH_LIMITATIONS; SW012_MERGED; WINDOWS_11_INTERACTIVE_ACCEPTANCE_INCOMPLETE",
-  "next_action": "Proceed with non-release roadmap work; keep V1 BLOCKED and do not issue V1-ready notice until W-001..W-014 are verified on a qualified Windows 11 standard-user system.",
+  "windows_verification": "FINALIZED_PARTIAL; W008_AND_W011_USER_WAIVED_NOT_RUN; OTHER_REQUIRED_CASES_INCOMPLETE",
+  "next_action": "Proceed with non-release roadmap work; do not issue a V1-ready notice or release because required Windows acceptance evidence is incomplete.",
   "recent_merges": [
     {
       "scope": "SW-012 tray/window lifecycle fix; acceptance disposition finalized partial; V1 remains blocked",
@@ -236,10 +236,10 @@
     "date": "2026-10-24",
     "host": "Windows 11 Pro x64",
     "source_revision": "7bde33659112c3bb62143f389d4a9f00fabd760c",
-    "case_results": "W-001/W-003 PASS; W-002/W-004/W-006/W-009/W-014 PARTIAL; W-005/W-010/W-012/W-013 NOT_RUN; W-007 FAIL on tested preview source audit; W-008/W-011 BLOCKED",
+    "case_results": "W-001/W-003 PASS; W-002/W-004/W-006/W-009/W-014 PARTIAL; W-005/W-010/W-012/W-013 NOT_RUN; W-007 FAIL on tested preview source audit; W-008/W-011 WAIVED_BY_USER_NOT_RUN",
     "user_constraints": "No standard account available; single display only",
-    "release_gate": "BLOCKED",
-    "final_disposition": "FINALIZED_PARTIAL_WITH_LIMITATIONS per user instruction; not accepted for V1",
+    "release_gate": "WAIVED_NOT_CERTIFIED",
+    "final_disposition": "FINALIZED_PARTIAL_WITH_USER_WAIVERS_NOT_CERTIFIED",
     "finalized_date": "2026-10-26",
     "current_branch_package": "Built, checksum-verified and extracted; launch and interactive lifecycle NOT_RUN",
     "remediation_pr": {
@@ -247,7 +247,21 @@
       "state": "MERGED",
       "merge_commit": "f87477e439b48bddf3974d37440c51ed9b889f8e",
       "url": "https://github.com/treborygan/smart-workspace-launcher/pull/50"
-    }
+    },
+    "user_waivers": [
+      {
+        "disposition": "WAIVED_BY_USER / NOT_RUN",
+        "case": "W-008",
+        "reason": "User directed the unavailable one-monitor case not remain blocked",
+        "evidence": "None; not tested"
+      },
+      {
+        "disposition": "WAIVED_BY_USER / NOT_RUN",
+        "case": "W-011",
+        "reason": "User directed the unavailable standard-user case not remain blocked",
+        "evidence": "None; not tested"
+      }
+    ]
   },
   "local_branch_verification": {
     "branch": "feature/sw-012-tray-window-lifecycle",
@@ -286,5 +300,16 @@
       "url": "https://github.com/treborygan/smart-workspace-launcher/actions/runs/40275439538",
       "qualification": "UNVERIFIED_PREVIEW_ONLY"
     }
+  },
+  "release_waiver": {
+    "date": "2026-10-26",
+    "gate": "WAIVED_NOT_CERTIFIED",
+    "release_eligible": false,
+    "v1_notice_sent": false,
+    "case_waivers": [
+      "W-008",
+      "W-011"
+    ],
+    "remaining": "Other cases remain PARTIAL or NOT_RUN; no test evidence was waived into a PASS"
   }
 }

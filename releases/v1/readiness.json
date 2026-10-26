@@ -1,10 +1,18 @@
 {
-  "gate": "BLOCKED",
-  "windows_smoke": "NOT_RUN",
+  "gate": "WAIVED_NOT_CERTIFIED",
+  "windows_smoke": "FINALIZED_PARTIAL_WITH_USER_WAIVERS",
   "artifact_sha256": null,
   "release_url": null,
   "asset_url": null,
   "evidence_refs": [],
   "verified_at_utc": null,
-  "notes": "Do not edit to PASS without independently verifiable real Windows 11 evidence and tested release artifact."
+  "notes": "User waived the blocked disposition for W-008 and W-011 and directed finalization as-is. Remaining W-cases stay PARTIAL/NOT_RUN. This gate is WAIVED_NOT_CERTIFIED, not PASS; no V1 release or READY notice is authorized.",
+  "release_eligible": false,
+  "owner_disposition": {
+    "date": "2026-10-26",
+    "decision": "Finalize acceptance with user waivers for unavailable W-008 and W-011; remove blocked disposition",
+    "qualification": "NOT_CERTIFIED",
+    "remaining_cases": "PARTIAL_OR_NOT_RUN",
+    "release_authorized": false
+  }
 }
